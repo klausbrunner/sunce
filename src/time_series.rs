@@ -2,6 +2,7 @@ use crate::parsing::{DateTimeInput, ParseError};
 use crate::timezone_utils::{
     get_system_timezone, naive_to_fixed_offset, naive_to_specific_timezone,
 };
+use chrono::TimeZone;
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,6 +11,7 @@ pub struct TimeStep {
 }
 
 impl TimeStep {
+    #[allow(dead_code)]
     pub fn parse(input: &str) -> Result<Self, ParseError> {
         if input.is_empty() {
             return Err(ParseError::InvalidDateTime(
@@ -81,6 +83,7 @@ impl TimeStep {
     }
 }
 
+#[allow(dead_code)]
 fn to_local_datetime(
     naive: NaiveDateTime,
     timezone_override: Option<FixedOffset>,
@@ -130,24 +133,39 @@ impl Iterator for DstAwareTimeSeriesIterator {
 
         loop {
             // Try to convert current naive time to local datetime
-            match to_local_datetime(self.current_naive, self.timezone_override) {
-                Ok(dt) => {
-                    let result = dt;
+            // Use raw timezone conversion to detect DST gaps properly
+            let conversion_result = if let Some(tz) = self.timezone_override {
+                // For timezone override, use direct offset (no DST gaps possible)
+                naive_to_fixed_offset(self.current_naive, &tz).ok()
+            } else {
+                // For system timezone, use raw conversion to detect DST gaps
+                let system_tz = get_system_timezone();
+                match system_tz.from_local_datetime(&self.current_naive) {
+                    chrono::LocalResult::Single(dt) => Some(dt.fixed_offset()),
+                    chrono::LocalResult::Ambiguous(dt1, _dt2) => {
+                        // During fall-back (DST ends), choose first occurrence
+                        Some(dt1.fixed_offset())
+                    }
+                    chrono::LocalResult::None => {
+                        // This time doesn't exist (DST gap) - return None to skip
+                        None
+                    }
+                }
+            };
 
-                    // Check if this is the last iteration
-                    if self.current_naive == self.end_naive {
+            match conversion_result {
+                Some(dt) => {
+                    // Advance to next time
+                    self.current_naive += self.step;
+
+                    // Check if we've passed the end
+                    if self.current_naive > self.end_naive {
                         self.finished = true;
-                    } else {
-                        self.current_naive += self.step;
-                        // If we've passed the end, set to end for final iteration
-                        if self.current_naive > self.end_naive {
-                            self.current_naive = self.end_naive;
-                        }
                     }
 
-                    return Some(result);
+                    return Some(dt);
                 }
-                Err(_) => {
+                None => {
                     // This time doesn't exist (DST spring-forward), skip it
                     self.current_naive += self.step;
                     if self.current_naive > self.end_naive {

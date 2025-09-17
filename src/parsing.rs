@@ -201,6 +201,27 @@ fn parse_partial_date(input: &str) -> Result<DateTimeInput, ParseError> {
         }
     }
 
+    // Year-month-day: "2024-06-21"
+    if input.len() == 10 && input.chars().nth(4) == Some('-') && input.chars().nth(7) == Some('-') {
+        let parts: Vec<&str> = input.split('-').collect();
+        if parts.len() == 3 {
+            let year = parts[0]
+                .parse::<i32>()
+                .map_err(|_| ParseError::InvalidDateTime(input.to_string()))?;
+            let month = parts[1]
+                .parse::<u32>()
+                .map_err(|_| ParseError::InvalidDateTime(input.to_string()))?;
+            let day = parts[2]
+                .parse::<u32>()
+                .map_err(|_| ParseError::InvalidDateTime(input.to_string()))?;
+
+            validate_year(year)?;
+            validate_month(month)?;
+            validate_day(year, month, day)?;
+            return Ok(DateTimeInput::PartialDate(year, month, day));
+        }
+    }
+
     Err(ParseError::InvalidDateTime(input.to_string()))
 }
 
@@ -374,6 +395,18 @@ fn validate_month(month: u32) -> Result<(), ParseError> {
         return Err(ParseError::InvalidDateTime(format!(
             "Month {} out of range (1-12)",
             month
+        )));
+    }
+    Ok(())
+}
+
+fn validate_day(year: i32, month: u32, day: u32) -> Result<(), ParseError> {
+    use chrono::NaiveDate;
+
+    if NaiveDate::from_ymd_opt(year, month, day).is_none() {
+        return Err(ParseError::InvalidDateTime(format!(
+            "Invalid date: {}-{:02}-{:02}",
+            year, month, day
         )));
     }
     Ok(())

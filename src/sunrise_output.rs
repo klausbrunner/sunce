@@ -19,6 +19,7 @@ pub struct TwilightResults {
 }
 
 impl SunriseResultData {
+    #[allow(dead_code)]
     pub fn new(
         datetime: DateTime<FixedOffset>,
         latitude: f64,

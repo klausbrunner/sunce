@@ -1,12 +1,10 @@
 use chrono::TimeZone;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use solar_positioning::{grena3, spa, types::Horizon};
+use rayon::prelude::*;
+use solar_positioning::{grena3, spa};
 
 mod parsing;
-use parsing::{
-    Coordinate, DateTimeInput, ParseError, apply_timezone_to_naive, parse_coordinate,
-    parse_datetime,
-};
+use parsing::{Coordinate, DateTimeInput, ParseError, parse_coordinate, parse_datetime};
 
 mod output;
 use output::{EnvironmentalParams, OutputFormat, PositionResult, output_position_results};
@@ -21,7 +19,6 @@ use file_input::{
     CoordinateFileIterator, PairedFileIterator, TimeFileIterator, create_file_reader,
 };
 use time_series::{TimeStep, expand_datetime_input};
-use timezone_utils::naive_to_system_local;
 
 /// Streaming iterator for coordinate ranges (no Vec collection)
 struct CoordinateRangeIterator {
@@ -123,6 +120,7 @@ fn main() {
                             let elevation_angle =
                                 parse_position_options(cmd_matches).elevation_angle;
 
+                            let parallel = input.global_options.parallel.unwrap_or(false);
                             match calculate_and_output_positions(
                                 &input,
                                 &matches,
@@ -130,6 +128,7 @@ fn main() {
                                 show_inputs,
                                 show_headers,
                                 elevation_angle,
+                                parallel,
                             ) {
                                 Ok(_) => {}
                                 Err(e) => {
@@ -138,25 +137,28 @@ fn main() {
                                 }
                             }
                         }
-                        "sunrise" => match calculate_sunrise(&input, &matches) {
-                            Ok(results) => {
-                                let show_inputs = input.global_options.show_inputs.unwrap_or(false);
-                                let show_headers = input.global_options.headers.unwrap_or(true);
-                                let show_twilight = parse_sunrise_options(cmd_matches).twilight;
+                        "sunrise" => {
+                            let show_inputs = input.global_options.show_inputs.unwrap_or(false);
+                            let show_headers = input.global_options.headers.unwrap_or(true);
+                            let show_twilight = parse_sunrise_options(cmd_matches).twilight;
 
-                                output_sunrise_results(
-                                    results.into_iter(),
-                                    &format,
-                                    show_inputs,
-                                    show_headers,
-                                    show_twilight,
-                                );
+                            let parallel = input.global_options.parallel.unwrap_or(false);
+                            match calculate_and_output_sunrise(
+                                &input,
+                                &matches,
+                                &format,
+                                show_inputs,
+                                show_headers,
+                                show_twilight,
+                                parallel,
+                            ) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    eprintln!("✗ Error calculating sunrise: {}", e);
+                                    std::process::exit(1);
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("✗ Error calculating sunrise: {}", e);
-                                std::process::exit(1);
-                            }
-                        },
+                        }
                         _ => {
                             eprintln!("✗ Unknown command: {}", cmd_name);
                             std::process::exit(1);
@@ -206,7 +208,6 @@ struct GlobalOptions {
     deltat: Option<String>,
     format: Option<String>,
     headers: Option<bool>,
-    #[allow(dead_code)] // Will be used when parallel processing is implemented
     parallel: Option<bool>,
     show_inputs: Option<bool>,
     timezone: Option<String>,
@@ -220,7 +221,6 @@ struct PositionOptions {
     temperature: Option<String>,
     elevation_angle: bool,
     refraction: Option<bool>,
-    step: Option<String>,
 }
 
 #[derive(Debug)]
@@ -401,7 +401,6 @@ fn parse_position_options(matches: &ArgMatches) -> PositionOptions {
         } else {
             None
         },
-        step: matches.get_one::<String>("step").cloned(),
     }
 }
 
@@ -454,7 +453,49 @@ fn parse_data_values(input: &mut ParsedInput) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Unified streaming function for all position calculations
+/// Generic calculation trait for streaming architecture
+trait CalculationEngine<T>: Sync {
+    fn calculate_single(
+        &self,
+        datetime: chrono::DateTime<chrono::FixedOffset>,
+        lat: f64,
+        lon: f64,
+    ) -> T;
+}
+
+/// Position calculation engine
+struct PositionCalculationEngine {
+    params: CalculationParameters,
+}
+
+impl CalculationEngine<PositionResult> for PositionCalculationEngine {
+    fn calculate_single(
+        &self,
+        datetime: chrono::DateTime<chrono::FixedOffset>,
+        lat: f64,
+        lon: f64,
+    ) -> PositionResult {
+        calculate_single_position(datetime, lat, lon, &self.params)
+    }
+}
+
+/// Sunrise calculation engine
+struct SunriseCalculationEngine {
+    params: SunriseCalculationParameters,
+}
+
+impl CalculationEngine<SunriseResultData> for SunriseCalculationEngine {
+    fn calculate_single(
+        &self,
+        datetime: chrono::DateTime<chrono::FixedOffset>,
+        lat: f64,
+        lon: f64,
+    ) -> SunriseResultData {
+        calculate_single_sunrise(datetime, lat, lon, &self.params)
+    }
+}
+
+/// Unified streaming function for position calculations
 fn calculate_and_output_positions(
     input: &ParsedInput,
     matches: &ArgMatches,
@@ -462,11 +503,17 @@ fn calculate_and_output_positions(
     show_inputs: bool,
     show_headers: bool,
     elevation_angle: bool,
+    parallel: bool,
 ) -> Result<(), String> {
-    // Create a streaming iterator for all input types
-    let position_iter = create_position_iterator(input, matches)?;
+    // Create position calculation engine
+    let engine = PositionCalculationEngine {
+        params: get_calculation_parameters(input, matches)?,
+    };
 
-    // Stream directly to output - no Vec collection
+    // Create a streaming iterator using the unified engine
+    let position_iter = create_calculation_iterator(input, matches, &engine, parallel)?;
+
+    // Always stream to output - parallel processing handled transparently
     output_position_results(
         position_iter,
         format,
@@ -477,52 +524,125 @@ fn calculate_and_output_positions(
     Ok(())
 }
 
-fn create_position_iterator<'a>(
+/// Unified streaming function for sunrise calculations
+fn calculate_and_output_sunrise(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    format: &OutputFormat,
+    show_inputs: bool,
+    show_headers: bool,
+    show_twilight: bool,
+    parallel: bool,
+) -> Result<(), String> {
+    // Create sunrise calculation engine
+    let engine = SunriseCalculationEngine {
+        params: get_sunrise_calculation_parameters(input, matches, show_twilight)?,
+    };
+
+    // Create a streaming iterator using the unified engine
+    let sunrise_iter = create_calculation_iterator(input, matches, &engine, parallel)?;
+
+    // Always stream to output - parallel processing handled transparently
+    output_sunrise_results(
+        sunrise_iter,
+        format,
+        show_inputs,
+        show_headers,
+        show_twilight,
+    );
+    Ok(())
+}
+
+/// Unified calculation iterator that works for any calculation engine
+fn create_calculation_iterator<'a, T>(
     input: &'a ParsedInput,
     matches: &'a ArgMatches,
-) -> Result<Box<dyn Iterator<Item = PositionResult> + 'a>, String> {
+    engine: &'a dyn CalculationEngine<T>,
+    parallel: bool,
+) -> Result<Box<dyn Iterator<Item = T> + 'a>, String>
+where
+    T: Send,
+{
+    // Extract step parameter from subcommand matches (only for position command)
+    let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
+    let step = if cmd_name == "position" {
+        if let Some(step_str) = cmd_matches.get_one::<String>("step") {
+            TimeStep::parse(step_str).map_err(|e| format!("Invalid step parameter: {}", e))?
+        } else {
+            TimeStep::default()
+        }
+    } else {
+        // For sunrise command, use default step (sunrise calculations typically don't use time series)
+        TimeStep::default()
+    };
+
     match input.input_type {
         InputType::PairedDataFile | InputType::StdinPaired => Ok(Box::new(
-            create_paired_file_position_iterator(input, matches)?,
+            create_paired_file_calculation_iterator(input, engine)?,
         )),
         InputType::CoordinateFile | InputType::StdinCoords => Ok(Box::new(
-            create_coordinate_file_position_iterator(input, matches)?,
+            create_coordinate_file_calculation_iterator(input, engine)?,
         )),
         InputType::TimeFile | InputType::StdinTimes => Ok(Box::new(
-            create_time_file_position_iterator(input, matches)?,
+            create_time_file_calculation_iterator(input, engine)?,
         )),
-        InputType::Standard => Ok(Box::new(create_standard_position_iterator(input, matches)?)),
+        InputType::Standard => Ok(Box::new(create_standard_calculation_iterator(
+            input, engine, parallel, step,
+        )?)),
     }
 }
 
-fn create_paired_file_position_iterator(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<impl Iterator<Item = PositionResult>, String> {
+/// Unified paired file calculation iterator
+fn create_paired_file_calculation_iterator<'a, T>(
+    input: &'a ParsedInput,
+    engine: &'a dyn CalculationEngine<T>,
+) -> Result<impl Iterator<Item = T> + 'a, String> {
     let file_path = &input.latitude;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
     let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
 
-    // Get calculation parameters once
-    let calc_params = get_calculation_parameters(input, matches)?;
-
-    // Stream each file line through calculation immediately
-    Ok(paired_iter.map(move |paired_result| {
+    // Stream each file line through calculation immediately using the same pattern as other iterators
+    Ok(paired_iter.flat_map(move |paired_result| {
         let (lat, lon, datetime_input) = paired_result.expect("Error reading paired data");
+
+        // For sunrise calculations, convert DateTimeInput to a single representative datetime
+        // (no time series expansion - one sunrise calculation per day)
         let datetime = match datetime_input {
             DateTimeInput::Single(dt) => dt,
-            _ => panic!("Expected specific datetime from paired file"),
+            DateTimeInput::Now => chrono::Utc::now().into(),
+            DateTimeInput::PartialYear(year) => {
+                // Use start of year for single sunrise calculation
+                chrono::FixedOffset::east_opt(0)
+                    .unwrap()
+                    .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
+                    .unwrap()
+            }
+            DateTimeInput::PartialYearMonth(year, month) => {
+                // Use start of month for single sunrise calculation
+                chrono::FixedOffset::east_opt(0)
+                    .unwrap()
+                    .with_ymd_and_hms(year, month, 1, 0, 0, 0)
+                    .unwrap()
+            }
+            DateTimeInput::PartialDate(year, month, day) => {
+                // Use start of day for single sunrise calculation
+                chrono::FixedOffset::east_opt(0)
+                    .unwrap()
+                    .with_ymd_and_hms(year, month, day, 0, 0, 0)
+                    .unwrap()
+            }
         };
 
-        calculate_single_position(datetime, lat, lon, &calc_params)
+        std::iter::once(engine.calculate_single(datetime, lat, lon))
     }))
 }
 
-fn create_coordinate_file_position_iterator(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<impl Iterator<Item = PositionResult>, String> {
+/// Unified coordinate file calculation iterator
+fn create_coordinate_file_calculation_iterator<'a, T>(
+    input: &'a ParsedInput,
+    engine: &'a dyn CalculationEngine<T>,
+) -> Result<impl Iterator<Item = T> + 'a, String> {
     let file_path = &input.latitude;
     let datetime_str = input
         .datetime
@@ -535,30 +655,39 @@ fn create_coordinate_file_position_iterator(
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
     let coord_iter = CoordinateFileIterator::new(reader);
 
-    // Get calculation parameters once
-    let calc_params = get_calculation_parameters(input, matches)?;
+    // For sunrise calculations, we need single datetime per day, not time series
+    let datetime = match datetime_input {
+        DateTimeInput::Single(dt) => dt,
+        DateTimeInput::Now => chrono::Utc::now().into(),
+        DateTimeInput::PartialDate(year, month, day) => {
+            // Use start of day for single sunrise calculation
+            chrono::FixedOffset::east_opt(0)
+                .unwrap()
+                .with_ymd_and_hms(year, month, day, 0, 0, 0)
+                .unwrap()
+        }
+        DateTimeInput::PartialYear(year) => chrono::FixedOffset::east_opt(0)
+            .unwrap()
+            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
+            .unwrap(),
+        DateTimeInput::PartialYearMonth(year, month) => chrono::FixedOffset::east_opt(0)
+            .unwrap()
+            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
+            .unwrap(),
+    };
 
-    // Get datetime iterator
-    let step = TimeStep::default();
-    let datetime_iter = expand_datetime_input(&datetime_input, &step, None)
-        .map_err(|e| format!("Failed to expand datetime: {}", e))?;
-    let datetimes: Vec<_> = datetime_iter.collect(); // Small collection for time series - acceptable for time ranges
-
-    // Stream each coordinate through calculation immediately
-    Ok(coord_iter.flat_map(move |coord_result| {
+    // Stream each coordinate through calculation immediately (one calculation per coordinate)
+    Ok(coord_iter.map(move |coord_result| {
         let (lat, lon) = coord_result.expect("Error reading coordinates");
-        let calc_params = calc_params.clone();
-        let datetimes = datetimes.clone(); // Clone the time vector for each coordinate
-        datetimes
-            .into_iter()
-            .map(move |datetime| calculate_single_position(datetime, lat, lon, &calc_params))
+        engine.calculate_single(datetime, lat, lon)
     }))
 }
 
-fn create_time_file_position_iterator(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<impl Iterator<Item = PositionResult>, String> {
+/// Unified time file calculation iterator
+fn create_time_file_calculation_iterator<'a, T>(
+    input: &'a ParsedInput,
+    engine: &'a dyn CalculationEngine<T>,
+) -> Result<impl Iterator<Item = T> + 'a, String> {
     let file_path = input.datetime.as_ref().ok_or("Time file path not found")?;
     let lat = parse_coordinate(&input.latitude, "latitude")
         .map_err(|e| format!("Failed to parse latitude: {}", e))?;
@@ -574,9 +703,6 @@ fn create_time_file_position_iterator(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
-
-    // Get calculation parameters once
-    let calc_params = get_calculation_parameters(input, matches)?;
 
     // Create coordinate combinations - small collections for coordinate ranges are acceptable
     let lat_iter = create_coordinate_iterator(&lat);
@@ -594,54 +720,94 @@ fn create_time_file_position_iterator(
             DateTimeInput::Single(dt) => dt,
             _ => panic!("Expected specific datetime from time file"),
         };
-        let calc_params = calc_params.clone();
         let coords = coords.clone(); // Clone the coordinate vector for each time
-        coords.into_iter().map(move |(lat_val, lon_val)| {
-            calculate_single_position(datetime, lat_val, lon_val, &calc_params)
-        })
+        coords
+            .into_iter()
+            .map(move |(lat_val, lon_val)| engine.calculate_single(datetime, lat_val, lon_val))
     }))
 }
 
-fn create_standard_position_iterator(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<impl Iterator<Item = PositionResult>, String> {
+/// Unified standard calculation iterator
+fn create_standard_calculation_iterator<'a, T>(
+    input: &'a ParsedInput,
+    engine: &'a dyn CalculationEngine<T>,
+    parallel: bool,
+    step: TimeStep,
+) -> Result<impl Iterator<Item = T> + 'a, String>
+where
+    T: Send,
+{
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
         &input.parsed_datetime,
     ) {
-        let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-        if cmd_name != "position" {
-            return Err("Position calculation not available for sunrise command".to_string());
-        }
-
-        // Get calculation parameters
-        let calc_params = get_calculation_parameters(input, matches)?;
-
-        // Parse step option
-        let pos_options = parse_position_options(cmd_matches);
-        let step = pos_options
-            .step
-            .as_deref()
-            .map(TimeStep::parse)
-            .transpose()
-            .map_err(|e| format!("Invalid step: {}", e))?
-            .unwrap_or_else(TimeStep::default);
-
         // Create streaming coordinate iterators (no Vec collection!)
         let lat_iter = create_coordinate_iterator(lat);
         let lon_iter = create_coordinate_iterator(lon);
 
-        let datetime_iter = expand_datetime_input(dt, &step, None)
-            .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+        // Parse timezone override once for reuse
+        let timezone_override = if let Some(tz_str) = &input.global_options.timezone {
+            if let Ok(offset) = crate::parsing::parse_timezone_offset(tz_str) {
+                Some(offset)
+            } else {
+                // For named timezones like UTC, use UTC offset
+                Some(chrono::FixedOffset::east_opt(0).unwrap())
+            }
+        } else {
+            None
+        };
+
+        // Determine step and datetime expansion based on calculation type
+        let (_step, datetime_iter): (
+            TimeStep,
+            Box<dyn Iterator<Item = chrono::DateTime<chrono::FixedOffset>>>,
+        ) = if std::any::type_name::<T>().contains("SunriseResultData") {
+            // Sunrise calculations: single datetime for specific dates, daily series for partial dates
+            match dt {
+                DateTimeInput::Single(dt) => (step, Box::new(std::iter::once(*dt))),
+                DateTimeInput::Now => (step, Box::new(std::iter::once(chrono::Utc::now().into()))),
+                DateTimeInput::PartialDate(year, month, day) => {
+                    // For specific dates in sunrise, create single datetime at midnight
+                    let datetime = if let Some(offset) = timezone_override {
+                        offset
+                            .with_ymd_and_hms(*year, *month, *day, 0, 0, 0)
+                            .unwrap()
+                    } else {
+                        let system_tz = crate::timezone_utils::get_system_timezone();
+                        let naive_dt = chrono::NaiveDate::from_ymd_opt(*year, *month, *day)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap();
+                        crate::timezone_utils::naive_to_specific_timezone(naive_dt, &system_tz)
+                            .map_err(|e| format!("Failed to convert to system timezone: {}", e))?
+                    };
+                    (step, Box::new(std::iter::once(datetime)))
+                }
+                DateTimeInput::PartialYear(_) | DateTimeInput::PartialYearMonth(_, _) => {
+                    // For partial dates in sunrise, generate daily time series
+                    let daily_step = TimeStep {
+                        duration: chrono::Duration::try_days(1).unwrap(),
+                    };
+                    let expanded = expand_datetime_input(dt, &daily_step, timezone_override)
+                        .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+                    (daily_step, Box::new(expanded))
+                }
+            }
+        } else {
+            // Position calculations: always expand to time series with user step
+            let expanded = expand_datetime_input(dt, &step, timezone_override)
+                .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+            (step, Box::new(expanded))
+        };
 
         // Create streaming Cartesian product iterator
-        Ok(create_cartesian_position_iterator(
+        Ok(create_cartesian_calculation_iterator(
             datetime_iter,
             lat_iter,
             lon_iter,
-            calc_params,
+            engine,
+            parallel,
         ))
     } else {
         Err("Missing required coordinate or datetime data".to_string())
@@ -656,6 +822,21 @@ struct CalculationParameters {
     pressure: f64,
     temperature: f64,
     apply_refraction: bool,
+}
+
+#[derive(Clone)]
+struct SunriseCalculationParameters {
+    #[allow(dead_code)]
+    algorithm: String,
+    elevation: f64,
+    delta_t: f64,
+    #[allow(dead_code)]
+    pressure: f64,
+    #[allow(dead_code)]
+    temperature: f64,
+    #[allow(dead_code)]
+    apply_refraction: bool,
+    show_twilight: bool,
 }
 
 fn get_calculation_parameters(
@@ -700,6 +881,104 @@ fn get_calculation_parameters(
             .unwrap_or(15.0),
         apply_refraction: pos_options.refraction.unwrap_or(true),
     })
+}
+
+fn get_sunrise_calculation_parameters(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    show_twilight: bool,
+) -> Result<SunriseCalculationParameters, String> {
+    let (_, cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
+    let _sunrise_options = parse_sunrise_options(cmd_matches);
+
+    Ok(SunriseCalculationParameters {
+        algorithm: "SPA".to_string(), // Sunrise always uses SPA
+        elevation: 0.0,               // Sunrise uses sea level by default
+        delta_t: input
+            .global_options
+            .deltat
+            .as_deref()
+            .and_then(|s| {
+                if s == "ESTIMATE" {
+                    Some(69.0)
+                } else {
+                    s.parse::<f64>().ok()
+                }
+            })
+            .unwrap_or(0.0),
+        pressure: 1013.0,       // Default atmospheric pressure
+        temperature: 15.0,      // Default temperature
+        apply_refraction: true, // Sunrise typically includes refraction
+        show_twilight,
+    })
+}
+
+/// Calculate a single sunrise result (the core calculation)
+fn calculate_single_sunrise(
+    datetime: chrono::DateTime<chrono::FixedOffset>,
+    lat: f64,
+    lon: f64,
+    params: &SunriseCalculationParameters,
+) -> SunriseResultData {
+    use solar_positioning::types::Horizon;
+
+    let delta_t = params.delta_t;
+    let _elevation = params.elevation;
+
+    // Calculate sunrise for standard horizon
+    let sunrise_result = solar_positioning::spa::sunrise_sunset_for_horizon(
+        datetime,
+        lat,
+        lon,
+        delta_t,
+        Horizon::SunriseSunset,
+    )
+    .unwrap();
+
+    // Calculate twilight if requested
+    let twilight_results = if params.show_twilight {
+        let civil = solar_positioning::spa::sunrise_sunset_for_horizon(
+            datetime,
+            lat,
+            lon,
+            delta_t,
+            Horizon::CivilTwilight,
+        )
+        .unwrap();
+        let nautical = solar_positioning::spa::sunrise_sunset_for_horizon(
+            datetime,
+            lat,
+            lon,
+            delta_t,
+            Horizon::NauticalTwilight,
+        )
+        .unwrap();
+        let astronomical = solar_positioning::spa::sunrise_sunset_for_horizon(
+            datetime,
+            lat,
+            lon,
+            delta_t,
+            Horizon::AstronomicalTwilight,
+        )
+        .unwrap();
+
+        Some(TwilightResults {
+            civil,
+            nautical,
+            astronomical,
+        })
+    } else {
+        None
+    };
+
+    SunriseResultData {
+        datetime,
+        latitude: lat,
+        longitude: lon,
+        delta_t,
+        sunrise_result,
+        twilight_results,
+    }
 }
 
 /// Calculate a single solar position (the core calculation)
@@ -764,13 +1043,17 @@ fn calculate_single_position(
     )
 }
 
-/// Create Cartesian product iterator for all coordinate/time combinations
-fn create_cartesian_position_iterator(
+/// Create unified Cartesian product iterator for any calculation engine
+fn create_cartesian_calculation_iterator<T>(
     datetime_iter: impl Iterator<Item = chrono::DateTime<chrono::FixedOffset>>,
     lat_iter: Box<dyn Iterator<Item = f64>>,
     lon_iter: Box<dyn Iterator<Item = f64>>,
-    params: CalculationParameters,
-) -> impl Iterator<Item = PositionResult> {
+    engine: &dyn CalculationEngine<T>,
+    parallel: bool,
+) -> Box<dyn Iterator<Item = T> + '_>
+where
+    T: Send,
+{
     // For coordinate ranges and time series, collect small datasets for Cartesian products
     // This is acceptable because coordinate ranges (e.g., 52:53:0.1) are typically small
     let datetimes: Vec<_> = datetime_iter.collect();
@@ -787,236 +1070,22 @@ fn create_cartesian_position_iterator(
         }
     }
 
-    combinations
-        .into_iter()
-        .map(move |(dt, lat, lon)| calculate_single_position(dt, lat, lon, &params))
-}
-
-fn calculate_sunrise(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<Vec<SunriseResultData>, String> {
-    // Handle file inputs with streaming
-    match input.input_type {
-        InputType::CoordinateFile | InputType::StdinCoords => {
-            return calculate_sunrise_from_coordinate_file(input, matches);
-        }
-        InputType::TimeFile | InputType::StdinTimes => {
-            return calculate_sunrise_from_time_file(input, matches);
-        }
-        InputType::PairedDataFile | InputType::StdinPaired => {
-            return calculate_sunrise_from_paired_file(input, matches);
-        }
-        InputType::Standard => {
-            // Continue with standard processing below
-        }
-    }
-
-    if let (Some(lat), Some(lon), Some(dt)) = (
-        &input.parsed_latitude,
-        &input.parsed_longitude,
-        &input.parsed_datetime,
-    ) {
-        // Extract coordinate values (same pattern as position command)
-        let lat_values = match lat {
-            Coordinate::Single(val) => vec![*val],
-            Coordinate::Range { start, end, step } => {
-                let mut values = Vec::new();
-                let mut current = *start;
-                while current <= *end {
-                    values.push(current);
-                    current += step;
-                }
-                values
-            }
-        };
-
-        let lon_values = match lon {
-            Coordinate::Single(val) => vec![*val],
-            Coordinate::Range { start, end, step } => {
-                let mut values = Vec::new();
-                let mut current = *start;
-                while current <= *end {
-                    values.push(current);
-                    current += step;
-                }
-                values
-            }
-        };
-
-        // For sunrise, we use daily step by default for partial dates (year, year-month)
-        let step = TimeStep {
-            duration: chrono::Duration::try_days(1).unwrap(),
-        };
-
-        let mut results = Vec::new();
-
-        // Generate all combinations
-        for lat_val in &lat_values {
-            for lon_val in &lon_values {
-                match dt {
-                    DateTimeInput::PartialDate(year, month, day) => {
-                        // For single dates, only calculate sunrise once at 00:00:00
-                        let target_date = chrono::NaiveDate::from_ymd_opt(*year, *month, *day)
-                            .ok_or_else(|| {
-                                format!("Invalid date: {}-{:02}-{:02}", year, month, day)
-                            })?;
-                        let start_time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-                        let start_naive = target_date.and_time(start_time);
-
-                        let datetime = if let Some(tz_str) = &input.global_options.timezone {
-                            apply_timezone_to_naive(start_naive, tz_str)
-                                .map_err(|e| format!("Timezone error: {}", e))?
-                        } else {
-                            naive_to_system_local(start_naive)
-                                .map_err(|e| format!("Timezone error: {}", e))?
-                        };
-
-                        let sunrise_result = calculate_sunrise_for_single_datetime(
-                            *lat_val, *lon_val, datetime, input, matches,
-                        )?;
-                        results.extend(sunrise_result);
-                    }
-                    _ => {
-                        // For other datetime types (partial year, partial month, single datetime), use time series
-                        let datetime_iter = expand_datetime_input(dt, &step, None)
-                            .map_err(|e| format!("Failed to expand datetime: {}", e))?;
-
-                        for datetime in datetime_iter {
-                            // Calculate sunrise for this coordinate and datetime
-                            let sunrise_result = calculate_sunrise_for_single_datetime(
-                                *lat_val, *lon_val, datetime, input, matches,
-                            )?;
-                            results.extend(sunrise_result);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(results)
+    // Stream the Cartesian product with optional parallel processing
+    if parallel {
+        // Use parallel iterator for coordinate ranges
+        let results: Vec<T> = combinations
+            .into_par_iter()
+            .map(|(dt, lat, lon)| engine.calculate_single(dt, lat, lon))
+            .collect();
+        Box::new(results.into_iter())
     } else {
-        Err("Missing required coordinate or datetime data".to_string())
+        // Pure streaming - calculations happen lazily as output is consumed
+        Box::new(
+            combinations
+                .into_iter()
+                .map(move |(dt, lat, lon)| engine.calculate_single(dt, lat, lon)),
+        )
     }
-}
-
-fn calculate_sunrise_for_single_datetime(
-    lat_val: f64,
-    lon_val: f64,
-    datetime: chrono::DateTime<chrono::FixedOffset>,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<Vec<SunriseResultData>, String> {
-    // For sunrise calculations, we need datetime that represents the start of the local date
-    // We take the local date and create a datetime at 00:00:00 in the original timezone
-    let local_date = datetime.date_naive();
-    let start_of_day = local_date.and_hms_opt(0, 0, 0).unwrap();
-    let start_datetime = datetime
-        .timezone()
-        .from_local_datetime(&start_of_day)
-        .single()
-        .unwrap();
-
-    // Get delta_t parameter
-    let delta_t = input
-        .global_options
-        .deltat
-        .as_deref()
-        .and_then(|s| {
-            if s == "ESTIMATE" {
-                Some(69.0)
-            } else {
-                s.parse::<f64>().ok()
-            }
-        })
-        .unwrap_or(0.0); // Default to 0.0 like solarpos
-
-    // Get command options
-    let (_, cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
-    let sunrise_options = parse_sunrise_options(cmd_matches);
-
-    // Calculate main sunrise/sunset using standard horizon
-    let sunrise_result = spa::sunrise_sunset_for_horizon(
-        start_datetime,
-        lat_val,
-        lon_val,
-        delta_t,
-        Horizon::SunriseSunset,
-    );
-
-    match sunrise_result {
-        Ok(sunrise_data) => {
-            // The sunrise_result is already in the correct timezone (start_datetime's timezone)
-            let sunrise_result_tz = sunrise_data;
-
-            // Calculate twilight if requested
-            let twilight_results = if sunrise_options.twilight {
-                Some(calculate_twilight_times(
-                    start_datetime,
-                    lat_val,
-                    lon_val,
-                    delta_t,
-                )?)
-            } else {
-                None
-            };
-
-            let result = SunriseResultData::new(
-                datetime,
-                lat_val,
-                lon_val,
-                delta_t,
-                sunrise_result_tz,
-                twilight_results,
-            );
-
-            Ok(vec![result])
-        }
-        Err(e) => Err(format!("Sunrise calculation failed: {}", e)),
-    }
-}
-
-fn calculate_twilight_times(
-    start_datetime: chrono::DateTime<chrono::FixedOffset>,
-    lat_val: f64,
-    lon_val: f64,
-    delta_t: f64,
-) -> Result<TwilightResults, String> {
-    // Calculate civil twilight
-    let civil_result = spa::sunrise_sunset_for_horizon(
-        start_datetime,
-        lat_val,
-        lon_val,
-        delta_t,
-        Horizon::CivilTwilight,
-    )
-    .map_err(|e| format!("Civil twilight calculation failed: {}", e))?;
-
-    // Calculate nautical twilight
-    let nautical_result = spa::sunrise_sunset_for_horizon(
-        start_datetime,
-        lat_val,
-        lon_val,
-        delta_t,
-        Horizon::NauticalTwilight,
-    )
-    .map_err(|e| format!("Nautical twilight calculation failed: {}", e))?;
-
-    // Calculate astronomical twilight
-    let astronomical_result = spa::sunrise_sunset_for_horizon(
-        start_datetime,
-        lat_val,
-        lon_val,
-        delta_t,
-        Horizon::AstronomicalTwilight,
-    )
-    .map_err(|e| format!("Astronomical twilight calculation failed: {}", e))?;
-
-    Ok(TwilightResults {
-        civil: civil_result,
-        nautical: nautical_result,
-        astronomical: astronomical_result,
-    })
 }
 
 fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
@@ -1187,160 +1256,4 @@ fn build_cli() -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Show twilight times."))
         )
-}
-
-fn calculate_sunrise_from_coordinate_file(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<Vec<SunriseResultData>, String> {
-    let file_path = &input.latitude;
-    let datetime_str = input
-        .datetime
-        .as_ref()
-        .ok_or("Datetime parameter required for coordinate files")?;
-    let datetime_input = parse_datetime(datetime_str, input.global_options.timezone.as_deref())
-        .map_err(|e| format!("Failed to parse datetime: {}", e))?;
-
-    process_coordinate_file(
-        file_path,
-        &datetime_input,
-        input,
-        matches,
-        calculate_sunrise,
-    )
-}
-
-fn calculate_sunrise_from_time_file(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<Vec<SunriseResultData>, String> {
-    let file_path = input.datetime.as_ref().ok_or("Time file path not found")?;
-    let lat = parse_coordinate(&input.latitude, "latitude")
-        .map_err(|e| format!("Failed to parse latitude: {}", e))?;
-    let lon = parse_coordinate(
-        input
-            .longitude
-            .as_ref()
-            .ok_or("Longitude required for time files")?,
-        "longitude",
-    )
-    .map_err(|e| format!("Failed to parse longitude: {}", e))?;
-
-    process_time_file(file_path, &lat, &lon, input, matches, calculate_sunrise)
-}
-
-fn calculate_sunrise_from_paired_file(
-    input: &ParsedInput,
-    matches: &ArgMatches,
-) -> Result<Vec<SunriseResultData>, String> {
-    let file_path = &input.latitude;
-    process_paired_file(file_path, input, matches, calculate_sunrise)
-}
-
-// Generic file processing functions to eliminate duplication
-
-fn process_coordinate_file<T>(
-    file_path: &str,
-    datetime_input: &DateTimeInput,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
-) -> Result<Vec<T>, String> {
-    let reader = create_file_reader(file_path)
-        .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
-    let coord_iter = CoordinateFileIterator::new(reader);
-
-    let mut results = Vec::new();
-    for coord_result in coord_iter {
-        let (lat, lon) = coord_result.map_err(|e| format!("Error reading coordinates: {}", e))?;
-        let calculation_result =
-            calculate_with_single_coords(lat, lon, datetime_input, input, matches, calculator)?;
-        results.extend(calculation_result);
-    }
-    Ok(results)
-}
-
-fn process_time_file<T>(
-    file_path: &str,
-    lat: &Coordinate,
-    lon: &Coordinate,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
-) -> Result<Vec<T>, String> {
-    let reader = create_file_reader(file_path)
-        .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
-    let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
-
-    let mut results = Vec::new();
-    for time_result in time_iter {
-        let datetime_input = time_result.map_err(|e| format!("Error reading time: {}", e))?;
-        let calculation_result = calculate_with_coords(
-            lat.clone(),
-            lon.clone(),
-            &datetime_input,
-            input,
-            matches,
-            calculator,
-        )?;
-        results.extend(calculation_result);
-    }
-    Ok(results)
-}
-
-fn process_paired_file<T>(
-    file_path: &str,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
-) -> Result<Vec<T>, String> {
-    let reader = create_file_reader(file_path)
-        .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
-    let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
-
-    let mut results = Vec::new();
-    for paired_result in paired_iter {
-        let (lat, lon, datetime_input) =
-            paired_result.map_err(|e| format!("Error reading paired data: {}", e))?;
-        let calculation_result =
-            calculate_with_single_coords(lat, lon, &datetime_input, input, matches, calculator)?;
-        results.extend(calculation_result);
-    }
-    Ok(results)
-}
-
-fn calculate_with_single_coords<T>(
-    lat: f64,
-    lon: f64,
-    datetime_input: &DateTimeInput,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
-) -> Result<Vec<T>, String> {
-    let lat_coord = Coordinate::Single(lat);
-    let lon_coord = Coordinate::Single(lon);
-    calculate_with_coords(
-        lat_coord,
-        lon_coord,
-        datetime_input,
-        input,
-        matches,
-        calculator,
-    )
-}
-
-fn calculate_with_coords<T>(
-    lat: Coordinate,
-    lon: Coordinate,
-    datetime_input: &DateTimeInput,
-    input: &ParsedInput,
-    matches: &ArgMatches,
-    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
-) -> Result<Vec<T>, String> {
-    let mut temp_input = input.clone();
-    temp_input.parsed_latitude = Some(lat);
-    temp_input.parsed_longitude = Some(lon);
-    temp_input.parsed_datetime = Some(datetime_input.clone());
-    temp_input.input_type = InputType::Standard;
-    calculator(&temp_input, matches)
 }

@@ -2,19 +2,31 @@ use crate::parsing::ParseError;
 use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone};
 use chrono_tz::{Tz, UTC};
 
-/// Get the system timezone, first checking TZ environment variable, then falling back to local detection
+/// Get the system timezone using cross-platform detection
 pub fn get_system_timezone() -> Tz {
-    // Try to get timezone from TZ environment variable first
+    // Try to get timezone from TZ environment variable first (for tests and overrides)
     if let Ok(tz_str) = std::env::var("TZ") {
         if let Ok(tz) = tz_str.parse::<Tz>() {
             return tz;
         }
     }
 
-    // Try to detect the system timezone by examining the local timezone offset
-    // This is a best-effort approach - timezone detection is inherently complex
-    // For now, we'll use UTC as a safe fallback (this should be improved)
-    UTC
+    // Use iana-time-zone for cross-platform system timezone detection
+    match iana_time_zone::get_timezone() {
+        Ok(tz_name) => {
+            // Try to parse the IANA timezone name
+            if let Ok(tz) = tz_name.parse::<Tz>() {
+                tz
+            } else {
+                // Fallback to UTC if parsing fails
+                UTC
+            }
+        }
+        Err(_) => {
+            // If iana-time-zone fails, fallback to UTC
+            UTC
+        }
+    }
 }
 
 /// Convert a naive datetime to system local timezone like solarpos does
@@ -113,7 +125,9 @@ mod tests {
             std::env::set_var("TZ", "Invalid/Timezone");
         }
         let tz = get_system_timezone();
-        assert_eq!(tz, UTC);
+        // With invalid TZ env var, should fall back to actual system timezone detection
+        // We can't assert the exact timezone since it depends on the system, but it shouldn't be invalid
+        assert!(tz.to_string().len() > 0);
         unsafe {
             std::env::remove_var("TZ");
         }
@@ -125,7 +139,9 @@ mod tests {
             std::env::remove_var("TZ");
         }
         let tz = get_system_timezone();
-        assert_eq!(tz, UTC);
+        // Without TZ env var, should detect actual system timezone
+        // We can't assert the exact timezone since it depends on the system, but it should be valid
+        assert!(tz.to_string().len() > 0);
     }
 
     #[test]

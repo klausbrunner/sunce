@@ -13,7 +13,16 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v5
@@ -21,22 +30,28 @@ jobs:
     - name: Install Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
-        toolchain: 1.85
         components: clippy, rustfmt
+        target: ${{ matrix.target }}
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
 
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --target ${{ matrix.target }}
 
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Check formatting
+    - name: Check formatting (Linux only)
+      if: matrix.os == 'ubuntu-latest'
       run: cargo fmt -- --check
 
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
+    - name: Run clippy (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo clippy -- -D warnings -A dead_code
 
-    - name: Check docs
+    - name: Check docs (Linux only)
+      if: matrix.os == 'ubuntu-latest'
       run: cargo doc --no-deps --document-private-items
 
   msrv:
@@ -46,13 +61,17 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    - name: Install MSRV Rust
+    - name: Install Rust 1.85
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.85
 
-    - name: Build with MSRV
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Build
       run: cargo build --verbose
 
-    - name: Test with MSRV
+    - name: Test
       run: cargo test --verbose
+

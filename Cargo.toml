@@ -6,7 +6,19 @@ rust-version = "1.85"
 description = "High-performance command-line solar position calculator"
 license = "MIT"
 repository = "https://github.com/klausbrunner/sunce"
+homepage = "https://github.com/klausbrunner/sunce"
+documentation = "https://github.com/klausbrunner/sunce"
+readme = "README.md"
 authors = ["Klaus Brunner <klaus.brunner@gmail.com>"]
+keywords = ["solar", "astronomy", "calculator", "cli", "position"]
+categories = ["command-line-utilities", "science"]
+exclude = [
+    "/.github/",
+    "/tests/",
+    "/docs/",
+    "*.md",
+    "!README.md"
+]
 
 [[bin]]
 name = "sunce"
@@ -16,8 +28,10 @@ path = "src/main.rs"
 clap = { version = "4.5", features = ["derive", "help"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
+iana-time-zone = "0.1"
 thiserror = "1.0"
 solar-positioning = "0.2.1"
+rayon = "1.10"
 
 [dev-dependencies]
 assert_cmd = "2.0"

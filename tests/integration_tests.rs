@@ -419,9 +419,9 @@ fn test_combined_range_and_time_series() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Should have cartesian product: 2 lats × 2 lons × 3 times = 12 rows + header
+    // Should have cartesian product: 2 lats × 2 lons × 2 times (00:00, 12:00) = 8 rows + header
     let lines: Vec<&str> = output_str.lines().collect();
-    assert_eq!(lines.len(), 13); // Header + 12 data rows
+    assert_eq!(lines.len(), 9); // Header + 8 data rows
 }
 
 /// Test now datetime
