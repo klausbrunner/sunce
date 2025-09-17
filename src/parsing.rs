@@ -1,4 +1,5 @@
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use crate::timezone_utils::{get_system_timezone, naive_to_fixed_offset, naive_to_timezone_aware};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 use chrono_tz::Tz;
 use std::fmt;
 use thiserror::Error;
@@ -31,6 +32,7 @@ pub enum DateTimeInput {
     Now,
     PartialYear(i32),
     PartialYearMonth(i32, u32),
+    PartialDate(i32, u32, u32), // year, month, day - generates series for that day
 }
 
 impl fmt::Display for Coordinate {
@@ -52,6 +54,9 @@ impl fmt::Display for DateTimeInput {
             DateTimeInput::PartialYear(year) => write!(f, "year {} (series)", year),
             DateTimeInput::PartialYearMonth(year, month) => {
                 write!(f, "{:04}-{:02} (month series)", year, month)
+            }
+            DateTimeInput::PartialDate(year, month, day) => {
+                write!(f, "{:04}-{:02}-{:02} (day series)", year, month, day)
             }
         }
     }
@@ -228,32 +233,32 @@ fn parse_full_datetime(
                 apply_timezone_to_naive(naive_dt, tz)?
             } else {
                 // Default to local timezone like solarpos does
-                let local_dt = Local
-                    .from_local_datetime(&naive_dt)
-                    .single()
-                    .ok_or_else(|| {
-                        ParseError::InvalidDateTime("Ambiguous local time".to_string())
-                    })?;
-                local_dt.with_timezone(&local_dt.offset().clone())
+                let system_tz = get_system_timezone();
+                naive_to_timezone_aware(naive_dt, &system_tz)?
             };
             return Ok(DateTimeInput::Single(dt));
         }
 
-        // Try parsing as date only and add midnight
+        // Try parsing as date only - but for "%Y-%m-%d" format, return PartialDate
         if let Ok(date) = NaiveDate::parse_from_str(input, format) {
-            let naive_dt = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-            let dt = if let Some(tz) = timezone_override {
-                apply_timezone_to_naive(naive_dt, tz)?
+            if format == &"%Y-%m-%d" {
+                // Date-only input like "2024-01-01" should generate a series for that day
+                return Ok(DateTimeInput::PartialDate(
+                    date.year(),
+                    date.month(),
+                    date.day(),
+                ));
             } else {
-                let local_dt = Local
-                    .from_local_datetime(&naive_dt)
-                    .single()
-                    .ok_or_else(|| {
-                        ParseError::InvalidDateTime("Ambiguous local time".to_string())
-                    })?;
-                local_dt.with_timezone(&local_dt.offset().clone())
-            };
-            return Ok(DateTimeInput::Single(dt));
+                // For other formats, create a single datetime at midnight
+                let naive_dt = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+                let dt = if let Some(tz) = timezone_override {
+                    apply_timezone_to_naive(naive_dt, tz)?
+                } else {
+                    let system_tz = get_system_timezone();
+                    naive_to_timezone_aware(naive_dt, &system_tz)?
+                };
+                return Ok(DateTimeInput::Single(dt));
+            }
         }
     }
 
@@ -301,10 +306,7 @@ fn apply_timezone_to_naive(
     tz: &str,
 ) -> Result<DateTime<FixedOffset>, ParseError> {
     if let Ok(offset) = parse_timezone_offset(tz) {
-        return offset
-            .from_local_datetime(&naive_dt)
-            .single()
-            .ok_or_else(|| ParseError::InvalidDateTime("Ambiguous time in timezone".to_string()));
+        return naive_to_fixed_offset(naive_dt, &offset);
     }
 
     // Parse named timezones like "UTC", "America/New_York", etc.
@@ -327,31 +329,65 @@ fn apply_timezone_to_naive(
     )))
 }
 
-fn parse_timezone_offset(tz: &str) -> Result<FixedOffset, ParseError> {
+pub fn parse_timezone(tz: &str) -> Result<FixedOffset, ParseError> {
+    // Try parsing as timezone offset first
+    if let Ok(offset) = parse_timezone_offset(tz) {
+        return Ok(offset);
+    }
+
+    // Try parsing as named timezone
+    if let Ok(named_tz) = parse_named_timezone(tz) {
+        // For named timezones, we need to convert to a FixedOffset
+        // We'll use a representative time to get the offset
+        let utc_time = chrono::Utc::now();
+        let local_time = utc_time.with_timezone(&named_tz);
+
+        // Convert to FixedOffset by computing the offset in seconds
+        let utc_naive = local_time.naive_utc();
+        let local_naive = local_time.naive_local();
+        let offset_seconds = local_naive.signed_duration_since(utc_naive).num_seconds() as i32;
+        let fixed_offset = FixedOffset::east_opt(offset_seconds).unwrap();
+        return Ok(fixed_offset);
+    }
+
+    Err(ParseError::InvalidTimezone(format!(
+        "Unsupported timezone format: {}. Use offset format like +01:00 or named timezone like UTC",
+        tz
+    )))
+}
+
+pub fn parse_timezone_offset(tz: &str) -> Result<FixedOffset, ParseError> {
     // Handle formats like "+01:00", "-05:00", "+0100", "-0500"
     let normalized =
         if tz.len() == 6 && (tz.starts_with('+') || tz.starts_with('-')) && tz.contains(':') {
             tz.to_string() // Already in +01:00 format
         } else if tz.len() == 5 && tz.contains(':') {
             format!("+{}", tz) // Handle 01:00 -> +01:00
-        } else if tz.len() == 5 && (tz.starts_with('+') || tz.starts_with('-')) {
+        } else if tz.len() == 5 && (tz.starts_with('+') || tz.starts_with('-')) && !tz.contains(':')
+        {
             format!("{}:{}", &tz[..3], &tz[3..]) // Handle +0100 -> +01:00
         } else {
-            return Err(ParseError::InvalidTimezone(tz.to_string()));
+            return Err(ParseError::InvalidTimezone(format!(
+                "Invalid timezone format: {} (len={}, starts_with_sign={}, contains_colon={})",
+                tz,
+                tz.len(),
+                tz.starts_with('+') || tz.starts_with('-'),
+                tz.contains(':')
+            )));
         };
 
-    DateTime::parse_from_str("2000-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
-        .and_then(|_dt| {
-            DateTime::parse_from_str(
-                &format!("2000-01-01T00:00:00{}", normalized),
-                "%Y-%m-%dT%H:%M:%S%:z",
-            )
-        })
+    let test_str = format!("2000-01-01T00:00:00{}", normalized);
+    DateTime::parse_from_str(&test_str, "%Y-%m-%dT%H:%M:%S%:z")
         .map(|dt| *dt.offset())
-        .map_err(|_| ParseError::InvalidTimezone(tz.to_string()))
+        .map_err(|e| {
+            ParseError::InvalidTimezone(format!(
+                "Failed to parse '{}' with format '%Y-%m-%dT%H:%M:%S%:z': {}",
+                test_str, e
+            ))
+        })
 }
 
-fn parse_named_timezone(tz: &str) -> Result<Tz, ParseError> {
+pub fn parse_named_timezone(tz: &str) -> Result<Tz, ParseError> {
     // Handle common timezone aliases first
     let normalized_tz = match tz.to_uppercase().as_str() {
         "UTC" | "GMT" => "UTC",
@@ -455,5 +491,73 @@ mod tests {
         if let DateTimeInput::Single(parsed_dt) = dt {
             assert_eq!(parsed_dt.offset().local_minus_utc(), 3600); // +01:00 = 3600 seconds
         }
+    }
+
+    #[test]
+    fn test_timezone_offset_parsing() {
+        // Test various timezone offset formats
+        let test_cases = [
+            ("+02:00", 7200),
+            ("+01:00", 3600),
+            ("-05:00", -18000),
+            ("+0000", 0),
+            ("-0100", -3600),
+        ];
+
+        for (tz, expected_offset) in test_cases {
+            let result = parse_timezone_offset(tz);
+            assert!(result.is_ok(), "Failed to parse timezone: {}", tz);
+
+            if let Ok(offset) = result {
+                assert_eq!(
+                    offset.local_minus_utc(),
+                    expected_offset,
+                    "Wrong offset for timezone {}: expected {}, got {}",
+                    tz,
+                    expected_offset,
+                    offset.local_minus_utc()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_named_timezone_parsing() {
+        let result = parse_named_timezone("UTC");
+        assert!(result.is_ok(), "Failed to parse UTC timezone: {:?}", result);
+
+        let result = parse_named_timezone("America/New_York");
+        assert!(
+            result.is_ok(),
+            "Failed to parse America/New_York timezone: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_apply_timezone_override() {
+        use chrono::*;
+
+        // Create a test datetime
+        let dt =
+            DateTime::parse_from_str("2024-01-01T12:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z").unwrap();
+
+        // Test with UTC
+        let result = apply_timezone_override(dt, "UTC");
+        println!("UTC result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to apply UTC timezone override: {:?}",
+            result
+        );
+
+        // Test with offset
+        let result = apply_timezone_override(dt, "+02:00");
+        println!("+02:00 result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to apply +02:00 timezone override: {:?}",
+            result
+        );
     }
 }

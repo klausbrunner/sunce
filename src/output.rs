@@ -22,12 +22,40 @@ impl OutputFormat {
 pub struct PositionResult {
     pub datetime: DateTime<FixedOffset>,
     pub position: SolarPosition,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub elevation: f64,
+    pub pressure: f64,
+    pub temperature: f64,
+    pub delta_t: f64,
 }
 
 impl PositionResult {
-    pub fn new(datetime: DateTime<FixedOffset>, position: SolarPosition) -> Self {
-        Self { datetime, position }
+    pub fn new(
+        datetime: DateTime<FixedOffset>,
+        position: SolarPosition,
+        latitude: f64,
+        longitude: f64,
+        environmental: EnvironmentalParams,
+        delta_t: f64,
+    ) -> Self {
+        Self {
+            datetime,
+            position,
+            latitude,
+            longitude,
+            elevation: environmental.elevation,
+            pressure: environmental.pressure,
+            temperature: environmental.temperature,
+            delta_t,
+        }
     }
+}
+
+pub struct EnvironmentalParams {
+    pub elevation: f64,
+    pub pressure: f64,
+    pub temperature: f64,
 }
 
 pub fn output_position_results<I>(
@@ -89,12 +117,16 @@ where
     if show_headers {
         if show_inputs {
             if elevation_angle {
-                println!("latitude,longitude,dateTime,azimuth,elevation");
+                println!(
+                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
+                );
             } else {
-                println!("latitude,longitude,dateTime,azimuth,zenith");
+                println!(
+                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
+                );
             }
         } else if elevation_angle {
-            println!("dateTime,azimuth,elevation");
+            println!("dateTime,azimuth,elevation-angle");
         } else {
             println!("dateTime,azimuth,zenith");
         }
@@ -108,10 +140,15 @@ where
         };
 
         if show_inputs {
-            // TODO: Add latitude/longitude when we have ranges
             println!(
-                "{},{:.5},{:.5}",
+                "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}",
+                result.latitude,
+                result.longitude,
+                result.elevation,
+                result.pressure,
+                result.temperature,
                 result.datetime.to_rfc3339(),
+                result.delta_t,
                 result.position.azimuth(),
                 angle_value
             );
@@ -132,16 +169,21 @@ where
 {
     for result in results {
         let (angle_name, angle_value) = if elevation_angle {
-            ("elevation", result.position.elevation_angle())
+            ("elevation-angle", result.position.elevation_angle())
         } else {
             ("zenith", result.position.zenith_angle())
         };
 
         if show_inputs {
-            // TODO: Add latitude/longitude when we have ranges
             println!(
-                r#"{{"dateTime":"{}","azimuth":{:.5},"{}":{:.5}}}"#,
+                r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"pressure":{:.3},"temperature":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,
+                result.latitude,
+                result.longitude,
+                result.elevation,
+                result.pressure,
+                result.temperature,
                 result.datetime.to_rfc3339(),
+                result.delta_t,
                 result.position.azimuth(),
                 angle_name,
                 angle_value

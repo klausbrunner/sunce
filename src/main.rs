@@ -1,4 +1,4 @@
-use chrono::TimeZone;
+use chrono::{Local, TimeZone};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use solar_positioning::{grena3, spa, types::Horizon};
 
@@ -6,10 +6,15 @@ mod parsing;
 use parsing::{Coordinate, DateTimeInput, ParseError, parse_coordinate, parse_datetime};
 
 mod output;
-use output::{OutputFormat, PositionResult, output_position_results};
+use output::{EnvironmentalParams, OutputFormat, PositionResult, output_position_results};
 
 mod sunrise_output;
 use sunrise_output::{SunriseResultData, TwilightResults, output_sunrise_results};
+
+mod time_series;
+mod timezone_utils;
+use parsing::parse_timezone;
+use time_series::{TimeStep, expand_datetime_input};
 
 fn main() {
     let app = build_cli();
@@ -121,18 +126,18 @@ struct ParsedInput {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Fields will be used in future implementation
 struct GlobalOptions {
+    #[allow(dead_code)] // Will be used when delta T calculation is implemented
     deltat: Option<String>,
     format: Option<String>,
     headers: Option<bool>,
+    #[allow(dead_code)] // Will be used when parallel processing is implemented
     parallel: Option<bool>,
     show_inputs: Option<bool>,
     timezone: Option<String>,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Fields will be used in future implementation
 struct PositionOptions {
     algorithm: Option<String>,
     elevation: Option<String>,
@@ -144,7 +149,6 @@ struct PositionOptions {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Fields will be used in future implementation
 struct SunriseOptions {
     twilight: bool,
 }
@@ -379,115 +383,194 @@ fn calculate_positions(
     input: &ParsedInput,
     matches: &ArgMatches,
 ) -> Result<Vec<PositionResult>, String> {
-    // Only handle single-point calculations for now
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
         &input.parsed_datetime,
     ) {
-        if let (
-            Coordinate::Single(lat_val),
-            Coordinate::Single(lon_val),
-            DateTimeInput::Single(datetime),
-        ) = (lat, lon, dt)
-        {
-            // This datetime is already in the correct timezone from parsing"
+        // Get command options
+        let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
 
-            // Get command options
-            let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-
-            if cmd_name == "position" {
-                let pos_options = parse_position_options(cmd_matches);
-
-                // Get algorithm (default: SPA)
-                let algorithm = pos_options.algorithm.as_deref().unwrap_or("SPA");
-
-                // Get parameters with defaults matching solarpos
-                let elevation = pos_options
-                    .elevation
-                    .as_deref()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0);
-                let delta_t = input
-                    .global_options
-                    .deltat
-                    .as_deref()
-                    .and_then(|s| {
-                        if s == "ESTIMATE" {
-                            Some(69.0)
-                        } else {
-                            s.parse::<f64>().ok()
-                        }
-                    })
-                    .unwrap_or(0.0); // Default to 0.0 like solarpos
-                let pressure = pos_options
-                    .pressure
-                    .as_deref()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(1013.0);
-                let temperature = pos_options
-                    .temperature
-                    .as_deref()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(15.0);
-
-                // Apply refraction (default: true)
-                let apply_refraction = pos_options.refraction.unwrap_or(true);
-
-                // Calculate position using the selected algorithm
-                let position = match algorithm.to_uppercase().as_str() {
-                    "SPA" => {
-                        if apply_refraction {
-                            spa::solar_position(
-                                *datetime,
-                                *lat_val,
-                                *lon_val,
-                                elevation,
-                                delta_t,
-                                pressure,
-                                temperature,
-                            )
-                        } else {
-                            spa::solar_position_no_refraction(
-                                *datetime, *lat_val, *lon_val, elevation, delta_t,
-                            )
-                        }
-                    }
-                    "GRENA3" => {
-                        if apply_refraction {
-                            grena3::solar_position_with_refraction(
-                                *datetime,
-                                *lat_val,
-                                *lon_val,
-                                delta_t,
-                                Some(pressure),
-                                Some(temperature),
-                            )
-                        } else {
-                            grena3::solar_position(*datetime, *lat_val, *lon_val, delta_t)
-                        }
-                    }
-                    _ => {
-                        return Err(format!(
-                            "Unknown algorithm: {}. Use SPA or GRENA3",
-                            algorithm
-                        ));
-                    }
-                };
-
-                match position {
-                    Ok(pos) => {
-                        let result = PositionResult::new(*datetime, pos);
-                        Ok(vec![result])
-                    }
-                    Err(e) => Err(format!("Solar calculation failed: {}", e)),
-                }
-            } else {
-                Err("Position calculation not available for sunrise command".to_string())
-            }
-        } else {
-            Err("Ranges and file inputs not yet implemented".to_string())
+        if cmd_name != "position" {
+            return Err("Position calculation not available for sunrise command".to_string());
         }
+
+        let pos_options = parse_position_options(cmd_matches);
+
+        // Parse step option
+        let step = pos_options
+            .step
+            .as_deref()
+            .map(TimeStep::parse)
+            .transpose()
+            .map_err(|e| format!("Invalid step: {}", e))?
+            .unwrap_or_else(TimeStep::default);
+
+        // Get algorithm (default: SPA)
+        let algorithm = pos_options.algorithm.as_deref().unwrap_or("SPA");
+
+        // Get parameters with defaults matching solarpos
+        let elevation = pos_options
+            .elevation
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let delta_t = input
+            .global_options
+            .deltat
+            .as_deref()
+            .and_then(|s| {
+                if s == "ESTIMATE" {
+                    Some(69.0)
+                } else {
+                    s.parse::<f64>().ok()
+                }
+            })
+            .unwrap_or(0.0); // Default to 0.0 like solarpos
+        let pressure = pos_options
+            .pressure
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(1013.0);
+        let temperature = pos_options
+            .temperature
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(15.0);
+
+        // Apply refraction (default: true)
+        let apply_refraction = pos_options.refraction.unwrap_or(true);
+
+        // Generate coordinate and datetime iterators
+        let lat_values = match lat {
+            Coordinate::Single(val) => vec![*val],
+            Coordinate::Range {
+                start,
+                end,
+                step: coord_step,
+            } => {
+                let mut values = Vec::new();
+                let mut current = *start;
+                if *coord_step > 0.0 {
+                    while current <= *end {
+                        values.push(current);
+                        current += *coord_step;
+                    }
+                } else {
+                    while current >= *end {
+                        values.push(current);
+                        current += *coord_step;
+                    }
+                }
+                values
+            }
+        };
+
+        let lon_values = match lon {
+            Coordinate::Single(val) => vec![*val],
+            Coordinate::Range {
+                start,
+                end,
+                step: coord_step,
+            } => {
+                let mut values = Vec::new();
+                let mut current = *start;
+                if *coord_step > 0.0 {
+                    while current <= *end {
+                        values.push(current);
+                        current += *coord_step;
+                    }
+                } else {
+                    while current >= *end {
+                        values.push(current);
+                        current += *coord_step;
+                    }
+                }
+                values
+            }
+        };
+
+        // Handle timezone override from command line
+        let timezone_override = if let Some(tz_str) = &input.global_options.timezone {
+            Some(parse_timezone(tz_str).map_err(|e| format!("Invalid timezone: {}", e))?)
+        } else {
+            None
+        };
+
+        let mut results = Vec::new();
+
+        // Generate all combinations
+        for lat_val in &lat_values {
+            for lon_val in &lon_values {
+                // Generate fresh datetime iterator for each coordinate pair
+                let datetime_iter = expand_datetime_input(dt, &step, timezone_override)
+                    .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+
+                for datetime in datetime_iter {
+                    // Calculate position using the selected algorithm
+                    let position = match algorithm.to_uppercase().as_str() {
+                        "SPA" => {
+                            if apply_refraction {
+                                spa::solar_position(
+                                    datetime,
+                                    *lat_val,
+                                    *lon_val,
+                                    elevation,
+                                    delta_t,
+                                    pressure,
+                                    temperature,
+                                )
+                            } else {
+                                spa::solar_position_no_refraction(
+                                    datetime, *lat_val, *lon_val, elevation, delta_t,
+                                )
+                            }
+                        }
+                        "GRENA3" => {
+                            if apply_refraction {
+                                grena3::solar_position_with_refraction(
+                                    datetime,
+                                    *lat_val,
+                                    *lon_val,
+                                    delta_t,
+                                    Some(pressure),
+                                    Some(temperature),
+                                )
+                            } else {
+                                grena3::solar_position(datetime, *lat_val, *lon_val, delta_t)
+                            }
+                        }
+                        _ => {
+                            return Err(format!(
+                                "Unknown algorithm: {}. Use SPA or GRENA3",
+                                algorithm
+                            ));
+                        }
+                    };
+
+                    match position {
+                        Ok(pos) => {
+                            let result = PositionResult::new(
+                                datetime,
+                                pos,
+                                *lat_val,
+                                *lon_val,
+                                EnvironmentalParams {
+                                    elevation,
+                                    pressure,
+                                    temperature,
+                                },
+                                delta_t,
+                            );
+                            results.push(result);
+                        }
+                        Err(e) => return Err(format!("Solar calculation failed: {}", e)),
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     } else {
         Err("Missing required coordinate or datetime data".to_string())
     }
@@ -497,90 +580,185 @@ fn calculate_sunrise(
     input: &ParsedInput,
     matches: &ArgMatches,
 ) -> Result<Vec<SunriseResultData>, String> {
-    // Only handle single-point calculations for now
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
         &input.parsed_datetime,
     ) {
-        if let (
-            Coordinate::Single(lat_val),
-            Coordinate::Single(lon_val),
-            DateTimeInput::Single(datetime),
-        ) = (lat, lon, dt)
-        {
-            // For sunrise calculations, we need datetime that represents the start of the local date
-            // We take the local date and create a datetime at 00:00:00 in the original timezone
-            let local_date = datetime.date_naive();
-            let start_of_day = local_date.and_hms_opt(0, 0, 0).unwrap();
-            let start_datetime = datetime
-                .timezone()
-                .from_local_datetime(&start_of_day)
-                .single()
-                .unwrap();
-
-            // Get delta_t parameter
-            let delta_t = input
-                .global_options
-                .deltat
-                .as_deref()
-                .and_then(|s| {
-                    if s == "ESTIMATE" {
-                        Some(69.0)
-                    } else {
-                        s.parse::<f64>().ok()
-                    }
-                })
-                .unwrap_or(0.0); // Default to 0.0 like solarpos
-
-            // Get command options
-            let (_, cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
-            let sunrise_options = parse_sunrise_options(cmd_matches);
-
-            // Calculate main sunrise/sunset using standard horizon (-0.833°)
-            let sunrise_result = spa::sunrise_sunset_for_horizon(
-                start_datetime,
-                *lat_val,
-                *lon_val,
-                delta_t,
-                Horizon::Custom(-0.833),
-            );
-
-            match sunrise_result {
-                Ok(sunrise_data) => {
-                    // The sunrise_result is already in the correct timezone (start_datetime's timezone)
-                    let sunrise_result_tz = sunrise_data;
-
-                    // Calculate twilight if requested
-                    let twilight_results = if sunrise_options.twilight {
-                        Some(calculate_twilight_times(
-                            start_datetime,
-                            *lat_val,
-                            *lon_val,
-                            delta_t,
-                        )?)
-                    } else {
-                        None
-                    };
-
-                    let result = SunriseResultData::new(
-                        *datetime,
-                        *lat_val,
-                        *lon_val,
-                        delta_t,
-                        sunrise_result_tz,
-                        twilight_results,
-                    );
-
-                    Ok(vec![result])
+        // Extract coordinate values (same pattern as position command)
+        let lat_values = match lat {
+            Coordinate::Single(val) => vec![*val],
+            Coordinate::Range { start, end, step } => {
+                let mut values = Vec::new();
+                let mut current = *start;
+                while current <= *end {
+                    values.push(current);
+                    current += step;
                 }
-                Err(e) => Err(format!("Sunrise calculation failed: {}", e)),
+                values
             }
+        };
+
+        let lon_values = match lon {
+            Coordinate::Single(val) => vec![*val],
+            Coordinate::Range { start, end, step } => {
+                let mut values = Vec::new();
+                let mut current = *start;
+                while current <= *end {
+                    values.push(current);
+                    current += step;
+                }
+                values
+            }
+        };
+
+        // Handle timezone override from command line
+        let timezone_override = if let Some(tz_str) = &input.global_options.timezone {
+            Some(parse_timezone(tz_str).map_err(|e| format!("Invalid timezone: {}", e))?)
         } else {
-            Err("Ranges and file inputs not yet implemented".to_string())
+            None
+        };
+
+        // For sunrise, we use daily step by default for partial dates (year, year-month)
+        let step = TimeStep {
+            duration: chrono::Duration::try_days(1).unwrap(),
+        };
+
+        let mut results = Vec::new();
+
+        // Generate all combinations
+        for lat_val in &lat_values {
+            for lon_val in &lon_values {
+                match dt {
+                    DateTimeInput::PartialDate(year, month, day) => {
+                        // For single dates, only calculate sunrise once at 00:00:00
+                        let target_date = chrono::NaiveDate::from_ymd_opt(*year, *month, *day)
+                            .ok_or_else(|| {
+                                format!("Invalid date: {}-{:02}-{:02}", year, month, day)
+                            })?;
+                        let start_time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+                        let start_naive = target_date.and_time(start_time);
+
+                        let datetime = if let Some(tz) = timezone_override {
+                            tz.from_local_datetime(&start_naive)
+                                .single()
+                                .ok_or_else(|| {
+                                    format!(
+                                        "Ambiguous or invalid datetime: {} in timezone {}",
+                                        start_naive, tz
+                                    )
+                                })?
+                        } else {
+                            Local
+                                .from_local_datetime(&start_naive)
+                                .single()
+                                .ok_or_else(|| {
+                                    format!("Ambiguous or invalid datetime: {}", start_naive)
+                                })?
+                                .fixed_offset()
+                        };
+
+                        let sunrise_result = calculate_sunrise_for_single_datetime(
+                            *lat_val, *lon_val, datetime, input, matches,
+                        )?;
+                        results.extend(sunrise_result);
+                    }
+                    _ => {
+                        // For other datetime types (partial year, partial month, single datetime), use time series
+                        let datetime_iter = expand_datetime_input(dt, &step, timezone_override)
+                            .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+
+                        for datetime in datetime_iter {
+                            // Calculate sunrise for this coordinate and datetime
+                            let sunrise_result = calculate_sunrise_for_single_datetime(
+                                *lat_val, *lon_val, datetime, input, matches,
+                            )?;
+                            results.extend(sunrise_result);
+                        }
+                    }
+                }
+            }
         }
+
+        Ok(results)
     } else {
         Err("Missing required coordinate or datetime data".to_string())
+    }
+}
+
+fn calculate_sunrise_for_single_datetime(
+    lat_val: f64,
+    lon_val: f64,
+    datetime: chrono::DateTime<chrono::FixedOffset>,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<Vec<SunriseResultData>, String> {
+    // For sunrise calculations, we need datetime that represents the start of the local date
+    // We take the local date and create a datetime at 00:00:00 in the original timezone
+    let local_date = datetime.date_naive();
+    let start_of_day = local_date.and_hms_opt(0, 0, 0).unwrap();
+    let start_datetime = datetime
+        .timezone()
+        .from_local_datetime(&start_of_day)
+        .single()
+        .unwrap();
+
+    // Get delta_t parameter
+    let delta_t = input
+        .global_options
+        .deltat
+        .as_deref()
+        .and_then(|s| {
+            if s == "ESTIMATE" {
+                Some(69.0)
+            } else {
+                s.parse::<f64>().ok()
+            }
+        })
+        .unwrap_or(0.0); // Default to 0.0 like solarpos
+
+    // Get command options
+    let (_, cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
+    let sunrise_options = parse_sunrise_options(cmd_matches);
+
+    // Calculate main sunrise/sunset using standard horizon
+    let sunrise_result = spa::sunrise_sunset_for_horizon(
+        start_datetime,
+        lat_val,
+        lon_val,
+        delta_t,
+        Horizon::SunriseSunset,
+    );
+
+    match sunrise_result {
+        Ok(sunrise_data) => {
+            // The sunrise_result is already in the correct timezone (start_datetime's timezone)
+            let sunrise_result_tz = sunrise_data;
+
+            // Calculate twilight if requested
+            let twilight_results = if sunrise_options.twilight {
+                Some(calculate_twilight_times(
+                    start_datetime,
+                    lat_val,
+                    lon_val,
+                    delta_t,
+                )?)
+            } else {
+                None
+            };
+
+            let result = SunriseResultData::new(
+                datetime,
+                lat_val,
+                lon_val,
+                delta_t,
+                sunrise_result_tz,
+                twilight_results,
+            );
+
+            Ok(vec![result])
+        }
+        Err(e) => Err(format!("Sunrise calculation failed: {}", e)),
     }
 }
 
@@ -650,7 +828,7 @@ fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
         (input.parsed_longitude.is_some() && matches!(input.parsed_longitude, Some(Coordinate::Range { .. }))) ||
         // Time series (partial dates)
         (input.parsed_datetime.is_some() && matches!(input.parsed_datetime,
-            Some(DateTimeInput::PartialYear(_)) | Some(DateTimeInput::PartialYearMonth(_, _))));
+            Some(DateTimeInput::PartialYear(_)) | Some(DateTimeInput::PartialYearMonth(_, _)) | Some(DateTimeInput::PartialDate(_, _, _))));
 
     if should_auto_enable {
         input.global_options.show_inputs = Some(true);
