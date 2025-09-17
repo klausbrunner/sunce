@@ -1,9 +1,12 @@
-use chrono::{Local, TimeZone};
+use chrono::TimeZone;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use solar_positioning::{grena3, spa, types::Horizon};
 
 mod parsing;
-use parsing::{Coordinate, DateTimeInput, ParseError, parse_coordinate, parse_datetime};
+use parsing::{
+    Coordinate, DateTimeInput, ParseError, apply_timezone_to_naive, parse_coordinate,
+    parse_datetime,
+};
 
 mod output;
 use output::{EnvironmentalParams, OutputFormat, PositionResult, output_position_results};
@@ -11,10 +14,81 @@ use output::{EnvironmentalParams, OutputFormat, PositionResult, output_position_
 mod sunrise_output;
 use sunrise_output::{SunriseResultData, TwilightResults, output_sunrise_results};
 
+mod file_input;
 mod time_series;
 mod timezone_utils;
-use parsing::parse_timezone;
+use file_input::{
+    CoordinateFileIterator, PairedFileIterator, TimeFileIterator, create_file_reader,
+};
 use time_series::{TimeStep, expand_datetime_input};
+use timezone_utils::naive_to_system_local;
+
+/// Streaming iterator for coordinate ranges (no Vec collection)
+struct CoordinateRangeIterator {
+    current: f64,
+    end: f64,
+    step: f64,
+    ascending: bool,
+    finished: bool,
+}
+
+impl CoordinateRangeIterator {
+    fn new(start: f64, end: f64, step: f64) -> Self {
+        let ascending = if step > 0.0 {
+            start <= end
+        } else {
+            start >= end
+        };
+        Self {
+            current: start,
+            end,
+            step: step.abs(),
+            ascending,
+            finished: false,
+        }
+    }
+}
+
+impl Iterator for CoordinateRangeIterator {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let should_continue = if self.ascending {
+            self.current <= self.end
+        } else {
+            self.current >= self.end
+        };
+
+        if !should_continue {
+            self.finished = true;
+            return None;
+        }
+
+        let value = self.current;
+
+        if self.ascending {
+            self.current += self.step;
+        } else {
+            self.current -= self.step;
+        }
+
+        Some(value)
+    }
+}
+
+/// Create a streaming iterator for a coordinate (single value or range)
+fn create_coordinate_iterator(coord: &Coordinate) -> Box<dyn Iterator<Item = f64>> {
+    match coord {
+        Coordinate::Single(val) => Box::new(std::iter::once(*val)),
+        Coordinate::Range { start, end, step } => {
+            Box::new(CoordinateRangeIterator::new(*start, *end, *step))
+        }
+    }
+}
 
 fn main() {
     let app = build_cli();
@@ -43,26 +117,27 @@ fn main() {
                         matches.subcommand().unwrap_or(("position", &matches));
 
                     match cmd_name {
-                        "position" => match calculate_positions(&input, &matches) {
-                            Ok(results) => {
-                                let show_inputs = input.global_options.show_inputs.unwrap_or(false);
-                                let show_headers = input.global_options.headers.unwrap_or(true);
-                                let elevation_angle =
-                                    parse_position_options(cmd_matches).elevation_angle;
+                        "position" => {
+                            let show_inputs = input.global_options.show_inputs.unwrap_or(false);
+                            let show_headers = input.global_options.headers.unwrap_or(true);
+                            let elevation_angle =
+                                parse_position_options(cmd_matches).elevation_angle;
 
-                                output_position_results(
-                                    results.into_iter(),
-                                    &format,
-                                    show_inputs,
-                                    show_headers,
-                                    elevation_angle,
-                                );
+                            match calculate_and_output_positions(
+                                &input,
+                                &matches,
+                                &format,
+                                show_inputs,
+                                show_headers,
+                                elevation_angle,
+                            ) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    eprintln!("✗ Error calculating positions: {}", e);
+                                    std::process::exit(1);
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("✗ Error calculating positions: {}", e);
-                                std::process::exit(1);
-                            }
-                        },
+                        }
                         "sunrise" => match calculate_sunrise(&input, &matches) {
                             Ok(results) => {
                                 let show_inputs = input.global_options.show_inputs.unwrap_or(false);
@@ -101,7 +176,7 @@ fn main() {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum InputType {
     Standard,       // lat, lon, datetime
     CoordinateFile, // @coords.txt as lat, datetime
@@ -112,7 +187,7 @@ enum InputType {
     StdinPaired,    // @- as lat (ignores lon, datetime)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParsedInput {
     input_type: InputType,
     latitude: String,
@@ -125,7 +200,7 @@ struct ParsedInput {
     parsed_datetime: Option<DateTimeInput>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GlobalOptions {
     #[allow(dead_code)] // Will be used when delta T calculation is implemented
     deltat: Option<String>,
@@ -379,25 +454,173 @@ fn parse_data_values(input: &mut ParsedInput) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn calculate_positions(
+/// Unified streaming function for all position calculations
+fn calculate_and_output_positions(
     input: &ParsedInput,
     matches: &ArgMatches,
-) -> Result<Vec<PositionResult>, String> {
+    format: &OutputFormat,
+    show_inputs: bool,
+    show_headers: bool,
+    elevation_angle: bool,
+) -> Result<(), String> {
+    // Create a streaming iterator for all input types
+    let position_iter = create_position_iterator(input, matches)?;
+
+    // Stream directly to output - no Vec collection
+    output_position_results(
+        position_iter,
+        format,
+        show_inputs,
+        show_headers,
+        elevation_angle,
+    );
+    Ok(())
+}
+
+fn create_position_iterator<'a>(
+    input: &'a ParsedInput,
+    matches: &'a ArgMatches,
+) -> Result<Box<dyn Iterator<Item = PositionResult> + 'a>, String> {
+    match input.input_type {
+        InputType::PairedDataFile | InputType::StdinPaired => Ok(Box::new(
+            create_paired_file_position_iterator(input, matches)?,
+        )),
+        InputType::CoordinateFile | InputType::StdinCoords => Ok(Box::new(
+            create_coordinate_file_position_iterator(input, matches)?,
+        )),
+        InputType::TimeFile | InputType::StdinTimes => Ok(Box::new(
+            create_time_file_position_iterator(input, matches)?,
+        )),
+        InputType::Standard => Ok(Box::new(create_standard_position_iterator(input, matches)?)),
+    }
+}
+
+fn create_paired_file_position_iterator(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<impl Iterator<Item = PositionResult>, String> {
+    let file_path = &input.latitude;
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
+    let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+
+    // Get calculation parameters once
+    let calc_params = get_calculation_parameters(input, matches)?;
+
+    // Stream each file line through calculation immediately
+    Ok(paired_iter.map(move |paired_result| {
+        let (lat, lon, datetime_input) = paired_result.expect("Error reading paired data");
+        let datetime = match datetime_input {
+            DateTimeInput::Single(dt) => dt,
+            _ => panic!("Expected specific datetime from paired file"),
+        };
+
+        calculate_single_position(datetime, lat, lon, &calc_params)
+    }))
+}
+
+fn create_coordinate_file_position_iterator(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<impl Iterator<Item = PositionResult>, String> {
+    let file_path = &input.latitude;
+    let datetime_str = input
+        .datetime
+        .as_ref()
+        .ok_or("Datetime parameter required for coordinate files")?;
+    let datetime_input = parse_datetime(datetime_str, input.global_options.timezone.as_deref())
+        .map_err(|e| format!("Failed to parse datetime: {}", e))?;
+
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
+    let coord_iter = CoordinateFileIterator::new(reader);
+
+    // Get calculation parameters once
+    let calc_params = get_calculation_parameters(input, matches)?;
+
+    // Get datetime iterator
+    let step = TimeStep::default();
+    let datetime_iter = expand_datetime_input(&datetime_input, &step, None)
+        .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+    let datetimes: Vec<_> = datetime_iter.collect(); // Small collection for time series - acceptable for time ranges
+
+    // Stream each coordinate through calculation immediately
+    Ok(coord_iter.flat_map(move |coord_result| {
+        let (lat, lon) = coord_result.expect("Error reading coordinates");
+        let calc_params = calc_params.clone();
+        let datetimes = datetimes.clone(); // Clone the time vector for each coordinate
+        datetimes
+            .into_iter()
+            .map(move |datetime| calculate_single_position(datetime, lat, lon, &calc_params))
+    }))
+}
+
+fn create_time_file_position_iterator(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<impl Iterator<Item = PositionResult>, String> {
+    let file_path = input.datetime.as_ref().ok_or("Time file path not found")?;
+    let lat = parse_coordinate(&input.latitude, "latitude")
+        .map_err(|e| format!("Failed to parse latitude: {}", e))?;
+    let lon = parse_coordinate(
+        input
+            .longitude
+            .as_ref()
+            .ok_or("Longitude required for time files")?,
+        "longitude",
+    )
+    .map_err(|e| format!("Failed to parse longitude: {}", e))?;
+
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
+    let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+
+    // Get calculation parameters once
+    let calc_params = get_calculation_parameters(input, matches)?;
+
+    // Create coordinate combinations - small collections for coordinate ranges are acceptable
+    let lat_iter = create_coordinate_iterator(&lat);
+    let coords: Vec<_> = lat_iter
+        .flat_map(|lat_val| {
+            let lon_iter = create_coordinate_iterator(&lon);
+            lon_iter.map(move |lon_val| (lat_val, lon_val))
+        })
+        .collect(); // Small collection for coordinate combinations - acceptable for coordinate ranges
+
+    // Stream each time through calculation immediately
+    Ok(time_iter.flat_map(move |time_result| {
+        let datetime_input = time_result.expect("Error reading time");
+        let datetime = match datetime_input {
+            DateTimeInput::Single(dt) => dt,
+            _ => panic!("Expected specific datetime from time file"),
+        };
+        let calc_params = calc_params.clone();
+        let coords = coords.clone(); // Clone the coordinate vector for each time
+        coords.into_iter().map(move |(lat_val, lon_val)| {
+            calculate_single_position(datetime, lat_val, lon_val, &calc_params)
+        })
+    }))
+}
+
+fn create_standard_position_iterator(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<impl Iterator<Item = PositionResult>, String> {
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
         &input.parsed_datetime,
     ) {
-        // Get command options
         let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-
         if cmd_name != "position" {
             return Err("Position calculation not available for sunrise command".to_string());
         }
 
-        let pos_options = parse_position_options(cmd_matches);
+        // Get calculation parameters
+        let calc_params = get_calculation_parameters(input, matches)?;
 
         // Parse step option
+        let pos_options = parse_position_options(cmd_matches);
         let step = pos_options
             .step
             .as_deref()
@@ -406,16 +629,54 @@ fn calculate_positions(
             .map_err(|e| format!("Invalid step: {}", e))?
             .unwrap_or_else(TimeStep::default);
 
-        // Get algorithm (default: SPA)
-        let algorithm = pos_options.algorithm.as_deref().unwrap_or("SPA");
+        // Create streaming coordinate iterators (no Vec collection!)
+        let lat_iter = create_coordinate_iterator(lat);
+        let lon_iter = create_coordinate_iterator(lon);
 
-        // Get parameters with defaults matching solarpos
-        let elevation = pos_options
+        let datetime_iter = expand_datetime_input(dt, &step, None)
+            .map_err(|e| format!("Failed to expand datetime: {}", e))?;
+
+        // Create streaming Cartesian product iterator
+        Ok(create_cartesian_position_iterator(
+            datetime_iter,
+            lat_iter,
+            lon_iter,
+            calc_params,
+        ))
+    } else {
+        Err("Missing required coordinate or datetime data".to_string())
+    }
+}
+
+#[derive(Clone)]
+struct CalculationParameters {
+    algorithm: String,
+    elevation: f64,
+    delta_t: f64,
+    pressure: f64,
+    temperature: f64,
+    apply_refraction: bool,
+}
+
+fn get_calculation_parameters(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<CalculationParameters, String> {
+    let (_, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
+    let pos_options = parse_position_options(cmd_matches);
+
+    Ok(CalculationParameters {
+        algorithm: pos_options
+            .algorithm
+            .as_deref()
+            .unwrap_or("SPA")
+            .to_string(),
+        elevation: pos_options
             .elevation
             .as_deref()
             .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0);
-        let delta_t = input
+            .unwrap_or(0.0),
+        delta_t: input
             .global_options
             .deltat
             .as_deref()
@@ -426,160 +687,131 @@ fn calculate_positions(
                     s.parse::<f64>().ok()
                 }
             })
-            .unwrap_or(0.0); // Default to 0.0 like solarpos
-        let pressure = pos_options
+            .unwrap_or(0.0),
+        pressure: pos_options
             .pressure
             .as_deref()
             .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(1013.0);
-        let temperature = pos_options
+            .unwrap_or(1013.0),
+        temperature: pos_options
             .temperature
             .as_deref()
             .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(15.0);
+            .unwrap_or(15.0),
+        apply_refraction: pos_options.refraction.unwrap_or(true),
+    })
+}
 
-        // Apply refraction (default: true)
-        let apply_refraction = pos_options.refraction.unwrap_or(true);
-
-        // Generate coordinate and datetime iterators
-        let lat_values = match lat {
-            Coordinate::Single(val) => vec![*val],
-            Coordinate::Range {
-                start,
-                end,
-                step: coord_step,
-            } => {
-                let mut values = Vec::new();
-                let mut current = *start;
-                if *coord_step > 0.0 {
-                    while current <= *end {
-                        values.push(current);
-                        current += *coord_step;
-                    }
-                } else {
-                    while current >= *end {
-                        values.push(current);
-                        current += *coord_step;
-                    }
-                }
-                values
-            }
-        };
-
-        let lon_values = match lon {
-            Coordinate::Single(val) => vec![*val],
-            Coordinate::Range {
-                start,
-                end,
-                step: coord_step,
-            } => {
-                let mut values = Vec::new();
-                let mut current = *start;
-                if *coord_step > 0.0 {
-                    while current <= *end {
-                        values.push(current);
-                        current += *coord_step;
-                    }
-                } else {
-                    while current >= *end {
-                        values.push(current);
-                        current += *coord_step;
-                    }
-                }
-                values
-            }
-        };
-
-        // Handle timezone override from command line
-        let timezone_override = if let Some(tz_str) = &input.global_options.timezone {
-            Some(parse_timezone(tz_str).map_err(|e| format!("Invalid timezone: {}", e))?)
-        } else {
-            None
-        };
-
-        let mut results = Vec::new();
-
-        // Generate all combinations
-        for lat_val in &lat_values {
-            for lon_val in &lon_values {
-                // Generate fresh datetime iterator for each coordinate pair
-                let datetime_iter = expand_datetime_input(dt, &step, timezone_override)
-                    .map_err(|e| format!("Failed to expand datetime: {}", e))?;
-
-                for datetime in datetime_iter {
-                    // Calculate position using the selected algorithm
-                    let position = match algorithm.to_uppercase().as_str() {
-                        "SPA" => {
-                            if apply_refraction {
-                                spa::solar_position(
-                                    datetime,
-                                    *lat_val,
-                                    *lon_val,
-                                    elevation,
-                                    delta_t,
-                                    pressure,
-                                    temperature,
-                                )
-                            } else {
-                                spa::solar_position_no_refraction(
-                                    datetime, *lat_val, *lon_val, elevation, delta_t,
-                                )
-                            }
-                        }
-                        "GRENA3" => {
-                            if apply_refraction {
-                                grena3::solar_position_with_refraction(
-                                    datetime,
-                                    *lat_val,
-                                    *lon_val,
-                                    delta_t,
-                                    Some(pressure),
-                                    Some(temperature),
-                                )
-                            } else {
-                                grena3::solar_position(datetime, *lat_val, *lon_val, delta_t)
-                            }
-                        }
-                        _ => {
-                            return Err(format!(
-                                "Unknown algorithm: {}. Use SPA or GRENA3",
-                                algorithm
-                            ));
-                        }
-                    };
-
-                    match position {
-                        Ok(pos) => {
-                            let result = PositionResult::new(
-                                datetime,
-                                pos,
-                                *lat_val,
-                                *lon_val,
-                                EnvironmentalParams {
-                                    elevation,
-                                    pressure,
-                                    temperature,
-                                },
-                                delta_t,
-                            );
-                            results.push(result);
-                        }
-                        Err(e) => return Err(format!("Solar calculation failed: {}", e)),
-                    }
-                }
+/// Calculate a single solar position (the core calculation)
+fn calculate_single_position(
+    datetime: chrono::DateTime<chrono::FixedOffset>,
+    lat: f64,
+    lon: f64,
+    params: &CalculationParameters,
+) -> PositionResult {
+    let position = match params.algorithm.to_uppercase().as_str() {
+        "SPA" => {
+            if params.apply_refraction {
+                spa::solar_position(
+                    datetime,
+                    lat,
+                    lon,
+                    params.elevation,
+                    params.delta_t,
+                    params.pressure,
+                    params.temperature,
+                )
+            } else {
+                spa::solar_position_no_refraction(
+                    datetime,
+                    lat,
+                    lon,
+                    params.elevation,
+                    params.delta_t,
+                )
             }
         }
+        "GRENA3" => {
+            if params.apply_refraction {
+                grena3::solar_position_with_refraction(
+                    datetime,
+                    lat,
+                    lon,
+                    params.delta_t,
+                    Some(params.pressure),
+                    Some(params.temperature),
+                )
+            } else {
+                grena3::solar_position(datetime, lat, lon, params.delta_t)
+            }
+        }
+        _ => panic!("Unknown algorithm: {}", params.algorithm),
+    };
 
-        Ok(results)
-    } else {
-        Err("Missing required coordinate or datetime data".to_string())
+    let pos = position.expect("Solar calculation should not fail with validated inputs");
+
+    PositionResult::new(
+        datetime,
+        pos,
+        lat,
+        lon,
+        EnvironmentalParams {
+            elevation: params.elevation,
+            pressure: params.pressure,
+            temperature: params.temperature,
+        },
+        params.delta_t,
+    )
+}
+
+/// Create Cartesian product iterator for all coordinate/time combinations
+fn create_cartesian_position_iterator(
+    datetime_iter: impl Iterator<Item = chrono::DateTime<chrono::FixedOffset>>,
+    lat_iter: Box<dyn Iterator<Item = f64>>,
+    lon_iter: Box<dyn Iterator<Item = f64>>,
+    params: CalculationParameters,
+) -> impl Iterator<Item = PositionResult> {
+    // For coordinate ranges and time series, collect small datasets for Cartesian products
+    // This is acceptable because coordinate ranges (e.g., 52:53:0.1) are typically small
+    let datetimes: Vec<_> = datetime_iter.collect();
+    let latitudes: Vec<_> = lat_iter.collect();
+    let longitudes: Vec<_> = lon_iter.collect();
+
+    // Create all combinations and return as an owned iterator
+    let mut combinations = Vec::new();
+    for dt in datetimes {
+        for &lat in &latitudes {
+            for &lon in &longitudes {
+                combinations.push((dt, lat, lon));
+            }
+        }
     }
+
+    combinations
+        .into_iter()
+        .map(move |(dt, lat, lon)| calculate_single_position(dt, lat, lon, &params))
 }
 
 fn calculate_sunrise(
     input: &ParsedInput,
     matches: &ArgMatches,
 ) -> Result<Vec<SunriseResultData>, String> {
+    // Handle file inputs with streaming
+    match input.input_type {
+        InputType::CoordinateFile | InputType::StdinCoords => {
+            return calculate_sunrise_from_coordinate_file(input, matches);
+        }
+        InputType::TimeFile | InputType::StdinTimes => {
+            return calculate_sunrise_from_time_file(input, matches);
+        }
+        InputType::PairedDataFile | InputType::StdinPaired => {
+            return calculate_sunrise_from_paired_file(input, matches);
+        }
+        InputType::Standard => {
+            // Continue with standard processing below
+        }
+    }
+
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
@@ -612,13 +844,6 @@ fn calculate_sunrise(
             }
         };
 
-        // Handle timezone override from command line
-        let timezone_override = if let Some(tz_str) = &input.global_options.timezone {
-            Some(parse_timezone(tz_str).map_err(|e| format!("Invalid timezone: {}", e))?)
-        } else {
-            None
-        };
-
         // For sunrise, we use daily step by default for partial dates (year, year-month)
         let step = TimeStep {
             duration: chrono::Duration::try_days(1).unwrap(),
@@ -639,23 +864,12 @@ fn calculate_sunrise(
                         let start_time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
                         let start_naive = target_date.and_time(start_time);
 
-                        let datetime = if let Some(tz) = timezone_override {
-                            tz.from_local_datetime(&start_naive)
-                                .single()
-                                .ok_or_else(|| {
-                                    format!(
-                                        "Ambiguous or invalid datetime: {} in timezone {}",
-                                        start_naive, tz
-                                    )
-                                })?
+                        let datetime = if let Some(tz_str) = &input.global_options.timezone {
+                            apply_timezone_to_naive(start_naive, tz_str)
+                                .map_err(|e| format!("Timezone error: {}", e))?
                         } else {
-                            Local
-                                .from_local_datetime(&start_naive)
-                                .single()
-                                .ok_or_else(|| {
-                                    format!("Ambiguous or invalid datetime: {}", start_naive)
-                                })?
-                                .fixed_offset()
+                            naive_to_system_local(start_naive)
+                                .map_err(|e| format!("Timezone error: {}", e))?
                         };
 
                         let sunrise_result = calculate_sunrise_for_single_datetime(
@@ -665,7 +879,7 @@ fn calculate_sunrise(
                     }
                     _ => {
                         // For other datetime types (partial year, partial month, single datetime), use time series
-                        let datetime_iter = expand_datetime_input(dt, &step, timezone_override)
+                        let datetime_iter = expand_datetime_input(dt, &step, None)
                             .map_err(|e| format!("Failed to expand datetime: {}", e))?;
 
                         for datetime in datetime_iter {
@@ -973,4 +1187,160 @@ fn build_cli() -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Show twilight times."))
         )
+}
+
+fn calculate_sunrise_from_coordinate_file(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<Vec<SunriseResultData>, String> {
+    let file_path = &input.latitude;
+    let datetime_str = input
+        .datetime
+        .as_ref()
+        .ok_or("Datetime parameter required for coordinate files")?;
+    let datetime_input = parse_datetime(datetime_str, input.global_options.timezone.as_deref())
+        .map_err(|e| format!("Failed to parse datetime: {}", e))?;
+
+    process_coordinate_file(
+        file_path,
+        &datetime_input,
+        input,
+        matches,
+        calculate_sunrise,
+    )
+}
+
+fn calculate_sunrise_from_time_file(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<Vec<SunriseResultData>, String> {
+    let file_path = input.datetime.as_ref().ok_or("Time file path not found")?;
+    let lat = parse_coordinate(&input.latitude, "latitude")
+        .map_err(|e| format!("Failed to parse latitude: {}", e))?;
+    let lon = parse_coordinate(
+        input
+            .longitude
+            .as_ref()
+            .ok_or("Longitude required for time files")?,
+        "longitude",
+    )
+    .map_err(|e| format!("Failed to parse longitude: {}", e))?;
+
+    process_time_file(file_path, &lat, &lon, input, matches, calculate_sunrise)
+}
+
+fn calculate_sunrise_from_paired_file(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<Vec<SunriseResultData>, String> {
+    let file_path = &input.latitude;
+    process_paired_file(file_path, input, matches, calculate_sunrise)
+}
+
+// Generic file processing functions to eliminate duplication
+
+fn process_coordinate_file<T>(
+    file_path: &str,
+    datetime_input: &DateTimeInput,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
+    let coord_iter = CoordinateFileIterator::new(reader);
+
+    let mut results = Vec::new();
+    for coord_result in coord_iter {
+        let (lat, lon) = coord_result.map_err(|e| format!("Error reading coordinates: {}", e))?;
+        let calculation_result =
+            calculate_with_single_coords(lat, lon, datetime_input, input, matches, calculator)?;
+        results.extend(calculation_result);
+    }
+    Ok(results)
+}
+
+fn process_time_file<T>(
+    file_path: &str,
+    lat: &Coordinate,
+    lon: &Coordinate,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
+    let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+
+    let mut results = Vec::new();
+    for time_result in time_iter {
+        let datetime_input = time_result.map_err(|e| format!("Error reading time: {}", e))?;
+        let calculation_result = calculate_with_coords(
+            lat.clone(),
+            lon.clone(),
+            &datetime_input,
+            input,
+            matches,
+            calculator,
+        )?;
+        results.extend(calculation_result);
+    }
+    Ok(results)
+}
+
+fn process_paired_file<T>(
+    file_path: &str,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    let reader = create_file_reader(file_path)
+        .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
+    let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+
+    let mut results = Vec::new();
+    for paired_result in paired_iter {
+        let (lat, lon, datetime_input) =
+            paired_result.map_err(|e| format!("Error reading paired data: {}", e))?;
+        let calculation_result =
+            calculate_with_single_coords(lat, lon, &datetime_input, input, matches, calculator)?;
+        results.extend(calculation_result);
+    }
+    Ok(results)
+}
+
+fn calculate_with_single_coords<T>(
+    lat: f64,
+    lon: f64,
+    datetime_input: &DateTimeInput,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    let lat_coord = Coordinate::Single(lat);
+    let lon_coord = Coordinate::Single(lon);
+    calculate_with_coords(
+        lat_coord,
+        lon_coord,
+        datetime_input,
+        input,
+        matches,
+        calculator,
+    )
+}
+
+fn calculate_with_coords<T>(
+    lat: Coordinate,
+    lon: Coordinate,
+    datetime_input: &DateTimeInput,
+    input: &ParsedInput,
+    matches: &ArgMatches,
+    calculator: fn(&ParsedInput, &ArgMatches) -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    let mut temp_input = input.clone();
+    temp_input.parsed_latitude = Some(lat);
+    temp_input.parsed_longitude = Some(lon);
+    temp_input.parsed_datetime = Some(datetime_input.clone());
+    temp_input.input_type = InputType::Standard;
+    calculator(&temp_input, matches)
 }

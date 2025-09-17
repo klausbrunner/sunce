@@ -1,4 +1,6 @@
-use crate::timezone_utils::{get_system_timezone, naive_to_fixed_offset, naive_to_timezone_aware};
+use crate::timezone_utils::{
+    naive_to_fixed_offset, naive_to_specific_timezone, naive_to_system_local,
+};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 use chrono_tz::Tz;
 use std::fmt;
@@ -233,8 +235,7 @@ fn parse_full_datetime(
                 apply_timezone_to_naive(naive_dt, tz)?
             } else {
                 // Default to local timezone like solarpos does
-                let system_tz = get_system_timezone();
-                naive_to_timezone_aware(naive_dt, &system_tz)?
+                naive_to_system_local(naive_dt)?
             };
             return Ok(DateTimeInput::Single(dt));
         }
@@ -254,8 +255,7 @@ fn parse_full_datetime(
                 let dt = if let Some(tz) = timezone_override {
                     apply_timezone_to_naive(naive_dt, tz)?
                 } else {
-                    let system_tz = get_system_timezone();
-                    naive_to_timezone_aware(naive_dt, &system_tz)?
+                    naive_to_system_local(naive_dt)?
                 };
                 return Ok(DateTimeInput::Single(dt));
             }
@@ -280,19 +280,11 @@ fn apply_timezone_override(
 
     // Parse named timezones like "UTC", "America/New_York", etc.
     if let Ok(named_tz) = parse_named_timezone(tz) {
-        let naive_local = dt.naive_local();
-        let dt_in_tz = named_tz
-            .from_local_datetime(&naive_local)
-            .single()
-            .ok_or_else(|| {
-                ParseError::InvalidDateTime("Ambiguous time in target timezone".to_string())
-            })?;
-        // Convert to FixedOffset by recreating with the offset seconds
-        let utc_time = dt_in_tz.naive_utc();
-        let local_time = dt_in_tz.naive_local();
-        let offset_seconds = utc_time.signed_duration_since(local_time).num_seconds() as i32;
-        let fixed_offset = FixedOffset::west_opt(offset_seconds).unwrap();
-        return Ok(fixed_offset.from_utc_datetime(&utc_time));
+        // Reinterpret the time components as being in the target timezone
+        // This matches solarpos behavior: timezone override doesn't convert,
+        // it reinterprets the same time components in a different timezone
+        let naive_components = dt.naive_local();
+        return naive_to_specific_timezone(naive_components, &named_tz);
     }
 
     Err(ParseError::InvalidTimezone(format!(
@@ -301,7 +293,7 @@ fn apply_timezone_override(
     )))
 }
 
-fn apply_timezone_to_naive(
+pub fn apply_timezone_to_naive(
     naive_dt: NaiveDateTime,
     tz: &str,
 ) -> Result<DateTime<FixedOffset>, ParseError> {
@@ -311,43 +303,8 @@ fn apply_timezone_to_naive(
 
     // Parse named timezones like "UTC", "America/New_York", etc.
     if let Ok(named_tz) = parse_named_timezone(tz) {
-        let dt_in_tz = named_tz
-            .from_local_datetime(&naive_dt)
-            .single()
-            .ok_or_else(|| ParseError::InvalidDateTime("Ambiguous time in timezone".to_string()))?;
-        // Convert to FixedOffset by recreating with the offset seconds
-        let utc_time = dt_in_tz.naive_utc();
-        let local_time = dt_in_tz.naive_local();
-        let offset_seconds = utc_time.signed_duration_since(local_time).num_seconds() as i32;
-        let fixed_offset = FixedOffset::west_opt(offset_seconds).unwrap();
-        return Ok(fixed_offset.from_utc_datetime(&utc_time));
-    }
-
-    Err(ParseError::InvalidTimezone(format!(
-        "Unsupported timezone format: {}. Use offset format like +01:00 or named timezone like UTC",
-        tz
-    )))
-}
-
-pub fn parse_timezone(tz: &str) -> Result<FixedOffset, ParseError> {
-    // Try parsing as timezone offset first
-    if let Ok(offset) = parse_timezone_offset(tz) {
-        return Ok(offset);
-    }
-
-    // Try parsing as named timezone
-    if let Ok(named_tz) = parse_named_timezone(tz) {
-        // For named timezones, we need to convert to a FixedOffset
-        // We'll use a representative time to get the offset
-        let utc_time = chrono::Utc::now();
-        let local_time = utc_time.with_timezone(&named_tz);
-
-        // Convert to FixedOffset by computing the offset in seconds
-        let utc_naive = local_time.naive_utc();
-        let local_naive = local_time.naive_local();
-        let offset_seconds = local_naive.signed_duration_since(utc_naive).num_seconds() as i32;
-        let fixed_offset = FixedOffset::east_opt(offset_seconds).unwrap();
-        return Ok(fixed_offset);
+        // Use proper DST handling from timezone_utils
+        return naive_to_specific_timezone(naive_dt, &named_tz);
     }
 
     Err(ParseError::InvalidTimezone(format!(

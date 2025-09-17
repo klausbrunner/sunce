@@ -5,7 +5,7 @@ use predicates::prelude::*;
 #[test]
 fn test_basic_position_calculation() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
 
     cmd.assert()
         .success()
@@ -19,7 +19,7 @@ fn test_basic_position_calculation() {
 fn test_position_algorithms() {
     // Test SPA algorithm
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",
@@ -30,7 +30,7 @@ fn test_position_algorithms() {
 
     // Test GRENA3 algorithm
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",
@@ -45,14 +45,14 @@ fn test_position_algorithms() {
 fn test_output_formats() {
     // Test HUMAN format (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("date/time"));
 
     // Test CSV format
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -65,7 +65,7 @@ fn test_output_formats() {
 
     // Test JSON format
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=JSON",
         "52.0",
         "13.4",
@@ -83,7 +83,7 @@ fn test_output_formats() {
 fn test_elevation_vs_zenith() {
     // Test default (zenith angle)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -96,7 +96,7 @@ fn test_elevation_vs_zenith() {
 
     // Test elevation angle
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -113,7 +113,7 @@ fn test_elevation_vs_zenith() {
 #[test]
 fn test_coordinate_ranges() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52:53:1",
         "13:14:1",
@@ -139,7 +139,7 @@ fn test_coordinate_ranges() {
 #[test]
 fn test_time_series() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -163,7 +163,7 @@ fn test_time_series() {
 fn test_partial_dates() {
     // Test year input
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -178,7 +178,7 @@ fn test_partial_dates() {
 
     // Test year-month input
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -197,7 +197,7 @@ fn test_partial_dates() {
 fn test_show_inputs() {
     // Test auto-enabling for ranges
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52:53:1",
         "13.4",
@@ -210,7 +210,7 @@ fn test_show_inputs() {
 
     // Test explicit disable
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "--no-show-inputs",
         "52:53:1",
@@ -227,7 +227,7 @@ fn test_show_inputs() {
 #[test]
 fn test_environmental_parameters() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "--show-inputs",
         "52.0",
@@ -252,12 +252,12 @@ fn test_environmental_parameters() {
 fn test_refraction_correction() {
     // Test with refraction (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["52.0", "13.4", "2024-01-01T12:00:00", "position"]);
     let output1 = cmd.assert().success().get_output().stdout.clone();
 
     // Test without refraction
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",
@@ -275,7 +275,7 @@ fn test_refraction_correction() {
 fn test_timezone_handling() {
     // Test with timezone override
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--timezone=+02:00",
         "52.0",
         "13.4",
@@ -288,7 +288,7 @@ fn test_timezone_handling() {
 
     // Test with named timezone
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--timezone=UTC",
         "52.0",
         "13.4",
@@ -305,7 +305,7 @@ fn test_timezone_handling() {
 fn test_time_step_formats() {
     // Test seconds
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -317,7 +317,7 @@ fn test_time_step_formats() {
 
     // Test minutes
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -329,7 +329,7 @@ fn test_time_step_formats() {
 
     // Test hours
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -341,7 +341,7 @@ fn test_time_step_formats() {
 
     // Test days
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -357,12 +357,12 @@ fn test_time_step_formats() {
 fn test_coordinate_validation() {
     // Test invalid latitude
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["91.0", "13.4", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["91.0", "13.4", "2024-01-01T12:00:00", "position"]);
     cmd.assert().failure();
 
     // Test invalid longitude
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "181.0", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["52.0", "181.0", "2024-01-01T12:00:00", "position"]);
     cmd.assert().failure();
 }
 
@@ -379,7 +379,7 @@ fn test_datetime_parsing() {
 
     for format in &formats {
         let mut cmd = Command::cargo_bin("sunce").unwrap();
-        cmd.args(&["52.0", "13.4", format, "position"]);
+        cmd.args(["52.0", "13.4", format, "position"]);
         cmd.assert().success();
     }
 }
@@ -389,17 +389,17 @@ fn test_datetime_parsing() {
 fn test_edge_cases() {
     // Test North Pole
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["90.0", "0.0", "2024-06-21T12:00:00", "position"]);
+    cmd.args(["90.0", "0.0", "2024-06-21T12:00:00", "position"]);
     cmd.assert().success();
 
     // Test South Pole
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["-90.0", "0.0", "2024-12-21T12:00:00", "position"]);
+    cmd.args(["-90.0", "0.0", "2024-12-21T12:00:00", "position"]);
     cmd.assert().success();
 
     // Test International Date Line
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["0.0", "180.0", "2024-01-01T12:00:00", "position"]);
+    cmd.args(["0.0", "180.0", "2024-01-01T12:00:00", "position"]);
     cmd.assert().success();
 }
 
@@ -407,7 +407,7 @@ fn test_edge_cases() {
 #[test]
 fn test_combined_range_and_time_series() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52:53:1",
         "13:14:1",
@@ -428,7 +428,7 @@ fn test_combined_range_and_time_series() {
 #[test]
 fn test_now_datetime() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "now", "position"]);
+    cmd.args(["52.0", "13.4", "now", "position"]);
     cmd.assert().success();
 }
 
@@ -437,7 +437,7 @@ fn test_now_datetime() {
 fn test_csv_headers() {
     // Test with headers (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "52.0",
         "13.4",
@@ -450,7 +450,7 @@ fn test_csv_headers() {
 
     // Test without headers
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "--no-headers",
         "52.0",
@@ -468,7 +468,7 @@ fn test_csv_headers() {
 fn test_delta_t() {
     // Test with explicit delta T
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--format=CSV",
         "--show-inputs",
         "--deltat=69.2",
@@ -483,7 +483,7 @@ fn test_delta_t() {
 
     // Test with delta T estimation
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "--deltat",
         "52.0",
         "13.4",
@@ -498,12 +498,12 @@ fn test_delta_t() {
 fn test_error_handling() {
     // Test missing arguments
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0"]);
+    cmd.args(["52.0"]);
     cmd.assert().failure();
 
     // Test invalid time step
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",
@@ -514,7 +514,7 @@ fn test_error_handling() {
 
     // Test invalid algorithm
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",

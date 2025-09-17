@@ -1,6 +1,11 @@
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SolarPosition;
 
+/// Format datetime to match solarpos format (no subseconds)
+pub fn format_datetime_solarpos(dt: &DateTime<FixedOffset>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
 #[derive(Debug, Clone)]
 pub enum OutputFormat {
     Human,
@@ -147,7 +152,7 @@ where
                 result.elevation,
                 result.pressure,
                 result.temperature,
-                result.datetime.to_rfc3339(),
+                format_datetime_solarpos(&result.datetime),
                 result.delta_t,
                 result.position.azimuth(),
                 angle_value
@@ -155,7 +160,7 @@ where
         } else {
             println!(
                 "{},{:.5},{:.5}",
-                result.datetime.to_rfc3339(),
+                format_datetime_solarpos(&result.datetime),
                 result.position.azimuth(),
                 angle_value
             );
@@ -182,7 +187,7 @@ where
                 result.elevation,
                 result.pressure,
                 result.temperature,
-                result.datetime.to_rfc3339(),
+                format_datetime_solarpos(&result.datetime),
                 result.delta_t,
                 result.position.azimuth(),
                 angle_name,
@@ -191,11 +196,95 @@ where
         } else {
             println!(
                 r#"{{"dateTime":"{}","azimuth":{:.5},"{}":{:.5}}}"#,
-                result.datetime.to_rfc3339(),
+                format_datetime_solarpos(&result.datetime),
                 result.position.azimuth(),
                 angle_name,
                 angle_value
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{FixedOffset, NaiveDate, TimeZone};
+    use solar_positioning::types::SolarPosition;
+
+    fn create_test_position_result() -> PositionResult {
+        let tz = FixedOffset::east_opt(3600).unwrap(); // +01:00
+        let datetime = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let position = SolarPosition::new(180.0, 30.0).unwrap(); // azimuth, zenith
+        let env = EnvironmentalParams {
+            elevation: 100.0,
+            pressure: 1013.25,
+            temperature: 20.0,
+        };
+
+        PositionResult::new(datetime, position, 52.0, 13.0, env, 69.2)
+    }
+
+    #[test]
+    fn test_format_datetime_solarpos() {
+        let tz = FixedOffset::east_opt(3600).unwrap();
+        let dt = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(12, 30, 45)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let formatted = format_datetime_solarpos(&dt);
+        assert_eq!(formatted, "2024-06-21T12:30:45+01:00");
+    }
+
+    #[test]
+    fn test_output_format_from_string() {
+        assert!(matches!(
+            OutputFormat::from_string("human"),
+            Ok(OutputFormat::Human)
+        ));
+        assert!(matches!(
+            OutputFormat::from_string("CSV"),
+            Ok(OutputFormat::Csv)
+        ));
+        assert!(matches!(
+            OutputFormat::from_string("json"),
+            Ok(OutputFormat::Json)
+        ));
+        assert!(OutputFormat::from_string("invalid").is_err());
+    }
+
+    #[test]
+    fn test_position_result_creation() {
+        let result = create_test_position_result();
+        assert_eq!(result.latitude, 52.0);
+        assert_eq!(result.longitude, 13.0);
+        assert_eq!(result.elevation, 100.0);
+        assert_eq!(result.pressure, 1013.25);
+        assert_eq!(result.temperature, 20.0);
+        assert_eq!(result.delta_t, 69.2);
+    }
+
+    #[test]
+    fn test_environmental_params() {
+        let env = EnvironmentalParams {
+            elevation: 500.0,
+            pressure: 950.0,
+            temperature: 15.0,
+        };
+        assert_eq!(env.elevation, 500.0);
+        assert_eq!(env.pressure, 950.0);
+        assert_eq!(env.temperature, 15.0);
     }
 }

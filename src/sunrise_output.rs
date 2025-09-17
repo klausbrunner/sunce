@@ -1,12 +1,7 @@
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SunriseResult;
 
-use crate::output::OutputFormat;
-
-/// Format datetime to match solarpos format (no subseconds)
-fn format_datetime_solarpos(dt: &DateTime<FixedOffset>) -> String {
-    dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-}
+use crate::output::{OutputFormat, format_datetime_solarpos};
 
 pub struct SunriseResultData {
     pub datetime: DateTime<FixedOffset>,
@@ -250,13 +245,13 @@ fn output_sunrise_csv_format<I>(
                 }
             }
             SunriseResult::AllDay { transit } => {
-                print!("ALL_DAY,,{},", transit.to_rfc3339());
+                print!("ALL_DAY,,{},", format_datetime_solarpos(transit));
                 if show_twilight {
                     print!(",,,,,,");
                 }
             }
             SunriseResult::AllNight { transit } => {
-                print!("ALL_NIGHT,,{},", transit.to_rfc3339());
+                print!("ALL_NIGHT,,{},", format_datetime_solarpos(transit));
                 if show_twilight {
                     print!(",,,,,,");
                 }
@@ -269,39 +264,39 @@ fn output_sunrise_csv_format<I>(
 fn print_twilight_times_csv(twilight: &TwilightResults) {
     // Extract times in the order: civil_start, civil_end, nautical_start, nautical_end, astronomical_start, astronomical_end
     let civil_start = if let SunriseResult::RegularDay { sunrise, .. } = &twilight.civil {
-        sunrise.to_rfc3339()
+        format_datetime_solarpos(sunrise)
     } else {
         String::new()
     };
 
     let civil_end = if let SunriseResult::RegularDay { sunset, .. } = &twilight.civil {
-        sunset.to_rfc3339()
+        format_datetime_solarpos(sunset)
     } else {
         String::new()
     };
 
     let nautical_start = if let SunriseResult::RegularDay { sunrise, .. } = &twilight.nautical {
-        sunrise.to_rfc3339()
+        format_datetime_solarpos(sunrise)
     } else {
         String::new()
     };
 
     let nautical_end = if let SunriseResult::RegularDay { sunset, .. } = &twilight.nautical {
-        sunset.to_rfc3339()
+        format_datetime_solarpos(sunset)
     } else {
         String::new()
     };
 
     let astronomical_start =
         if let SunriseResult::RegularDay { sunrise, .. } = &twilight.astronomical {
-            sunrise.to_rfc3339()
+            format_datetime_solarpos(sunrise)
         } else {
             String::new()
         };
 
     let astronomical_end = if let SunriseResult::RegularDay { sunset, .. } = &twilight.astronomical
     {
-        sunset.to_rfc3339()
+        format_datetime_solarpos(sunset)
     } else {
         String::new()
     };
@@ -347,13 +342,13 @@ where
             SunriseResult::AllDay { transit } => {
                 print!(
                     r#""type":"ALL_DAY","sunrise":"","transit":"{}","sunset":"#,
-                    transit.to_rfc3339()
+                    format_datetime_solarpos(transit)
                 );
             }
             SunriseResult::AllNight { transit } => {
                 print!(
                     r#""type":"ALL_NIGHT","sunrise":"","transit":"{}","sunset":"#,
-                    transit.to_rfc3339()
+                    format_datetime_solarpos(transit)
                 );
             }
         }
@@ -370,8 +365,8 @@ fn print_twilight_times_json(twilight: &TwilightResults) {
     {
         print!(
             r#","civil_start":"{}","civil_end":"{}""#,
-            civil_start.to_rfc3339(),
-            civil_end.to_rfc3339()
+            format_datetime_solarpos(civil_start),
+            format_datetime_solarpos(civil_end)
         );
     }
     if let SunriseResult::RegularDay {
@@ -382,8 +377,8 @@ fn print_twilight_times_json(twilight: &TwilightResults) {
     {
         print!(
             r#","nautical_start":"{}","nautical_end":"{}""#,
-            nautical_start.to_rfc3339(),
-            nautical_end.to_rfc3339()
+            format_datetime_solarpos(nautical_start),
+            format_datetime_solarpos(nautical_end)
         );
     }
     if let SunriseResult::RegularDay {
@@ -394,8 +389,110 @@ fn print_twilight_times_json(twilight: &TwilightResults) {
     {
         print!(
             r#","astronomical_start":"{}","astronomical_end":"{}""#,
-            astronomical_start.to_rfc3339(),
-            astronomical_end.to_rfc3339()
+            format_datetime_solarpos(astronomical_start),
+            format_datetime_solarpos(astronomical_end)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{FixedOffset, NaiveDate, TimeZone};
+    use solar_positioning::types::SunriseResult;
+
+    fn create_test_sunrise_result_data() -> SunriseResultData {
+        let tz = FixedOffset::east_opt(3600).unwrap(); // +01:00
+        let datetime = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let sunrise = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(5, 30, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let transit = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(13, 0, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let sunset = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(20, 30, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let sunrise_result = SunriseResult::RegularDay {
+            sunrise,
+            transit,
+            sunset,
+        };
+
+        SunriseResultData::new(datetime, 52.0, 13.0, 69.2, sunrise_result, None)
+    }
+
+    #[test]
+    fn test_sunrise_result_data_creation() {
+        let result = create_test_sunrise_result_data();
+        assert_eq!(result.latitude, 52.0);
+        assert_eq!(result.longitude, 13.0);
+        assert_eq!(result.delta_t, 69.2);
+        assert!(matches!(
+            result.sunrise_result,
+            SunriseResult::RegularDay { .. }
+        ));
+        assert!(result.twilight_results.is_none());
+    }
+
+    #[test]
+    fn test_twilight_results_creation() {
+        let tz = FixedOffset::east_opt(3600).unwrap();
+        let civil_start = tz
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 6, 21)
+                    .unwrap()
+                    .and_hms_opt(4, 30, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let civil = SunriseResult::RegularDay {
+            sunrise: civil_start,
+            transit: civil_start,
+            sunset: civil_start,
+        };
+
+        let twilight = TwilightResults {
+            civil: civil.clone(),
+            nautical: civil.clone(),
+            astronomical: civil.clone(),
+        };
+
+        assert!(matches!(twilight.civil, SunriseResult::RegularDay { .. }));
+        assert!(matches!(
+            twilight.nautical,
+            SunriseResult::RegularDay { .. }
+        ));
+        assert!(matches!(
+            twilight.astronomical,
+            SunriseResult::RegularDay { .. }
+        ));
     }
 }

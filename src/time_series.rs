@@ -1,5 +1,7 @@
 use crate::parsing::{DateTimeInput, ParseError};
-use crate::timezone_utils::{get_system_timezone, naive_to_fixed_offset, naive_to_timezone_aware};
+use crate::timezone_utils::{
+    get_system_timezone, naive_to_fixed_offset, naive_to_specific_timezone,
+};
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,11 +17,27 @@ impl TimeStep {
             ));
         }
 
+        // Check if input is just a number (solarpos compatibility - assumes seconds)
+        if let Ok(seconds) = input.parse::<i64>() {
+            if seconds <= 0 {
+                return Err(ParseError::InvalidDateTime(
+                    "Step interval must be positive".to_string(),
+                ));
+            }
+            return match Duration::try_seconds(seconds) {
+                Some(d) => Ok(TimeStep { duration: d }),
+                None => Err(ParseError::InvalidDateTime(format!(
+                    "Duration overflow for step: {}",
+                    input
+                ))),
+            };
+        }
+
         let (num_str, unit) = if let Some(pos) = input.find(|c: char| c.is_alphabetic()) {
             (&input[..pos], &input[pos..])
         } else {
             return Err(ParseError::InvalidDateTime(format!(
-                "Invalid step format: {}. Expected format like '30s', '15m', '2h'",
+                "Invalid step format: {}. Expected format like '30s', '15m', '2h' or raw seconds",
                 input
             )));
         };
@@ -73,7 +91,7 @@ fn to_local_datetime(
     } else {
         // Use system timezone with proper DST handling
         let system_tz = get_system_timezone();
-        naive_to_timezone_aware(naive, &system_tz)
+        naive_to_specific_timezone(naive, &system_tz)
     }
 }
 
@@ -252,6 +270,7 @@ mod tests {
 
     #[test]
     fn test_time_step_parsing() {
+        // Test duration format
         assert_eq!(
             TimeStep::parse("30s").unwrap().duration,
             Duration::try_seconds(30).unwrap()
@@ -264,6 +283,16 @@ mod tests {
             TimeStep::parse("2h").unwrap().duration,
             Duration::try_hours(2).unwrap()
         );
+
+        // Test solarpos compatibility - raw seconds
+        assert_eq!(
+            TimeStep::parse("600").unwrap().duration,
+            Duration::try_seconds(600).unwrap()
+        );
+        assert_eq!(
+            TimeStep::parse("30").unwrap().duration,
+            Duration::try_seconds(30).unwrap()
+        );
         assert_eq!(
             TimeStep::parse("1d").unwrap().duration,
             Duration::try_days(1).unwrap()
@@ -271,7 +300,6 @@ mod tests {
 
         // Test error cases
         assert!(TimeStep::parse("").is_err());
-        assert!(TimeStep::parse("30").is_err());
         assert!(TimeStep::parse("30x").is_err());
         assert!(TimeStep::parse("-5m").is_err());
     }

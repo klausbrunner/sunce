@@ -5,7 +5,7 @@ use predicates::prelude::*;
 #[test]
 fn test_basic_sunrise() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
 
     cmd.assert()
         .success()
@@ -19,17 +19,17 @@ fn test_basic_sunrise() {
 fn test_sunrise_horizon_types() {
     // Test standard horizon (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert().success();
 
     // Test civil twilight
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=civil"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=civil"]);
     cmd.assert().success();
 
     // Test nautical twilight
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-06-21",
@@ -40,7 +40,7 @@ fn test_sunrise_horizon_types() {
 
     // Test astronomical twilight
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-06-21",
@@ -51,7 +51,7 @@ fn test_sunrise_horizon_types() {
 
     // Test custom horizon
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=-5.0"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=-5.0"]);
     cmd.assert().success();
 }
 
@@ -60,7 +60,7 @@ fn test_sunrise_horizon_types() {
 fn test_sunrise_output_formats() {
     // Test HUMAN format (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("sunrise"))
@@ -68,14 +68,14 @@ fn test_sunrise_output_formats() {
 
     // Test CSV format
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert().success().stdout(predicate::str::contains(
         "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset",
     ));
 
     // Test JSON format
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["--format=JSON", "52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["--format=JSON", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"dateTime\""))
@@ -88,12 +88,12 @@ fn test_sunrise_output_formats() {
 fn test_sunrise_algorithms() {
     // Test SPA algorithm
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--algorithm=SPA"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--algorithm=SPA"]);
     cmd.assert().success();
 
     // Test GRENA3 algorithm
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-06-21",
@@ -109,14 +109,14 @@ fn test_sunrise_algorithms() {
 fn test_sunrise_edge_cases() {
     // Test Arctic summer (midnight sun)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["80.0", "0.0", "2024-06-21", "sunrise"]);
+    cmd.args(["80.0", "0.0", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("up all day"));
 
     // Test Arctic winter (polar night)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["80.0", "0.0", "2024-12-21", "sunrise"]);
+    cmd.args(["80.0", "0.0", "2024-12-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("down all day"));
@@ -127,7 +127,7 @@ fn test_sunrise_edge_cases() {
 fn test_sunrise_time_series() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.env("TZ", "Europe/Berlin")
-        .args(&["--format=CSV", "52.0", "13.4", "2024-06", "sunrise"]);
+        .args(["--format=CSV", "52.0", "13.4", "2024-06", "sunrise"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
@@ -142,7 +142,7 @@ fn test_sunrise_time_series() {
 #[test]
 fn test_sunrise_coordinate_ranges() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.env("TZ", "Europe/Berlin").args(&[
+    cmd.env("TZ", "Europe/Berlin").args([
         "--format=CSV",
         "52:53:1",
         "13:14:1",
@@ -163,7 +163,7 @@ fn test_sunrise_coordinate_ranges() {
 #[ignore] // TODO: Implement sunrise functionality
 fn test_sunrise_environmental_parameters() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&[
+    cmd.args([
         "52.0",
         "13.4",
         "2024-06-21",
@@ -181,12 +181,12 @@ fn test_sunrise_environmental_parameters() {
 fn test_sunrise_refraction() {
     // Test with refraction (default)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
     let output1 = cmd.assert().success().get_output().stdout.clone();
 
     // Test without refraction
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--no-refraction"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--no-refraction"]);
     let output2 = cmd.assert().success().get_output().stdout.clone();
 
     // Results should be different due to refraction correction
@@ -197,7 +197,7 @@ fn test_sunrise_refraction() {
 #[test]
 fn test_sunrise_timezone() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["--timezone=+02:00", "52.0", "13.4", "2024-06-21", "sunrise"]);
+    cmd.args(["--timezone=+02:00", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("+02:00"));
@@ -208,7 +208,7 @@ fn test_sunrise_timezone() {
 #[ignore] // TODO: Implement sunrise functionality
 fn test_sunrise_delta_t() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--deltat=69.2"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--deltat=69.2"]);
     cmd.assert().success();
 }
 
@@ -217,7 +217,7 @@ fn test_sunrise_delta_t() {
 fn test_sunrise_validation() {
     // Test invalid horizon
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(&["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=invalid"]);
+    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=invalid"]);
     cmd.assert().failure();
 }
 
@@ -225,7 +225,7 @@ fn test_sunrise_validation() {
 #[test]
 fn test_sunrise_show_inputs() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.env("TZ", "Europe/Berlin").args(&[
+    cmd.env("TZ", "Europe/Berlin").args([
         "--format=CSV",
         "--show-inputs",
         "52.0",
@@ -243,7 +243,7 @@ fn test_sunrise_show_inputs() {
 fn test_sunrise_dst() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.env("TZ", "Europe/Berlin")
-        .args(&["52.0", "13.4", "2024-03-31", "sunrise"]);
+        .args(["52.0", "13.4", "2024-03-31", "sunrise"]);
     cmd.assert().success();
 }
 
@@ -254,7 +254,7 @@ fn test_sunrise_accuracy_regression() {
     // These values were verified against solarpos to be exact matches
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.env("TZ", "Europe/Berlin")
-        .args(&["--format=CSV", "53.0", "13.0", "2024-06-21", "sunrise"]);
+        .args(["--format=CSV", "53.0", "13.0", "2024-06-21", "sunrise"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
@@ -267,7 +267,7 @@ fn test_sunrise_accuracy_regression() {
     // Test second problematic case that also revealed the bug
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.env("TZ", "Europe/Berlin")
-        .args(&["--format=CSV", "52.0", "13.4", "2024-06-02", "sunrise"]);
+        .args(["--format=CSV", "52.0", "13.4", "2024-06-02", "sunrise"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
