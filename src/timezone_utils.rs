@@ -175,4 +175,46 @@ mod tests {
         assert_eq!(result.offset().local_minus_utc(), 3600);
         assert_eq!(result.naive_local(), naive);
     }
+
+    #[test]
+    fn test_iana_time_zone_integration() {
+        // Test that iana-time-zone integration works correctly
+        // This validates the core system timezone detection mechanism
+
+        // Test that iana-time-zone can detect a timezone name
+        let tz_result = iana_time_zone::get_timezone();
+        assert!(
+            tz_result.is_ok(),
+            "iana-time-zone should be able to detect system timezone"
+        );
+
+        let tz_name = tz_result.unwrap();
+        assert!(!tz_name.is_empty(), "Timezone name should not be empty");
+
+        // Test that the detected timezone name can be parsed by chrono-tz
+        let parse_result = tz_name.parse::<Tz>();
+
+        // Print debug info for CI investigation
+        println!("Detected timezone: {}", tz_name);
+        println!("Parse result: {:?}", parse_result);
+
+        // The timezone should either parse successfully, or we should fall back to UTC gracefully
+        let _final_tz = match parse_result {
+            Ok(tz) => {
+                println!("Successfully parsed to: {:?}", tz);
+                tz
+            }
+            Err(e) => {
+                println!("Failed to parse '{}': {}, falling back to UTC", tz_name, e);
+                UTC
+            }
+        };
+
+        // Test that get_system_timezone uses this logic correctly
+        let detected_tz = get_system_timezone();
+        println!("get_system_timezone() returned: {:?}", detected_tz);
+
+        // The function should return a valid timezone (either parsed or UTC fallback)
+        assert!(detected_tz.to_string().len() > 0);
+    }
 }

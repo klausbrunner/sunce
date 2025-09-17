@@ -1,7 +1,7 @@
 use crate::timezone_utils::{
     naive_to_fixed_offset, naive_to_specific_timezone, naive_to_system_local,
 };
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use chrono_tz::Tz;
 use std::fmt;
 use thiserror::Error;
@@ -295,8 +295,11 @@ fn apply_timezone_override(
 ) -> Result<DateTime<FixedOffset>, ParseError> {
     // Parse timezone offset like "+01:00" or "-05:00"
     if let Ok(offset) = parse_timezone_offset(tz) {
-        let naive = dt.naive_utc();
-        return Ok(offset.from_utc_datetime(&naive));
+        // Reinterpret the local time components in the new timezone
+        // This matches solarpos behavior: timezone override doesn't convert,
+        // it reinterprets the same time components in a different timezone
+        let naive_components = dt.naive_local();
+        return naive_to_fixed_offset(naive_components, &offset);
     }
 
     // Parse named timezones like "UTC", "America/New_York", etc.
