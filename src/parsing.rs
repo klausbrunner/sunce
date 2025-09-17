@@ -1,8 +1,5 @@
-use crate::timezone_utils::{
-    naive_to_fixed_offset, naive_to_specific_timezone, naive_to_system_local,
-};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-use chrono_tz::Tz;
+use clap::ArgMatches;
 use std::fmt;
 use thiserror::Error;
 
@@ -35,6 +32,56 @@ pub enum DateTimeInput {
     PartialYear(i32),
     PartialYearMonth(i32, u32),
     PartialDate(i32, u32, u32), // year, month, day - generates series for that day
+}
+
+#[derive(Debug, Clone)]
+pub enum InputType {
+    Standard,       // lat, lon, datetime
+    CoordinateFile, // @coords.txt as lat, datetime
+    TimeFile,       // lat, lon, @times.txt
+    PairedDataFile, // @paired.txt as lat (ignores lon, datetime)
+    StdinCoords,    // @- as lat, datetime
+    StdinTimes,     // lat, lon, @-
+    StdinPaired,    // @- as lat (ignores lon, datetime)
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedInput {
+    pub input_type: InputType,
+    pub latitude: String,
+    pub longitude: Option<String>,
+    pub datetime: Option<String>,
+    pub global_options: GlobalOptions,
+    // Parsed data
+    pub parsed_latitude: Option<Coordinate>,
+    pub parsed_longitude: Option<Coordinate>,
+    pub parsed_datetime: Option<DateTimeInput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GlobalOptions {
+    #[allow(dead_code)] // Will be used when delta T calculation is implemented
+    pub deltat: Option<String>,
+    pub format: Option<String>,
+    pub headers: Option<bool>,
+    pub parallel: Option<bool>,
+    pub show_inputs: Option<bool>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct PositionOptions {
+    pub algorithm: Option<String>,
+    pub elevation: Option<String>,
+    pub pressure: Option<String>,
+    pub temperature: Option<String>,
+    pub elevation_angle: bool,
+    pub refraction: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct SunriseOptions {
+    pub twilight: bool,
 }
 
 impl fmt::Display for Coordinate {
@@ -243,7 +290,7 @@ fn parse_full_datetime(
         // Try parsing with timezone
         if let Ok(dt) = DateTime::parse_from_str(input, format) {
             let final_dt = if let Some(tz) = timezone_override {
-                apply_timezone_override(dt, tz)?
+                crate::timezone::apply_timezone_to_datetime(dt.naive_local(), Some(tz))?
             } else {
                 dt
             };
@@ -252,12 +299,7 @@ fn parse_full_datetime(
 
         // Try parsing as naive datetime and apply timezone
         if let Ok(naive_dt) = NaiveDateTime::parse_from_str(input, format) {
-            let dt = if let Some(tz) = timezone_override {
-                apply_timezone_to_naive(naive_dt, tz)?
-            } else {
-                // Default to local timezone like solarpos does
-                naive_to_system_local(naive_dt)?
-            };
+            let dt = crate::timezone::apply_timezone_to_datetime(naive_dt, timezone_override)?;
             return Ok(DateTimeInput::Single(dt));
         }
 
@@ -273,11 +315,7 @@ fn parse_full_datetime(
             } else {
                 // For other formats, create a single datetime at midnight
                 let naive_dt = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-                let dt = if let Some(tz) = timezone_override {
-                    apply_timezone_to_naive(naive_dt, tz)?
-                } else {
-                    naive_to_system_local(naive_dt)?
-                };
+                let dt = crate::timezone::apply_timezone_to_datetime(naive_dt, timezone_override)?;
                 return Ok(DateTimeInput::Single(dt));
             }
         }
@@ -287,100 +325,6 @@ fn parse_full_datetime(
         "Could not parse datetime: {}",
         input
     )))
-}
-
-fn apply_timezone_override(
-    dt: DateTime<FixedOffset>,
-    tz: &str,
-) -> Result<DateTime<FixedOffset>, ParseError> {
-    // Parse timezone offset like "+01:00" or "-05:00"
-    if let Ok(offset) = parse_timezone_offset(tz) {
-        // Reinterpret the local time components in the new timezone
-        // This matches solarpos behavior: timezone override doesn't convert,
-        // it reinterprets the same time components in a different timezone
-        let naive_components = dt.naive_local();
-        return naive_to_fixed_offset(naive_components, &offset);
-    }
-
-    // Parse named timezones like "UTC", "America/New_York", etc.
-    if let Ok(named_tz) = parse_named_timezone(tz) {
-        // Reinterpret the time components as being in the target timezone
-        // This matches solarpos behavior: timezone override doesn't convert,
-        // it reinterprets the same time components in a different timezone
-        let naive_components = dt.naive_local();
-        return naive_to_specific_timezone(naive_components, &named_tz);
-    }
-
-    Err(ParseError::InvalidTimezone(format!(
-        "Unsupported timezone format: {}. Use offset format like +01:00 or named timezone like UTC",
-        tz
-    )))
-}
-
-pub fn apply_timezone_to_naive(
-    naive_dt: NaiveDateTime,
-    tz: &str,
-) -> Result<DateTime<FixedOffset>, ParseError> {
-    if let Ok(offset) = parse_timezone_offset(tz) {
-        return naive_to_fixed_offset(naive_dt, &offset);
-    }
-
-    // Parse named timezones like "UTC", "America/New_York", etc.
-    if let Ok(named_tz) = parse_named_timezone(tz) {
-        // Use proper DST handling from timezone_utils
-        return naive_to_specific_timezone(naive_dt, &named_tz);
-    }
-
-    Err(ParseError::InvalidTimezone(format!(
-        "Unsupported timezone format: {}. Use offset format like +01:00 or named timezone like UTC",
-        tz
-    )))
-}
-
-pub fn parse_timezone_offset(tz: &str) -> Result<FixedOffset, ParseError> {
-    // Handle formats like "+01:00", "-05:00", "+0100", "-0500"
-    let normalized =
-        if tz.len() == 6 && (tz.starts_with('+') || tz.starts_with('-')) && tz.contains(':') {
-            tz.to_string() // Already in +01:00 format
-        } else if tz.len() == 5 && tz.contains(':') {
-            format!("+{}", tz) // Handle 01:00 -> +01:00
-        } else if tz.len() == 5 && (tz.starts_with('+') || tz.starts_with('-')) && !tz.contains(':')
-        {
-            format!("{}:{}", &tz[..3], &tz[3..]) // Handle +0100 -> +01:00
-        } else {
-            return Err(ParseError::InvalidTimezone(format!(
-                "Invalid timezone format: {} (len={}, starts_with_sign={}, contains_colon={})",
-                tz,
-                tz.len(),
-                tz.starts_with('+') || tz.starts_with('-'),
-                tz.contains(':')
-            )));
-        };
-
-    let test_str = format!("2000-01-01T00:00:00{}", normalized);
-    DateTime::parse_from_str(&test_str, "%Y-%m-%dT%H:%M:%S%:z")
-        .map(|dt| *dt.offset())
-        .map_err(|e| {
-            ParseError::InvalidTimezone(format!(
-                "Failed to parse '{}' with format '%Y-%m-%dT%H:%M:%S%:z': {}",
-                test_str, e
-            ))
-        })
-}
-
-pub fn parse_named_timezone(tz: &str) -> Result<Tz, ParseError> {
-    // Handle common timezone aliases first
-    let normalized_tz = match tz.to_uppercase().as_str() {
-        "UTC" | "GMT" => "UTC",
-        "CET" => "Europe/Berlin",
-        "EST" => "America/New_York",
-        "PST" => "America/Los_Angeles",
-        _ => tz, // Use original string for full timezone names like "Europe/Berlin"
-    };
-
-    normalized_tz
-        .parse::<Tz>()
-        .map_err(|_| ParseError::InvalidTimezone(format!("Unknown timezone: {}", tz)))
 }
 
 fn validate_year(year: i32) -> Result<(), ParseError> {
@@ -485,72 +429,274 @@ mod tests {
             assert_eq!(parsed_dt.offset().local_minus_utc(), 3600); // +01:00 = 3600 seconds
         }
     }
+}
 
-    #[test]
-    fn test_timezone_offset_parsing() {
-        // Test various timezone offset formats
-        let test_cases = [
-            ("+02:00", 7200),
-            ("+01:00", 3600),
-            ("-05:00", -18000),
-            ("+0000", 0),
-            ("-0100", -3600),
-        ];
+/// Parse command line input into structured ParsedInput
+pub fn parse_input(matches: &ArgMatches) -> Result<ParsedInput, String> {
+    let latitude = matches
+        .get_one::<String>("latitude")
+        .ok_or("Latitude is required")?;
+    let longitude = matches.get_one::<String>("longitude");
+    let datetime = matches.get_one::<String>("dateTime");
 
-        for (tz, expected_offset) in test_cases {
-            let result = parse_timezone_offset(tz);
-            assert!(result.is_ok(), "Failed to parse timezone: {}", tz);
-
-            if let Ok(offset) = result {
-                assert_eq!(
-                    offset.local_minus_utc(),
-                    expected_offset,
-                    "Wrong offset for timezone {}: expected {}, got {}",
-                    tz,
-                    expected_offset,
-                    offset.local_minus_utc()
-                );
+    // Determine input type and validate argument combinations
+    let input_type = match (
+        latitude.as_str(),
+        longitude.map(|s| s.as_str()),
+        datetime.map(|s| s.as_str()),
+    ) {
+        // Paired data file: @file as first argument, no other arguments
+        (lat, None, None) if lat.starts_with('@') => {
+            if lat == "@-" {
+                InputType::StdinPaired
+            } else {
+                InputType::PairedDataFile
             }
+        }
+
+        // Coordinate file: @file as first argument, datetime as second argument
+        (lat, Some(_dt), None) if lat.starts_with('@') => {
+            if lat == "@-" {
+                InputType::StdinCoords
+            } else {
+                InputType::CoordinateFile
+            }
+        }
+
+        // Standard with time file: lat, lon, @times.txt
+        (lat, Some(lon), Some(dt)) if dt.starts_with('@') => {
+            if dt == "@-" {
+                if lat.starts_with('@') || lon.starts_with('@') {
+                    return Err("Only one parameter can use stdin (@-)".to_string());
+                }
+                InputType::StdinTimes
+            } else {
+                if lat.starts_with('@') || lon.starts_with('@') {
+                    return Err(
+                        "Only datetime parameter can be a file in this combination".to_string()
+                    );
+                }
+                InputType::TimeFile
+            }
+        }
+
+        // Standard: lat, lon, datetime (no @ prefixes)
+        (lat, Some(lon), Some(dt)) => {
+            if lat.starts_with('@') || lon.starts_with('@') || dt.starts_with('@') {
+                return Err("Invalid file parameter combination".to_string());
+            }
+            InputType::Standard
+        }
+
+        // Invalid combinations
+        (_lat, Some(_), None) => {
+            return Err("When longitude is provided, datetime must also be provided".to_string());
+        }
+        _ => {
+            return Err("Invalid argument combination. Use: <lat> <lon> <datetime> OR @file <datetime> OR @paired-file OR <lat> <lon> @times".to_string());
+        }
+    };
+
+    // Validate that paired data doesn't have extra arguments
+    if matches!(
+        input_type,
+        InputType::PairedDataFile | InputType::StdinPaired
+    ) && (longitude.is_some() || datetime.is_some())
+    {
+        return Err(
+            "When using paired data files, do not specify longitude or datetime parameters"
+                .to_string(),
+        );
+    }
+
+    // Validate that coordinate files have datetime as second parameter
+    if matches!(
+        input_type,
+        InputType::CoordinateFile | InputType::StdinCoords
+    ) {
+        if longitude.is_none() {
+            return Err(
+                "When using coordinate files, datetime parameter is required as second argument"
+                    .to_string(),
+            );
+        }
+        if datetime.is_some() {
+            return Err("When using coordinate files, only two parameters should be provided: @file datetime".to_string());
         }
     }
 
-    #[test]
-    fn test_named_timezone_parsing() {
-        let result = parse_named_timezone("UTC");
-        assert!(result.is_ok(), "Failed to parse UTC timezone: {:?}", result);
-
-        let result = parse_named_timezone("America/New_York");
-        assert!(
-            result.is_ok(),
-            "Failed to parse America/New_York timezone: {:?}",
-            result
+    // Validate standard and time file inputs
+    if matches!(
+        input_type,
+        InputType::Standard | InputType::TimeFile | InputType::StdinTimes
+    ) && (longitude.is_none() || datetime.is_none())
+    {
+        return Err(
+            "Standard input requires latitude, longitude, and datetime parameters".to_string(),
         );
     }
 
-    #[test]
-    fn test_apply_timezone_override() {
-        use chrono::*;
+    let global_options = GlobalOptions {
+        deltat: if matches.contains_id("deltat") {
+            matches
+                .get_one::<String>("deltat")
+                .cloned()
+                .or_else(|| Some("ESTIMATE".to_string()))
+        } else {
+            None
+        },
+        format: matches.get_one::<String>("format").cloned(),
+        headers: if matches.get_flag("headers") {
+            Some(true)
+        } else if matches.get_flag("no-headers") {
+            Some(false)
+        } else {
+            Some(true) // Default: headers on for CSV
+        },
+        parallel: if matches.get_flag("parallel") {
+            Some(true)
+        } else if matches.get_flag("no-parallel") {
+            Some(false)
+        } else {
+            None
+        },
+        show_inputs: if matches.get_flag("show-inputs") {
+            Some(true)
+        } else if matches.get_flag("no-show-inputs") {
+            Some(false)
+        } else {
+            None
+        },
+        timezone: matches.get_one::<String>("timezone").cloned(),
+    };
 
-        // Create a test datetime
-        let dt =
-            DateTime::parse_from_str("2024-01-01T12:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z").unwrap();
+    // For coordinate files, the datetime is in the longitude position
+    let (parsed_longitude, parsed_datetime) = match input_type {
+        InputType::CoordinateFile | InputType::StdinCoords => (None, longitude.cloned()),
+        _ => (longitude.cloned(), datetime.cloned()),
+    };
 
-        // Test with UTC
-        let result = apply_timezone_override(dt, "UTC");
-        println!("UTC result: {:?}", result);
-        assert!(
-            result.is_ok(),
-            "Failed to apply UTC timezone override: {:?}",
-            result
+    Ok(ParsedInput {
+        input_type,
+        latitude: latitude.clone(),
+        longitude: parsed_longitude,
+        datetime: parsed_datetime,
+        global_options,
+        // Will be filled in by parse_data_values
+        parsed_latitude: None,
+        parsed_longitude: None,
+        parsed_datetime: None,
+    })
+}
+
+/// Parse position-specific command options
+pub fn parse_position_options(matches: &ArgMatches) -> PositionOptions {
+    PositionOptions {
+        algorithm: matches.get_one::<String>("algorithm").cloned(),
+        elevation: matches.get_one::<String>("elevation").cloned(),
+        pressure: matches.get_one::<String>("pressure").cloned(),
+        temperature: matches.get_one::<String>("temperature").cloned(),
+        elevation_angle: matches.get_flag("elevation-angle"),
+        refraction: if matches.get_flag("refraction") {
+            Some(true)
+        } else if matches.get_flag("no-refraction") {
+            Some(false)
+        } else {
+            None
+        },
+    }
+}
+
+/// Parse sunrise-specific command options
+pub fn parse_sunrise_options(matches: &ArgMatches) -> SunriseOptions {
+    SunriseOptions {
+        twilight: matches.get_flag("twilight"),
+    }
+}
+
+/// Parse and validate coordinate and datetime data from command line arguments
+pub fn parse_data_values(input: &mut ParsedInput) -> Result<(), ParseError> {
+    match input.input_type {
+        InputType::Standard | InputType::TimeFile | InputType::StdinTimes => {
+            // Parse latitude and longitude
+            let lat = parse_coordinate(&input.latitude, "latitude")?;
+            let lon = parse_coordinate(
+                input.longitude.as_ref().ok_or_else(|| {
+                    ParseError::InvalidCoordinate("Missing longitude".to_string())
+                })?,
+                "longitude",
+            )?;
+            input.parsed_latitude = Some(lat);
+            input.parsed_longitude = Some(lon);
+
+            // Parse datetime
+            if let Some(dt_str) = &input.datetime {
+                // For time files, dt_str will be the @file reference - skip for now
+                if !dt_str.starts_with('@') {
+                    let dt = parse_datetime(dt_str, input.global_options.timezone.as_deref())?;
+                    input.parsed_datetime = Some(dt);
+                }
+            }
+        }
+        InputType::CoordinateFile | InputType::StdinCoords => {
+            // For coordinate files, we skip parsing the @file reference for now
+            // But we should parse the datetime
+            if let Some(dt_str) = &input.datetime {
+                let dt = parse_datetime(dt_str, input.global_options.timezone.as_deref())?;
+                input.parsed_datetime = Some(dt);
+            }
+        }
+        InputType::PairedDataFile | InputType::StdinPaired => {
+            // For paired data files, we skip parsing the @file reference for now
+            // All data comes from the file
+        }
+    }
+
+    // Auto-enable show-inputs based on parsed data
+    apply_show_inputs_auto_logic(input);
+
+    Ok(())
+}
+
+/// Apply automatic show-inputs logic based on input type and parsed data
+pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
+    // If user explicitly set --no-show-inputs, respect that
+    if let Some(false) = input.global_options.show_inputs {
+        return;
+    }
+
+    // If user explicitly set --show-inputs, keep it
+    if let Some(true) = input.global_options.show_inputs {
+        return;
+    }
+
+    // Auto-enable show-inputs for multiple value scenarios
+    let file_input_check = matches!(
+        input.input_type,
+        InputType::CoordinateFile
+            | InputType::StdinCoords
+            | InputType::TimeFile
+            | InputType::StdinTimes
+            | InputType::PairedDataFile
+            | InputType::StdinPaired
+    );
+
+    let coord_range_check = (input.parsed_latitude.is_some()
+        && matches!(input.parsed_latitude, Some(Coordinate::Range { .. })))
+        || (input.parsed_longitude.is_some()
+            && matches!(input.parsed_longitude, Some(Coordinate::Range { .. })));
+
+    let time_series_check = input.parsed_datetime.is_some()
+        && matches!(
+            input.parsed_datetime,
+            Some(DateTimeInput::PartialYear(_))
+                | Some(DateTimeInput::PartialYearMonth(_, _))
+                | Some(DateTimeInput::PartialDate(_, _, _))
         );
 
-        // Test with offset
-        let result = apply_timezone_override(dt, "+02:00");
-        println!("+02:00 result: {:?}", result);
-        assert!(
-            result.is_ok(),
-            "Failed to apply +02:00 timezone override: {:?}",
-            result
-        );
+    let should_auto_enable = file_input_check || coord_range_check || time_series_check;
+
+    if should_auto_enable {
+        input.global_options.show_inputs = Some(true);
     }
 }

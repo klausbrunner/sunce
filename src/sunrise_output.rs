@@ -18,27 +18,6 @@ pub struct TwilightResults {
     pub astronomical: SunriseResult<DateTime<FixedOffset>>,
 }
 
-impl SunriseResultData {
-    #[allow(dead_code)]
-    pub fn new(
-        datetime: DateTime<FixedOffset>,
-        latitude: f64,
-        longitude: f64,
-        delta_t: f64,
-        sunrise_result: SunriseResult<DateTime<FixedOffset>>,
-        twilight_results: Option<TwilightResults>,
-    ) -> Self {
-        Self {
-            datetime,
-            latitude,
-            longitude,
-            delta_t,
-            sunrise_result,
-            twilight_results,
-        }
-    }
-}
-
 pub fn output_sunrise_results<I>(
     results: I,
     format: &OutputFormat,
@@ -446,7 +425,14 @@ mod tests {
             sunset,
         };
 
-        SunriseResultData::new(datetime, 52.0, 13.0, 69.2, sunrise_result, None)
+        SunriseResultData {
+            datetime,
+            latitude: 52.0,
+            longitude: 13.0,
+            delta_t: 69.2,
+            sunrise_result,
+            twilight_results: None,
+        }
     }
 
     #[test]

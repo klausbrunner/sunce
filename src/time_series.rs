@@ -1,7 +1,5 @@
 use crate::parsing::{DateTimeInput, ParseError};
-use crate::timezone_utils::{
-    get_system_timezone, naive_to_fixed_offset, naive_to_specific_timezone,
-};
+use crate::timezone::apply_timezone_to_datetime;
 use chrono::TimeZone;
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
@@ -88,13 +86,17 @@ fn to_local_datetime(
     naive: NaiveDateTime,
     timezone_override: Option<FixedOffset>,
 ) -> Result<DateTime<FixedOffset>, ParseError> {
-    if let Some(tz) = timezone_override {
-        // Use the specified timezone override
-        naive_to_fixed_offset(naive, &tz)
-    } else {
-        // Use system timezone with proper DST handling
-        let system_tz = get_system_timezone();
-        naive_to_specific_timezone(naive, &system_tz)
+    match timezone_override {
+        Some(tz) => {
+            // Use the specified timezone override
+            tz.from_local_datetime(&naive)
+                .single()
+                .ok_or_else(|| ParseError::InvalidDateTime(format!("Invalid datetime: {}", naive)))
+        }
+        None => {
+            // Use system timezone with proper DST handling
+            apply_timezone_to_datetime(naive, None)
+        }
     }
 }
 
@@ -136,20 +138,14 @@ impl Iterator for DstAwareTimeSeriesIterator {
             // Use raw timezone conversion to detect DST gaps properly
             let conversion_result = if let Some(tz) = self.timezone_override {
                 // For timezone override, use direct offset (no DST gaps possible)
-                naive_to_fixed_offset(self.current_naive, &tz).ok()
+                tz.from_local_datetime(&self.current_naive).single()
             } else {
                 // For system timezone, use raw conversion to detect DST gaps
-                let system_tz = get_system_timezone();
-                match system_tz.from_local_datetime(&self.current_naive) {
+                use crate::timezone::get_system_timezone;
+                match get_system_timezone().from_local_datetime(&self.current_naive) {
                     chrono::LocalResult::Single(dt) => Some(dt.fixed_offset()),
-                    chrono::LocalResult::Ambiguous(dt1, _dt2) => {
-                        // During fall-back (DST ends), choose first occurrence
-                        Some(dt1.fixed_offset())
-                    }
-                    chrono::LocalResult::None => {
-                        // This time doesn't exist (DST gap) - return None to skip
-                        None
-                    }
+                    chrono::LocalResult::Ambiguous(dt1, _) => Some(dt1.fixed_offset()),
+                    chrono::LocalResult::None => None, // DST gap - will be skipped
                 }
             };
 

@@ -35,34 +35,6 @@ pub struct PositionResult {
     pub delta_t: f64,
 }
 
-impl PositionResult {
-    pub fn new(
-        datetime: DateTime<FixedOffset>,
-        position: SolarPosition,
-        latitude: f64,
-        longitude: f64,
-        environmental: EnvironmentalParams,
-        delta_t: f64,
-    ) -> Self {
-        Self {
-            datetime,
-            position,
-            latitude,
-            longitude,
-            elevation: environmental.elevation,
-            pressure: environmental.pressure,
-            temperature: environmental.temperature,
-            delta_t,
-        }
-    }
-}
-
-pub struct EnvironmentalParams {
-    pub elevation: f64,
-    pub pressure: f64,
-    pub temperature: f64,
-}
-
 pub fn output_position_results<I>(
     results: I,
     format: &OutputFormat,
@@ -79,16 +51,43 @@ pub fn output_position_results<I>(
     }
 }
 
-fn output_human_format<I>(results: I, _show_inputs: bool, elevation_angle: bool)
+fn output_human_format<I>(results: I, show_inputs: bool, elevation_angle: bool)
 where
     I: Iterator<Item = PositionResult>,
 {
     for result in results {
-        if elevation_angle {
+        if show_inputs {
+            println!("latitude   :                     {:.5}°", result.latitude);
+            println!("longitude  :                     {:.5}°", result.longitude);
             println!(
-                "date/time      : {}",
+                "elevation  :                        {:.3} m",
+                result.elevation
+            );
+            println!(
+                "pressure   :                     {:.3} hPa",
+                result.pressure
+            );
+            println!(
+                "temperature:                       {:.3} °C",
+                result.temperature
+            );
+            println!(
+                "date/time  : {}",
                 result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
             );
+            println!(
+                "delta T    :                        {:.3} s",
+                result.delta_t
+            );
+        }
+
+        if elevation_angle {
+            if !show_inputs {
+                println!(
+                    "date/time      : {}",
+                    result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
+                );
+            }
             println!(
                 "azimuth        :                    {:.5}°",
                 result.position.azimuth()
@@ -98,10 +97,12 @@ where
                 result.position.elevation_angle()
             );
         } else {
-            println!(
-                "date/time: {}",
-                result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            );
+            if !show_inputs {
+                println!(
+                    "date/time: {}",
+                    result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
+                );
+            }
             println!(
                 "azimuth  :                    {:.5}°",
                 result.position.azimuth()
@@ -223,13 +224,17 @@ mod tests {
             .unwrap();
 
         let position = SolarPosition::new(180.0, 30.0).unwrap(); // azimuth, zenith
-        let env = EnvironmentalParams {
+
+        PositionResult {
+            datetime,
+            position,
+            latitude: 52.0,
+            longitude: 13.0,
             elevation: 100.0,
             pressure: 1013.25,
             temperature: 20.0,
-        };
-
-        PositionResult::new(datetime, position, 52.0, 13.0, env, 69.2)
+            delta_t: 69.2,
+        }
     }
 
     #[test]
@@ -274,17 +279,5 @@ mod tests {
         assert_eq!(result.pressure, 1013.25);
         assert_eq!(result.temperature, 20.0);
         assert_eq!(result.delta_t, 69.2);
-    }
-
-    #[test]
-    fn test_environmental_params() {
-        let env = EnvironmentalParams {
-            elevation: 500.0,
-            pressure: 950.0,
-            temperature: 15.0,
-        };
-        assert_eq!(env.elevation, 500.0);
-        assert_eq!(env.pressure, 950.0);
-        assert_eq!(env.temperature, 15.0);
     }
 }
