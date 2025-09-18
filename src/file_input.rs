@@ -20,29 +20,52 @@ pub fn parse_coordinate_file_line(line: &str) -> Result<(f64, f64), ParseError> 
         ));
     }
 
-    // Support both space and comma separation
-    let parts: Vec<&str> = if line.contains(',') {
-        line.split(',').collect()
+    // Parse directly without collecting to Vec
+    let (lat_str, lon_str) = if line.contains(',') {
+        // CSV format: lat,lon
+        let mut parts = line.split(',');
+        let lat_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidCoordinate(format!("Missing latitude in: {}", line))
+        })?;
+        let lon_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidCoordinate(format!("Missing longitude in: {}", line))
+        })?;
+
+        if parts.next().is_some() {
+            return Err(ParseError::InvalidCoordinate(format!(
+                "Too many fields in CSV coordinate: {}",
+                line
+            )));
+        }
+        (lat_str, lon_str)
     } else {
-        line.split_whitespace().collect()
+        // Space-separated format: lat lon
+        let mut parts = line.split_whitespace();
+        let lat_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidCoordinate(format!("Missing latitude in: {}", line))
+        })?;
+        let lon_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidCoordinate(format!("Missing longitude in: {}", line))
+        })?;
+
+        if parts.next().is_some() {
+            return Err(ParseError::InvalidCoordinate(format!(
+                "Too many fields in coordinate pair: {}",
+                line
+            )));
+        }
+        (lat_str, lon_str)
     };
 
-    if parts.len() != 2 {
-        return Err(ParseError::InvalidCoordinate(format!(
-            "Expected latitude,longitude pair, got: {}",
-            line
-        )));
-    }
-
-    let lat: f64 = parts[0]
+    let lat: f64 = lat_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", parts[0])))?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", lat_str)))?;
 
-    let lon: f64 = parts[1]
+    let lon: f64 = lon_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", parts[1])))?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
 
     Ok((lat, lon))
 }
@@ -72,31 +95,60 @@ pub fn parse_paired_file_line(
         ));
     }
 
-    // Support both space and comma separation
-    let parts: Vec<&str> = if line.contains(',') {
-        line.split(',').collect()
+    // Parse directly without collecting to Vec - optimize for common case
+    let (lat_str, lon_str, datetime_str) = if line.contains(',') {
+        // CSV format: lat,lon,datetime
+        let mut parts = line.split(',');
+        let lat_str = parts
+            .next()
+            .ok_or_else(|| ParseError::InvalidDateTime(format!("Missing latitude in: {}", line)))?;
+        let lon_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidDateTime(format!("Missing longitude in: {}", line))
+        })?;
+        let datetime_str = parts
+            .next()
+            .ok_or_else(|| ParseError::InvalidDateTime(format!("Missing datetime in: {}", line)))?;
+
+        if parts.next().is_some() {
+            return Err(ParseError::InvalidDateTime(format!(
+                "Too many fields in CSV record: {}",
+                line
+            )));
+        }
+        (lat_str, lon_str, datetime_str)
     } else {
-        line.split_whitespace().collect()
+        // Space-separated format: lat lon datetime
+        let mut parts = line.split_whitespace();
+        let lat_str = parts
+            .next()
+            .ok_or_else(|| ParseError::InvalidDateTime(format!("Missing latitude in: {}", line)))?;
+        let lon_str = parts.next().ok_or_else(|| {
+            ParseError::InvalidDateTime(format!("Missing longitude in: {}", line))
+        })?;
+        let datetime_str = parts
+            .next()
+            .ok_or_else(|| ParseError::InvalidDateTime(format!("Missing datetime in: {}", line)))?;
+
+        if parts.next().is_some() {
+            return Err(ParseError::InvalidDateTime(format!(
+                "Too many fields in space-separated record: {}",
+                line
+            )));
+        }
+        (lat_str, lon_str, datetime_str)
     };
 
-    if parts.len() != 3 {
-        return Err(ParseError::InvalidDateTime(format!(
-            "Expected latitude,longitude,datetime record, got: {}",
-            line
-        )));
-    }
-
-    let lat: f64 = parts[0]
+    let lat: f64 = lat_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", parts[0])))?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", lat_str)))?;
 
-    let lon: f64 = parts[1]
+    let lon: f64 = lon_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", parts[1])))?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
 
-    let datetime = parse_datetime(parts[2].trim(), timezone_override)?;
+    let datetime = parse_datetime(datetime_str.trim(), timezone_override)?;
 
     Ok((lat, lon, datetime))
 }

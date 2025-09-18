@@ -10,7 +10,7 @@ pub fn build_cli() -> Command {
             "  sunce 52:53:0.1 13:14:0.1 2024 position --format=csv\n",
             "  sunce @coords.txt @times.txt position\n",
             "  sunce @data.txt position  # paired lat,lng,datetime data\n",
-            "  echo '52.0 13.4 2024-01-01T12:00:00' | sunce @- now position"
+            "  echo -e '52.0 13.4\\n52.1 13.5' | sunce @- now position"
         )))
         .arg(Arg::new("latitude")
             .help(concat!(
@@ -68,15 +68,15 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("parallel")
             .long("parallel")
             .action(ArgAction::SetTrue)
-            .help("Enable parallel processing for better performance on multi-core systems. May cause memory pressure with large datasets. Default: false."))
+            .help("Not implemented. Kept for compatibility with solarpos."))
         .arg(Arg::new("no-parallel")
             .long("no-parallel")
             .action(ArgAction::SetTrue)
-            .help("Disable parallel processing"))
+            .help("Not implemented. Kept for compatibility with solarpos."))
         .arg(Arg::new("show-inputs")
             .long("show-inputs")
             .action(ArgAction::SetTrue)
-            .help("Show all inputs in output. Automatically enabled for coordinate ranges unless --no-show-inputs is used."))
+            .help("Show all inputs in output. Automatically enabled for coordinate ranges, time series, files unless --no-show-inputs is used."))
         .arg(Arg::new("no-show-inputs")
             .long("no-show-inputs")
             .action(ArgAction::SetTrue)

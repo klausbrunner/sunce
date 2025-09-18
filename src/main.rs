@@ -63,7 +63,7 @@ fn main() {
                             let elevation_angle =
                                 parse_position_options(cmd_matches).elevation_angle;
 
-                            let parallel = input.global_options.parallel.unwrap_or(false);
+                            // Note: --parallel flag is accepted for compatibility but ignored
                             match calculate_and_output_positions(
                                 &input,
                                 &matches,
@@ -71,7 +71,6 @@ fn main() {
                                 show_inputs,
                                 show_headers,
                                 elevation_angle,
-                                parallel,
                             ) {
                                 Ok(_) => {}
                                 Err(e) => {
@@ -85,7 +84,7 @@ fn main() {
                             let show_headers = input.global_options.headers.unwrap_or(true);
                             let show_twilight = parse_sunrise_options(cmd_matches).twilight;
 
-                            let parallel = input.global_options.parallel.unwrap_or(false);
+                            // Note: --parallel flag is accepted for compatibility but ignored
                             match calculate_and_output_sunrise(
                                 &input,
                                 &matches,
@@ -93,7 +92,6 @@ fn main() {
                                 show_inputs,
                                 show_headers,
                                 show_twilight,
-                                parallel,
                             ) {
                                 Ok(_) => {}
                                 Err(e) => {
@@ -129,16 +127,15 @@ fn calculate_and_output_positions(
     show_inputs: bool,
     show_headers: bool,
     elevation_angle: bool,
-    parallel: bool,
 ) -> Result<(), String> {
     // Create position calculation engine
     let params = get_calculation_parameters(input, matches)?;
     let engine = PositionCalculationEngine { params };
 
-    // Create a streaming iterator using the unified engine
-    let position_iter = create_calculation_iterator(input, matches, &engine, parallel)?;
+    // Create a streaming iterator using the unified engine (sequential processing)
+    let position_iter = create_calculation_iterator(input, matches, &engine)?;
 
-    // Always stream to output - parallel processing handled transparently
+    // Stream to output
     output_position_results(
         position_iter,
         format,
@@ -157,16 +154,15 @@ fn calculate_and_output_sunrise(
     show_inputs: bool,
     show_headers: bool,
     show_twilight: bool,
-    parallel: bool,
 ) -> Result<(), String> {
     // Create sunrise calculation engine
     let params = get_sunrise_calculation_parameters(input, matches, show_twilight)?;
     let engine = SunriseCalculationEngine { params };
 
-    // Create a streaming iterator using the unified engine
-    let sunrise_iter = create_calculation_iterator(input, matches, &engine, parallel)?;
+    // Create a streaming iterator using the unified engine (sequential processing)
+    let sunrise_iter = create_calculation_iterator(input, matches, &engine)?;
 
-    // Always stream to output - parallel processing handled transparently
+    // Stream to output
     output_sunrise_results(
         sunrise_iter,
         format,
@@ -182,11 +178,7 @@ fn create_calculation_iterator<'a, T>(
     input: &'a ParsedInput,
     matches: &'a ArgMatches,
     engine: &'a dyn CalculationEngine<T>,
-    parallel: bool,
-) -> Result<Box<dyn Iterator<Item = T> + 'a>, String>
-where
-    T: Send,
-{
+) -> Result<Box<dyn Iterator<Item = T> + 'a>, String> {
     // Extract step parameter from subcommand matches (only for position command)
     let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
     let step = if cmd_name == "position" {
@@ -211,7 +203,7 @@ where
             create_time_file_calculation_iterator(input, engine)?,
         )),
         InputType::Standard => Ok(Box::new(create_standard_calculation_iterator(
-            input, engine, parallel, step,
+            input, engine, step,
         )?)),
     }
 }
@@ -355,12 +347,8 @@ fn create_time_file_calculation_iterator<'a, T>(
 fn create_standard_calculation_iterator<'a, T>(
     input: &'a ParsedInput,
     engine: &'a dyn CalculationEngine<T>,
-    parallel: bool,
     step: TimeStep,
-) -> Result<impl Iterator<Item = T> + 'a, String>
-where
-    T: Send,
-{
+) -> Result<impl Iterator<Item = T> + 'a, String> {
     if let (Some(lat), Some(lon), Some(dt)) = (
         &input.parsed_latitude,
         &input.parsed_longitude,
@@ -420,13 +408,12 @@ where
             (step, Box::new(expanded))
         };
 
-        // Create optimized calculation iterator
+        // Create optimized calculation iterator (sequential processing)
         Ok(create_optimized_calculation_iterator(
             lat,
             lon,
             datetime_iter,
             engine,
-            parallel,
         ))
     } else {
         Err("Missing required coordinate or datetime data".to_string())
@@ -439,11 +426,7 @@ fn create_optimized_calculation_iterator<'a, T>(
     lon: &'a Coordinate,
     datetime_iter: Box<dyn Iterator<Item = chrono::DateTime<chrono::FixedOffset>>>,
     engine: &'a dyn CalculationEngine<T>,
-    _parallel: bool, // TODO: Implement streaming parallel processing later
-) -> Box<dyn Iterator<Item = T> + 'a>
-where
-    T: Send,
-{
+) -> Box<dyn Iterator<Item = T> + 'a> {
     // Determine optimal pattern based on coordinate types
     match (lat, lon) {
         // Single coordinates: pure streaming over time (optimal for time series)

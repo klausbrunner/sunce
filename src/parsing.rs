@@ -64,6 +64,7 @@ pub struct GlobalOptions {
     pub deltat: Option<String>,
     pub format: Option<String>,
     pub headers: Option<bool>,
+    #[allow(dead_code)] // Kept for CLI compatibility but not implemented
     pub parallel: Option<bool>,
     pub show_inputs: Option<bool>,
     pub timezone: Option<String>,
@@ -276,7 +277,36 @@ fn parse_full_datetime(
     input: &str,
     timezone_override: Option<&str>,
 ) -> Result<DateTimeInput, ParseError> {
-    // Try various datetime formats that solarpos accepts
+    // Fast path: detect common format by length and content to avoid trial-and-error
+    let len = input.len();
+    if len == 19 && input.chars().nth(4) == Some('-') && input.chars().nth(10) == Some('T') {
+        // Likely YYYY-MM-DDTHH:MM:SS format - try it first
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(input, "%Y-%m-%dT%H:%M:%S") {
+            let dt = crate::timezone::apply_timezone_to_datetime(naive_dt, timezone_override)?;
+            return Ok(DateTimeInput::Single(dt));
+        }
+    } else if len == 20 && input.ends_with('Z') {
+        // Likely YYYY-MM-DDTHH:MM:SSZ format
+        if let Ok(dt) = DateTime::parse_from_str(input, "%Y-%m-%dT%H:%M:%SZ") {
+            let final_dt = if let Some(tz) = timezone_override {
+                crate::timezone::apply_timezone_to_datetime(dt.naive_local(), Some(tz))?
+            } else {
+                dt
+            };
+            return Ok(DateTimeInput::Single(final_dt));
+        }
+    } else if len == 10 && input.chars().nth(4) == Some('-') {
+        // Likely YYYY-MM-DD format
+        if let Ok(date) = NaiveDate::parse_from_str(input, "%Y-%m-%d") {
+            return Ok(DateTimeInput::PartialDate(
+                date.year(),
+                date.month(),
+                date.day(),
+            ));
+        }
+    }
+
+    // Fallback: try all formats (for edge cases and other formats)
     let datetime_formats = [
         "%Y-%m-%d",
         "%Y-%m-%dT%H:%M:%S",
