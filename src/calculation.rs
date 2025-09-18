@@ -100,9 +100,11 @@ pub fn get_calculation_parameters(
             .deltat
             .as_deref()
             .and_then(|s| {
-                if s == "ESTIMATE" {
+                if s.is_empty() {
+                    // --deltat flag without value = use estimate
                     Some(69.0)
                 } else {
+                    // --deltat=value = parse specific value
                     s.parse::<f64>().ok()
                 }
             })
@@ -137,9 +139,11 @@ pub fn get_sunrise_calculation_parameters(
             .deltat
             .as_deref()
             .and_then(|s| {
-                if s == "ESTIMATE" {
+                if s.is_empty() {
+                    // --deltat flag without value = use estimate
                     Some(69.0)
                 } else {
+                    // --deltat=value = parse specific value
                     s.parse::<f64>().ok()
                 }
             })

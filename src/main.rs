@@ -1,7 +1,13 @@
 use chrono::TimeZone;
 use clap::ArgMatches;
 
+mod coordinate_parser;
+mod datetime_parser;
+mod input_parser;
 mod parsing;
+mod sunrise_formatters;
+mod types;
+
 use parsing::{
     Coordinate, DateTimeInput, InputType, ParsedInput, parse_coordinate, parse_data_values,
     parse_datetime, parse_input, parse_position_options, parse_sunrise_options,
@@ -11,7 +17,7 @@ mod output;
 use output::{OutputFormat, output_position_results};
 
 mod sunrise_output;
-use sunrise_output::output_sunrise_results;
+use sunrise_output::{OutputFormat as SunriseOutputFormat, output_sunrise_results};
 
 mod calculation;
 use calculation::{
@@ -162,10 +168,17 @@ fn calculate_and_output_sunrise(
     // Create a streaming iterator using the unified engine (sequential processing)
     let sunrise_iter = create_calculation_iterator(input, matches, &engine)?;
 
+    // Convert format
+    let sunrise_format = match format {
+        OutputFormat::Human => SunriseOutputFormat::Human,
+        OutputFormat::Csv => SunriseOutputFormat::Csv,
+        OutputFormat::Json => SunriseOutputFormat::Json,
+    };
+
     // Stream to output
     output_sunrise_results(
         sunrise_iter,
-        format,
+        &sunrise_format,
         show_inputs,
         show_headers,
         show_twilight,
@@ -320,26 +333,22 @@ fn create_time_file_calculation_iterator<'a, T>(
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
 
-    // Create coordinate combinations - small collections for coordinate ranges are acceptable
-    let lat_iter = create_coordinate_iterator(&lat);
-    let coords: Vec<_> = lat_iter
-        .flat_map(|lat_val| {
-            let lon_iter = create_coordinate_iterator(&lon);
-            lon_iter.map(move |lon_val| (lat_val, lon_val))
-        })
-        .collect(); // Small collection for coordinate combinations - acceptable for coordinate ranges
-
-    // Stream each time through calculation immediately
+    // Stream each time through calculation immediately using Cartesian product
     Ok(time_iter.flat_map(move |time_result| {
         let datetime_input = time_result.expect("Error reading time");
         let datetime = match datetime_input {
             DateTimeInput::Single(dt) => dt,
             _ => panic!("Expected specific datetime from time file"),
         };
-        let coords = coords.clone(); // Clone the coordinate vector for each time
-        coords
-            .into_iter()
-            .map(move |(lat_val, lon_val)| engine.calculate_single(datetime, lat_val, lon_val))
+
+        // Create streaming coordinate combinations for each time
+        let lat_clone = lat.clone();
+        let lon_clone = lon.clone();
+        let lat_iter = create_coordinate_iterator(&lat_clone);
+        lat_iter.flat_map(move |lat_val| {
+            let lon_iter = create_coordinate_iterator(&lon_clone);
+            lon_iter.map(move |lon_val| engine.calculate_single(datetime, lat_val, lon_val))
+        })
     }))
 }
 
@@ -436,28 +445,16 @@ fn create_optimized_calculation_iterator<'a, T>(
             Box::new(datetime_iter.map(move |dt| engine.calculate_single(dt, lat_val, lon_val)))
         }
 
-        // For coordinate ranges: collect small coordinate sets and iterate
-        // This is acceptable because coordinate ranges are typically small (e.g., 52:53:0.1)
+        // For coordinate ranges: use true streaming Cartesian product
         _ => {
-            let lats: Vec<f64> = create_coordinate_iterator(lat).collect();
-            let lons: Vec<f64> = create_coordinate_iterator(lon).collect();
-            let datetimes: Vec<_> = datetime_iter.collect();
-
-            // Create combinations and return as owned iterator
-            let mut combinations = Vec::new();
-            for dt in datetimes {
-                for &lat in &lats {
-                    for &lon in &lons {
-                        combinations.push((dt, lat, lon));
-                    }
-                }
-            }
-
-            Box::new(
-                combinations
-                    .into_iter()
-                    .map(move |(dt, lat, lon)| engine.calculate_single(dt, lat, lon)),
-            )
+            // Use nested flat_map for true streaming Cartesian product
+            Box::new(datetime_iter.flat_map(move |dt| {
+                let lat_iter = create_coordinate_iterator(lat);
+                lat_iter.flat_map(move |lat_val| {
+                    let lon_iter = create_coordinate_iterator(lon);
+                    lon_iter.map(move |lon_val| engine.calculate_single(dt, lat_val, lon_val))
+                })
+            }))
         }
     }
 }

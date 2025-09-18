@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -60,6 +62,11 @@ impl SunceTest {
     /// Get the raw command for complex assertions (when helpers aren't enough)
     pub fn command(self) -> Command {
         self.cmd
+    }
+
+    /// Get command output for inspection
+    pub fn get_output(mut self) -> std::process::Output {
+        self.cmd.output().unwrap()
     }
 }
 

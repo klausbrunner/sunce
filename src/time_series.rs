@@ -1,7 +1,6 @@
 use crate::parsing::{DateTimeInput, ParseError};
 use crate::timezone::apply_timezone_to_datetime;
-use chrono::TimeZone;
-use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeZone};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeStep {
@@ -9,7 +8,6 @@ pub struct TimeStep {
 }
 
 impl TimeStep {
-    #[allow(dead_code)]
     pub fn parse(input: &str) -> Result<Self, ParseError> {
         if input.is_empty() {
             return Err(ParseError::InvalidDateTime(
@@ -17,34 +15,27 @@ impl TimeStep {
             ));
         }
 
-        // Check if input is just a number (solarpos compatibility - assumes seconds)
         if let Ok(seconds) = input.parse::<i64>() {
             if seconds <= 0 {
                 return Err(ParseError::InvalidDateTime(
                     "Step interval must be positive".to_string(),
                 ));
             }
-            return match Duration::try_seconds(seconds) {
-                Some(d) => Ok(TimeStep { duration: d }),
-                None => Err(ParseError::InvalidDateTime(format!(
-                    "Duration overflow for step: {}",
-                    input
-                ))),
-            };
+            return Duration::try_seconds(seconds)
+                .map(|d| TimeStep { duration: d })
+                .ok_or_else(|| {
+                    ParseError::InvalidDateTime(format!("Duration overflow: {}", input))
+                });
         }
 
-        let (num_str, unit) = if let Some(pos) = input.find(|c: char| c.is_alphabetic()) {
-            (&input[..pos], &input[pos..])
-        } else {
-            return Err(ParseError::InvalidDateTime(format!(
-                "Invalid step format: {}. Expected format like '30s', '15m', '2h' or raw seconds",
-                input
-            )));
-        };
+        let (num_str, unit) =
+            input.split_at(input.find(|c: char| c.is_alphabetic()).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid step format: {}", input))
+            })?);
 
-        let num: i64 = num_str.parse().map_err(|_| {
-            ParseError::InvalidDateTime(format!("Invalid number in step: {}", num_str))
-        })?;
+        let num: i64 = num_str
+            .parse()
+            .map_err(|_| ParseError::InvalidDateTime(format!("Invalid number: {}", num_str)))?;
 
         if num <= 0 {
             return Err(ParseError::InvalidDateTime(
@@ -59,19 +50,15 @@ impl TimeStep {
             "d" | "day" | "days" => Duration::try_days(num),
             _ => {
                 return Err(ParseError::InvalidDateTime(format!(
-                    "Unknown time unit: {}. Use s, m, h, or d",
+                    "Unknown time unit: {}",
                     unit
                 )));
             }
         };
 
-        match duration {
-            Some(d) => Ok(TimeStep { duration: d }),
-            None => Err(ParseError::InvalidDateTime(format!(
-                "Duration overflow for step: {}",
-                input
-            ))),
-        }
+        duration
+            .map(|d| TimeStep { duration: d })
+            .ok_or_else(|| ParseError::InvalidDateTime(format!("Duration overflow: {}", input)))
     }
 
     pub fn default() -> Self {
@@ -81,35 +68,15 @@ impl TimeStep {
     }
 }
 
-#[allow(dead_code)]
-fn to_local_datetime(
-    naive: NaiveDateTime,
-    timezone_override: Option<FixedOffset>,
-) -> Result<DateTime<FixedOffset>, ParseError> {
-    match timezone_override {
-        Some(tz) => {
-            // Use the specified timezone override
-            tz.from_local_datetime(&naive)
-                .single()
-                .ok_or_else(|| ParseError::InvalidDateTime(format!("Invalid datetime: {}", naive)))
-        }
-        None => {
-            // Use system timezone with proper DST handling
-            apply_timezone_to_datetime(naive, None)
-        }
-    }
-}
-
-pub struct DstAwareTimeSeriesIterator {
+struct TimeSeriesIterator {
     current_naive: NaiveDateTime,
     end_naive: NaiveDateTime,
     step: Duration,
-    finished: bool,
     timezone_override: Option<FixedOffset>,
 }
 
-impl DstAwareTimeSeriesIterator {
-    pub fn new(
+impl TimeSeriesIterator {
+    fn new(
         start_naive: NaiveDateTime,
         end_naive: NaiveDateTime,
         step: Duration,
@@ -119,59 +86,27 @@ impl DstAwareTimeSeriesIterator {
             current_naive: start_naive,
             end_naive,
             step,
-            finished: false,
             timezone_override,
         }
     }
 }
 
-impl Iterator for DstAwareTimeSeriesIterator {
+impl Iterator for TimeSeriesIterator {
     type Item = DateTime<FixedOffset>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished || self.current_naive > self.end_naive {
+        if self.current_naive > self.end_naive {
             return None;
         }
 
-        loop {
-            // Try to convert current naive time to local datetime
-            // Use raw timezone conversion to detect DST gaps properly
-            let conversion_result = if let Some(tz) = self.timezone_override {
-                // For timezone override, use direct offset (no DST gaps possible)
-                tz.from_local_datetime(&self.current_naive).single()
-            } else {
-                // For system timezone, use raw conversion to detect DST gaps
-                use crate::timezone::get_system_timezone;
-                match get_system_timezone().from_local_datetime(&self.current_naive) {
-                    chrono::LocalResult::Single(dt) => Some(dt.fixed_offset()),
-                    chrono::LocalResult::Ambiguous(dt1, _) => Some(dt1.fixed_offset()),
-                    chrono::LocalResult::None => None, // DST gap - will be skipped
-                }
-            };
+        let dt = if let Some(tz) = self.timezone_override {
+            tz.from_local_datetime(&self.current_naive).single()?
+        } else {
+            apply_timezone_to_datetime(self.current_naive, None).ok()?
+        };
 
-            match conversion_result {
-                Some(dt) => {
-                    // Advance to next time
-                    self.current_naive += self.step;
-
-                    // Check if we've passed the end
-                    if self.current_naive > self.end_naive {
-                        self.finished = true;
-                    }
-
-                    return Some(dt);
-                }
-                None => {
-                    // This time doesn't exist (DST spring-forward), skip it
-                    self.current_naive += self.step;
-                    if self.current_naive > self.end_naive {
-                        self.finished = true;
-                        return None;
-                    }
-                    continue;
-                }
-            }
-        }
+        self.current_naive += self.step;
+        Some(dt)
     }
 }
 
@@ -182,38 +117,31 @@ pub fn expand_datetime_input(
 ) -> Result<Box<dyn Iterator<Item = DateTime<FixedOffset>>>, ParseError> {
     match input {
         DateTimeInput::Single(dt) => {
-            // For single datetime, apply timezone override if specified
-            if let Some(tz) = timezone_override {
-                let adjusted_dt = dt.with_timezone(&tz);
-                Ok(Box::new(std::iter::once(adjusted_dt)))
+            let adjusted_dt = if let Some(tz) = timezone_override {
+                dt.with_timezone(&tz)
             } else {
-                Ok(Box::new(std::iter::once(*dt)))
-            }
+                *dt
+            };
+            Ok(Box::new(std::iter::once(adjusted_dt)))
         }
         DateTimeInput::Now => {
-            // For "now", apply timezone override if specified
-            if let Some(tz) = timezone_override {
-                let now = chrono::Utc::now().with_timezone(&tz);
-                Ok(Box::new(std::iter::once(now)))
+            let now = if let Some(tz) = timezone_override {
+                chrono::Utc::now().with_timezone(&tz)
             } else {
-                let now = Local::now().fixed_offset();
-                Ok(Box::new(std::iter::once(now)))
-            }
+                Local::now().fixed_offset()
+            };
+            Ok(Box::new(std::iter::once(now)))
         }
         DateTimeInput::PartialYear(year) => {
-            // Generate series for entire year
             let start_date = NaiveDate::from_ymd_opt(*year, 1, 1)
                 .ok_or_else(|| ParseError::InvalidDateTime(format!("Invalid year: {}", year)))?;
             let end_date = NaiveDate::from_ymd_opt(*year, 12, 31)
                 .ok_or_else(|| ParseError::InvalidDateTime(format!("Invalid year: {}", year)))?;
 
-            let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-            let end_time = NaiveTime::from_hms_opt(23, 59, 59).unwrap();
+            let start_naive = start_date.and_hms_opt(0, 0, 0).unwrap();
+            let end_naive = end_date.and_hms_opt(23, 59, 59).unwrap();
 
-            let start_naive = start_date.and_time(start_time);
-            let end_naive = end_date.and_time(end_time);
-
-            Ok(Box::new(DstAwareTimeSeriesIterator::new(
+            Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,
                 end_naive,
                 step.duration,
@@ -221,12 +149,10 @@ pub fn expand_datetime_input(
             )))
         }
         DateTimeInput::PartialYearMonth(year, month) => {
-            // Generate series for entire month
             let start_date = NaiveDate::from_ymd_opt(*year, *month, 1).ok_or_else(|| {
                 ParseError::InvalidDateTime(format!("Invalid year-month: {}-{:02}", year, month))
             })?;
 
-            // Calculate last day of month
             let end_date = if *month == 12 {
                 NaiveDate::from_ymd_opt(*year + 1, 1, 1)
                     .unwrap()
@@ -239,13 +165,10 @@ pub fn expand_datetime_input(
                     .unwrap()
             };
 
-            let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-            let end_time = NaiveTime::from_hms_opt(23, 59, 59).unwrap();
+            let start_naive = start_date.and_hms_opt(0, 0, 0).unwrap();
+            let end_naive = end_date.and_hms_opt(23, 59, 59).unwrap();
 
-            let start_naive = start_date.and_time(start_time);
-            let end_naive = end_date.and_time(end_time);
-
-            Ok(Box::new(DstAwareTimeSeriesIterator::new(
+            Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,
                 end_naive,
                 step.duration,
@@ -253,7 +176,6 @@ pub fn expand_datetime_input(
             )))
         }
         DateTimeInput::PartialDate(year, month, day) => {
-            // Generate series for a single day
             let target_date = NaiveDate::from_ymd_opt(*year, *month, *day).ok_or_else(|| {
                 ParseError::InvalidDateTime(format!(
                     "Invalid date: {}-{:02}-{:02}",
@@ -261,13 +183,10 @@ pub fn expand_datetime_input(
                 ))
             })?;
 
-            let start_time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-            let end_time = NaiveTime::from_hms_opt(23, 0, 0).unwrap();
+            let start_naive = target_date.and_hms_opt(0, 0, 0).unwrap();
+            let end_naive = target_date.and_hms_opt(23, 0, 0).unwrap();
 
-            let start_naive = target_date.and_time(start_time);
-            let end_naive = target_date.and_time(end_time);
-
-            Ok(Box::new(DstAwareTimeSeriesIterator::new(
+            Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,
                 end_naive,
                 step.duration,
@@ -280,11 +199,10 @@ pub fn expand_datetime_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{NaiveDate, NaiveTime, Timelike};
+    use chrono::{NaiveDate, Timelike};
 
     #[test]
     fn test_time_step_parsing() {
-        // Test duration format
         assert_eq!(
             TimeStep::parse("30s").unwrap().duration,
             Duration::try_seconds(30).unwrap()
@@ -297,22 +215,15 @@ mod tests {
             TimeStep::parse("2h").unwrap().duration,
             Duration::try_hours(2).unwrap()
         );
-
-        // Test solarpos compatibility - raw seconds
         assert_eq!(
             TimeStep::parse("600").unwrap().duration,
             Duration::try_seconds(600).unwrap()
-        );
-        assert_eq!(
-            TimeStep::parse("30").unwrap().duration,
-            Duration::try_seconds(30).unwrap()
         );
         assert_eq!(
             TimeStep::parse("1d").unwrap().duration,
             Duration::try_days(1).unwrap()
         );
 
-        // Test error cases
         assert!(TimeStep::parse("").is_err());
         assert!(TimeStep::parse("30x").is_err());
         assert!(TimeStep::parse("-5m").is_err());
@@ -322,16 +233,21 @@ mod tests {
     fn test_time_series_iterator() {
         let start_naive = NaiveDate::from_ymd_opt(2024, 1, 1)
             .unwrap()
-            .and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         let end_naive = NaiveDate::from_ymd_opt(2024, 1, 1)
             .unwrap()
-            .and_time(NaiveTime::from_hms_opt(2, 0, 0).unwrap());
-        let step = Duration::try_hours(1).unwrap();
-
-        let iter = DstAwareTimeSeriesIterator::new(start_naive, end_naive, step, None);
+            .and_hms_opt(2, 0, 0)
+            .unwrap();
+        let iter = TimeSeriesIterator::new(
+            start_naive,
+            end_naive,
+            Duration::try_hours(1).unwrap(),
+            None,
+        );
 
         let times: Vec<_> = iter.collect();
-        assert_eq!(times.len(), 3); // 00:00, 01:00, 02:00
+        assert_eq!(times.len(), 3);
         assert_eq!(times[0].time().hour(), 0);
         assert_eq!(times[1].time().hour(), 1);
         assert_eq!(times[2].time().hour(), 2);
@@ -341,9 +257,8 @@ mod tests {
     fn test_expand_partial_year() {
         let step = TimeStep::default();
         let input = DateTimeInput::PartialYear(2024);
-
         let iter = expand_datetime_input(&input, &step, None).unwrap();
-        let times: Vec<_> = iter.take(25).collect(); // Take first 25 hours
+        let times: Vec<_> = iter.take(25).collect();
 
         assert_eq!(times.len(), 25);
         assert_eq!(
@@ -351,7 +266,7 @@ mod tests {
             NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()
         );
         assert_eq!(times[0].time().hour(), 0);
-        assert_eq!(times[24].time().hour(), 0); // Second day, hour 0
+        assert_eq!(times[24].time().hour(), 0);
         assert_eq!(
             times[24].date_naive(),
             NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()
