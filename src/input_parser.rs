@@ -37,61 +37,85 @@ fn determine_input_type(
     longitude: Option<&String>,
     datetime: Option<&String>,
 ) -> Result<InputType, String> {
-    match (latitude, longitude, datetime) {
-        // Paired data file: @file as first argument, no other arguments
-        (lat, None, None) if lat.starts_with('@') => {
-            if lat == "@-" {
-                Ok(InputType::StdinPaired)
+    let arg_count = count_arguments(longitude.is_some(), datetime.is_some());
+    let file_locations = identify_file_inputs(latitude, longitude, datetime)?;
+
+    match (arg_count, file_locations) {
+        (1, FileInputLocation::FirstArg) => determine_single_file_type(latitude),
+        (2, FileInputLocation::FirstArg) => determine_coordinate_file_type(latitude),
+        (3, FileInputLocation::ThirdArg) => {
+            determine_time_file_type(latitude, longitude.unwrap(), datetime.unwrap())
+        }
+        (3, FileInputLocation::None) => Ok(InputType::Standard),
+        _ => Err(format!(
+            "Invalid argument combination: {} args with file inputs at {:?}",
+            arg_count, file_locations
+        )),
+    }
+}
+
+fn count_arguments(has_longitude: bool, has_datetime: bool) -> u8 {
+    1 + has_longitude as u8 + has_datetime as u8
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FileInputLocation {
+    None,
+    FirstArg,
+    ThirdArg,
+}
+
+fn identify_file_inputs(
+    latitude: &str,
+    longitude: Option<&String>,
+    datetime: Option<&String>,
+) -> Result<FileInputLocation, String> {
+    let file_markers = [
+        latitude.starts_with('@'),
+        longitude.is_some_and(|s| s.starts_with('@')),
+        datetime.is_some_and(|s| s.starts_with('@')),
+    ];
+
+    match file_markers.iter().filter(|&&x| x).count() {
+        0 => Ok(FileInputLocation::None),
+        1 => {
+            if file_markers[0] {
+                Ok(FileInputLocation::FirstArg)
+            } else if file_markers[2] {
+                Ok(FileInputLocation::ThirdArg)
             } else {
-                Ok(InputType::PairedDataFile)
+                Err("File input in longitude position not supported".to_string())
             }
         }
+        _ => Err("Only one parameter can use file input (@file or @-)".to_string()),
+    }
+}
 
-        // Coordinate file: @file as first argument, datetime as second argument
-        (lat, Some(_dt), None) if lat.starts_with('@') => {
-            if lat == "@-" {
-                Ok(InputType::StdinCoords)
-            } else {
-                Ok(InputType::CoordinateFile)
-            }
-        }
+fn determine_single_file_type(latitude: &str) -> Result<InputType, String> {
+    match latitude {
+        "@-" => Ok(InputType::StdinPaired),
+        _ => Ok(InputType::PairedDataFile),
+    }
+}
 
-        // Time file: lat, lon, @times.txt
-        (lat, Some(lon), Some(dt)) if dt.starts_with('@') => {
-            if dt == "@-" {
-                if lat.starts_with('@') || lon.starts_with('@') {
-                    return Err("Only one parameter can use stdin (@-)".to_string());
-                }
-                Ok(InputType::StdinTimes)
-            } else {
-                if lat.starts_with('@') || lon.starts_with('@') {
-                    return Err(
-                        "Only datetime parameter can be a file in this combination".to_string()
-                    );
-                }
-                Ok(InputType::TimeFile)
-            }
-        }
+fn determine_coordinate_file_type(latitude: &str) -> Result<InputType, String> {
+    match latitude {
+        "@-" => Ok(InputType::StdinCoords),
+        _ => Ok(InputType::CoordinateFile),
+    }
+}
 
-        // Standard: lat, lon, datetime (no @ prefixes)
-        (lat, Some(lon), Some(_dt)) => {
-            if lat.starts_with('@') || lon.starts_with('@') {
-                Err("File inputs (@file.txt) not allowed in standard format".to_string())
-            } else {
-                Ok(InputType::Standard)
-            }
-        }
-
-        // Invalid combinations
-        (lat, None, Some(_)) if !lat.starts_with('@') => {
-            Err("Missing longitude parameter".to_string())
-        }
-        (lat, Some(_), None) if !lat.starts_with('@') => {
-            Err("Missing datetime parameter".to_string())
-        }
-        (_, None, Some(_)) => Err("Invalid argument combination".to_string()),
-        (_, Some(_), _) => Err("Invalid argument combination".to_string()),
-        (_, None, None) => Err("Missing required arguments".to_string()),
+fn determine_time_file_type(
+    latitude: &str,
+    longitude: &str,
+    datetime: &str,
+) -> Result<InputType, String> {
+    if latitude.starts_with('@') || longitude.starts_with('@') {
+        return Err("Only datetime parameter can be a file in this combination".to_string());
+    }
+    match datetime {
+        "@-" => Ok(InputType::StdinTimes),
+        _ => Ok(InputType::TimeFile),
     }
 }
 

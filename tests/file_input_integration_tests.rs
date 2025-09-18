@@ -274,7 +274,7 @@ fn test_file_input_errors() {
     ]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Error reading coordinates"));
+        .stderr(predicate::str::contains("Error reading coordinate data"));
 }
 
 /// Test show-inputs auto-enabling for file inputs

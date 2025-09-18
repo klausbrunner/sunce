@@ -1,16 +1,6 @@
+use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SunriseResult;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputFormat {
-    Human,
-    Csv,
-    Json,
-}
-
-fn format_datetime_solarpos(dt: &DateTime<FixedOffset>) -> String {
-    dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-}
 
 pub struct SunriseResultData {
     pub datetime: DateTime<FixedOffset>,

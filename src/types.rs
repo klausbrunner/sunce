@@ -2,6 +2,29 @@ use chrono::{DateTime, FixedOffset};
 use std::fmt;
 use thiserror::Error;
 
+/// Format datetime to match solarpos format (no subseconds)
+pub fn format_datetime_solarpos(dt: &DateTime<FixedOffset>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputFormat {
+    Human,
+    Csv,
+    Json,
+}
+
+impl OutputFormat {
+    pub fn from_string(s: &str) -> Result<Self, String> {
+        match s.to_uppercase().as_str() {
+            "HUMAN" => Ok(Self::Human),
+            "CSV" => Ok(Self::Csv),
+            "JSON" => Ok(Self::Json),
+            _ => Err(format!("Unknown format: {}. Use HUMAN, CSV, or JSON", s)),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum ParseError {
     #[error("Invalid coordinate: {0}")]
