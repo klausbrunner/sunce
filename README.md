@@ -2,9 +2,9 @@
 
 A high-performance command-line solar position calculator.
 
-This is an experimental port of [solarpos](https://github.com/klausbrunner/solarpos), aiming to provide identical functionality for calculating topocentric solar coordinates and sunrise/sunset times. 
+This is an experimental port of [solarpos](https://github.com/klausbrunner/solarpos), aiming to provide identical functionality for calculating topocentric solar coordinates and sunrise/sunset/twilight times.
 
-Why yet another "rewrite in Rust"?
+Yet another "rewrite in Rust"? Why?
 
 - To test the [solar-positioning](https://crates.io/crates/solar-positioning) library.
 - To learn the language and understand its benefits and limitations.
@@ -12,7 +12,7 @@ Why yet another "rewrite in Rust"?
 
 ## Status
 
-**Alpha** - Basic functionality is working, but some features are still being implemented or known to have bugs.
+**Early beta** - basic functionality works and seems to be on par with solarpos, tests are in place, but not every detail has been checked.
 
 ## License
 
