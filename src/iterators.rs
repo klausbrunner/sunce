@@ -41,22 +41,35 @@ impl Iterator for CoordinateRangeIterator {
 
         let current = self.current;
 
-        // Check if we've reached or passed the end
-        let at_or_past_end = if self.ascending {
-            current >= self.end
+        // Use epsilon for floating point comparison to handle precision issues
+        const EPSILON: f64 = 1e-10;
+
+        // Check if current value is beyond the end (should not be included)
+        let past_end = if self.ascending {
+            current > self.end + EPSILON
         } else {
-            current <= self.end
+            current < self.end - EPSILON
         };
 
-        if at_or_past_end {
-            self.finished = true;
-            Some(current)
+        if past_end {
+            None
         } else {
-            // Advance to next value
-            if self.ascending {
-                self.current += self.step;
+            // Check if we're at or very close to the end
+            let at_end = if self.ascending {
+                current >= self.end - EPSILON
             } else {
-                self.current -= self.step;
+                current <= self.end + EPSILON
+            };
+
+            if at_end {
+                self.finished = true;
+            } else {
+                // Advance to next value
+                if self.ascending {
+                    self.current += self.step;
+                } else {
+                    self.current -= self.step;
+                }
             }
             Some(current)
         }
@@ -96,6 +109,23 @@ mod tests {
         let iter = CoordinateRangeIterator::new(0.0, 1.0, 0.5);
         let values: Vec<f64> = iter.collect();
         assert_eq!(values, vec![0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn test_coordinate_range_endpoint_inclusion() {
+        // Test the specific case that was failing: 10:15:0.1 should have exactly 51 values
+        let iter = CoordinateRangeIterator::new(10.0, 15.0, 0.1);
+        let values: Vec<f64> = iter.collect();
+
+        // Should be exactly 51 values: 10.0, 10.1, 10.2, ..., 14.9, 15.0
+        assert_eq!(values.len(), 51);
+        assert_eq!(values[0], 10.0);
+
+        // Last value should be very close to 15.0 (accounting for floating point precision)
+        assert!((values[50] - 15.0).abs() < 1e-10);
+
+        // Should NOT include anything significantly beyond 15.0
+        assert!(values.iter().all(|&v| v <= 15.0 + 1e-10));
     }
 }
 

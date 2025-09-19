@@ -9,6 +9,7 @@ mod input_parser;
 mod iterators;
 mod output;
 mod parsing;
+mod performance;
 mod sunrise_formatters;
 mod sunrise_output;
 mod time_series;

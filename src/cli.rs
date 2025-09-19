@@ -86,6 +86,11 @@ pub fn build_cli() -> Command {
             .help("Timezone as offset (e.g. +01:00) and/or zone id (e.g. America/Los_Angeles). Overrides any timezone info found in dateTime.")
             .require_equals(true)
             .value_name("timezone"))
+        .arg(Arg::new("perf")
+            .long("perf")
+            .action(ArgAction::SetTrue)
+            .hide(true)
+            .help("Show performance statistics."))
 
         // Commands
         .subcommand(

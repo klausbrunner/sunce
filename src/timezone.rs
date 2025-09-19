@@ -10,10 +10,10 @@ static SYSTEM_TIMEZONE: OnceLock<Tz> = OnceLock::new();
 pub fn get_system_timezone() -> Tz {
     *SYSTEM_TIMEZONE.get_or_init(|| {
         // Try to get timezone from TZ environment variable first (for tests and overrides)
-        if let Ok(tz_str) = std::env::var("TZ") {
-            if let Ok(tz) = tz_str.parse::<Tz>() {
-                return tz;
-            }
+        if let Ok(tz_str) = std::env::var("TZ")
+            && let Ok(tz) = tz_str.parse::<Tz>()
+        {
+            return tz;
         }
 
         // Use iana-time-zone for cross-platform system timezone detection

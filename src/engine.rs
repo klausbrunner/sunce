@@ -7,6 +7,7 @@ use crate::calculation::{
 use crate::iterators::create_calculation_iterator;
 use crate::output::output_position_results;
 use crate::parsing::ParsedInput;
+use crate::performance::PerformanceTracker;
 use crate::sunrise_output::output_sunrise_results;
 use crate::types::OutputFormat;
 use clap::ArgMatches;
@@ -23,6 +24,9 @@ pub fn execute_position_command(
     let params = get_calculation_parameters(input, matches)?;
     let engine = PositionCalculationEngine { params };
 
+    let show_perf = matches.get_flag("perf");
+    let tracker = PerformanceTracker::create(show_perf);
+
     let position_iter = create_calculation_iterator(input, matches, &engine)?;
 
     // Convert Result<T, String> iterator to T iterator, handling errors
@@ -33,13 +37,24 @@ pub fn execute_position_command(
         })
     });
 
+    // Track performance if enabled
+    let tracked_iter = if let Some(ref t) = tracker {
+        Box::new(processed_iter.inspect(|_| {
+            t.track_item();
+        })) as Box<dyn Iterator<Item = _>>
+    } else {
+        Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
+    };
+
     output_position_results(
-        processed_iter,
+        tracked_iter,
         format,
         show_inputs,
         show_headers,
         elevation_angle,
     );
+
+    PerformanceTracker::report_if_needed(&tracker);
     Ok(())
 }
 
@@ -55,6 +70,9 @@ pub fn execute_sunrise_command(
     let params = get_sunrise_calculation_parameters(input, matches, show_twilight)?;
     let engine = SunriseCalculationEngine { params };
 
+    let show_perf = matches.get_flag("perf");
+    let tracker = PerformanceTracker::create(show_perf);
+
     let sunrise_iter = create_calculation_iterator(input, matches, &engine)?;
 
     // Convert Result<T, String> iterator to T iterator, handling errors
@@ -65,13 +83,24 @@ pub fn execute_sunrise_command(
         })
     });
 
+    // Track performance if enabled
+    let tracked_iter = if let Some(ref t) = tracker {
+        Box::new(processed_iter.inspect(|_| {
+            t.track_item();
+        })) as Box<dyn Iterator<Item = _>>
+    } else {
+        Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
+    };
+
     output_sunrise_results(
-        processed_iter,
+        tracked_iter,
         format,
         show_inputs,
         show_headers,
         show_twilight,
     );
+
+    PerformanceTracker::report_if_needed(&tracker);
     Ok(())
 }
 

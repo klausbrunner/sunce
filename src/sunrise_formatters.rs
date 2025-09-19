@@ -91,10 +91,8 @@ fn print_human(result: &SunriseResultData, show_twilight: bool) {
         }
     }
 
-    if show_twilight {
-        if let Some(twilight) = &result.twilight_results {
-            print_twilight_human(twilight);
-        }
+    if show_twilight && let Some(twilight) = &result.twilight_results {
+        print_twilight_human(twilight);
     }
     println!();
 }
@@ -251,10 +249,8 @@ fn print_json(result: &SunriseResultData, show_twilight: bool) {
         }
     }
 
-    if show_twilight {
-        if let Some(twilight) = &result.twilight_results {
-            print_twilight_json(twilight);
-        }
+    if show_twilight && let Some(twilight) = &result.twilight_results {
+        print_twilight_json(twilight);
     }
     println!("}}");
 }
