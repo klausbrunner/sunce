@@ -3,6 +3,10 @@ use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SunriseResult;
 use std::io::{self, BufWriter, Write};
 
+// Date format constants for human-readable output (solarpos compatibility)
+const DATE_FORMAT: &str = "%Y-%m-%d";
+const TIME_FORMAT: &str = "%H:%M:%S%:z";
+
 pub struct SunriseResultData {
     pub datetime: DateTime<FixedOffset>,
     pub latitude: f64,
@@ -63,9 +67,9 @@ where
             first = false;
         }
         match format {
-            OutputFormat::Human => print_human(writer, &result, show_twilight)?,
+            OutputFormat::Human => print_human(writer, &result, show_inputs, show_twilight)?,
             OutputFormat::Csv => print_csv(writer, &result, show_inputs, show_twilight)?,
-            OutputFormat::Json => print_json(writer, &result, show_twilight)?,
+            OutputFormat::Json => print_json(writer, &result, show_inputs, show_twilight)?,
         }
     }
     writer.flush()?;
@@ -75,64 +79,134 @@ where
 fn print_human(
     writer: &mut BufWriter<io::StdoutLock>,
     result: &SunriseResultData,
+    show_inputs: bool,
     show_twilight: bool,
 ) -> io::Result<()> {
-    writeln!(
-        writer,
-        "latitude          :                     {:.5}°",
-        result.latitude
-    )?;
-    writeln!(
-        writer,
-        "longitude         :                     {:.5}°",
-        result.longitude
-    )?;
-    writeln!(
-        writer,
-        "datetime          :    {}",
-        format_datetime_solarpos(&result.datetime)
-    )?;
-    writeln!(
-        writer,
-        "delta T           :                   {:.1} s",
-        result.delta_t
-    )?;
+    if show_inputs {
+        writeln!(
+            writer,
+            "latitude :                     {:.5}°",
+            result.latitude
+        )?;
+        writeln!(
+            writer,
+            "longitude:                     {:.5}°",
+            result.longitude
+        )?;
+        writeln!(
+            writer,
+            "date/time: {} {}",
+            result.datetime.format(DATE_FORMAT),
+            result.datetime.format(TIME_FORMAT)
+        )?;
+        writeln!(
+            writer,
+            "delta T  :                        {:.3} s",
+            result.delta_t
+        )?;
+    }
 
+    // Type field
+    let type_str = match &result.sunrise_result {
+        SunriseResult::RegularDay { .. } => "normal",
+        SunriseResult::AllDay { .. } => "all day",
+        SunriseResult::AllNight { .. } => "all night",
+    };
+
+    if show_inputs {
+        writeln!(writer, "type     : {}", type_str)?;
+    } else {
+        writeln!(writer, "type   : {}", type_str)?;
+    }
+
+    // Sunrise/transit/sunset fields
     match &result.sunrise_result {
         SunriseResult::RegularDay {
             sunrise,
             transit,
             sunset,
         } => {
-            writeln!(
-                writer,
-                "sunrise           :    {}",
-                format_datetime_solarpos(sunrise)
-            )?;
-            writeln!(
-                writer,
-                "solar noon        :    {}",
-                format_datetime_solarpos(transit)
-            )?;
-            writeln!(
-                writer,
-                "sunset            :    {}",
-                format_datetime_solarpos(sunset)
-            )?;
+            if show_inputs {
+                writeln!(
+                    writer,
+                    "sunrise  : {} {}",
+                    sunrise.format(DATE_FORMAT),
+                    sunrise.format(TIME_FORMAT)
+                )?;
+                writeln!(
+                    writer,
+                    "transit  : {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(
+                    writer,
+                    "sunset   : {} {}",
+                    sunset.format(DATE_FORMAT),
+                    sunset.format(TIME_FORMAT)
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "sunrise: {} {}",
+                    sunrise.format(DATE_FORMAT),
+                    sunrise.format(TIME_FORMAT)
+                )?;
+                writeln!(
+                    writer,
+                    "transit: {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(
+                    writer,
+                    "sunset : {} {}",
+                    sunset.format(DATE_FORMAT),
+                    sunset.format(TIME_FORMAT)
+                )?;
+            }
         }
         SunriseResult::AllDay { transit } => {
-            writeln!(
-                writer,
-                "polar day         :    {}",
-                format_datetime_solarpos(transit)
-            )?;
+            if show_inputs {
+                writeln!(writer, "sunrise  : ")?;
+                writeln!(
+                    writer,
+                    "transit  : {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(writer, "sunset   : ")?;
+            } else {
+                writeln!(writer, "sunrise: ")?;
+                writeln!(
+                    writer,
+                    "transit: {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(writer, "sunset : ")?;
+            }
         }
         SunriseResult::AllNight { transit } => {
-            writeln!(
-                writer,
-                "polar night       :    {}",
-                format_datetime_solarpos(transit)
-            )?;
+            if show_inputs {
+                writeln!(writer, "sunrise  : ")?;
+                writeln!(
+                    writer,
+                    "transit  : {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(writer, "sunset   : ")?;
+            } else {
+                writeln!(writer, "sunrise: ")?;
+                writeln!(
+                    writer,
+                    "transit: {} {}",
+                    transit.format(DATE_FORMAT),
+                    transit.format(TIME_FORMAT)
+                )?;
+                writeln!(writer, "sunset : ")?;
+            }
         }
     }
 
@@ -147,36 +221,80 @@ fn print_twilight_human(
     writer: &mut BufWriter<io::StdoutLock>,
     twilight: &TwilightResults,
 ) -> io::Result<()> {
-    for (name, result) in [
-        ("civil", &twilight.civil),
-        ("nautical", &twilight.nautical),
-        ("astronomical", &twilight.astronomical),
-    ] {
-        match result {
-            SunriseResult::RegularDay {
-                sunrise, sunset, ..
-            } => {
-                writeln!(
-                    writer,
-                    "{} dawn        :    {}",
-                    name,
-                    format_datetime_solarpos(sunrise)
-                )?;
-                writeln!(
-                    writer,
-                    "{} dusk        :    {}",
-                    name,
-                    format_datetime_solarpos(sunset)
-                )?;
-            }
-            SunriseResult::AllDay { .. } => {
-                writeln!(writer, "{} twilight    :    polar day", name)?;
-            }
-            SunriseResult::AllNight { .. } => {
-                writeln!(writer, "{} twilight    :    polar night", name)?;
-            }
+    // Print twilight starts in order: astronomical, nautical, civil
+    match &twilight.astronomical {
+        SunriseResult::RegularDay { sunrise, .. } => {
+            writeln!(
+                writer,
+                "astronomical_start: {} {}",
+                sunrise.format(DATE_FORMAT),
+                sunrise.format(TIME_FORMAT)
+            )?;
         }
+        _ => writeln!(writer, "astronomical_start: ")?,
     }
+
+    match &twilight.nautical {
+        SunriseResult::RegularDay { sunrise, .. } => {
+            writeln!(
+                writer,
+                "nautical_start    : {} {}",
+                sunrise.format(DATE_FORMAT),
+                sunrise.format(TIME_FORMAT)
+            )?;
+        }
+        _ => writeln!(writer, "nautical_start    : ")?,
+    }
+
+    match &twilight.civil {
+        SunriseResult::RegularDay { sunrise, .. } => {
+            writeln!(
+                writer,
+                "civil_start       : {} {}",
+                sunrise.format(DATE_FORMAT),
+                sunrise.format(TIME_FORMAT)
+            )?;
+        }
+        _ => writeln!(writer, "civil_start       : ")?,
+    }
+
+    // Print twilight ends in order: civil, nautical, astronomical
+    match &twilight.civil {
+        SunriseResult::RegularDay { sunset, .. } => {
+            writeln!(
+                writer,
+                "civil_end         : {} {}",
+                sunset.format(DATE_FORMAT),
+                sunset.format(TIME_FORMAT)
+            )?;
+        }
+        _ => writeln!(writer, "civil_end         : ")?,
+    }
+
+    match &twilight.nautical {
+        SunriseResult::RegularDay { sunset, .. } => {
+            writeln!(
+                writer,
+                "nautical_end      : {} {}",
+                sunset.format(DATE_FORMAT),
+                sunset.format(TIME_FORMAT)
+            )?;
+        }
+        _ => writeln!(writer, "nautical_end      : ")?,
+    }
+
+    match &twilight.astronomical {
+        SunriseResult::RegularDay { sunset, .. } => {
+            writeln!(
+                writer,
+                "astronomical_end  : {} {}",
+                sunset.format(DATE_FORMAT),
+                sunset.format(TIME_FORMAT)
+            )?;
+        }
+        _ => writeln!(writer, "astronomical_end  : ")?,
+    }
+
     Ok(())
 }
 
@@ -193,7 +311,7 @@ fn print_csv_headers(
     if show_twilight {
         write!(
             writer,
-            ",civil_dawn,civil_dusk,nautical_dawn,nautical_dusk,astronomical_dawn,astronomical_dusk"
+            ",civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end"
         )?;
     }
     writeln!(writer)?;
@@ -219,9 +337,9 @@ fn print_csv(
 
     // Print type first
     let result_type = match &result.sunrise_result {
-        SunriseResult::RegularDay { .. } => "normal",
-        SunriseResult::AllDay { .. } => "polar_day",
-        SunriseResult::AllNight { .. } => "polar_night",
+        SunriseResult::RegularDay { .. } => "NORMAL",
+        SunriseResult::AllDay { .. } => "ALL_DAY",
+        SunriseResult::AllNight { .. } => "ALL_NIGHT",
     };
     write!(writer, "{},", result_type)?;
 
@@ -240,18 +358,10 @@ fn print_csv(
             )?;
         }
         SunriseResult::AllDay { transit } => {
-            write!(
-                writer,
-                "polar_day,{},polar_day",
-                format_datetime_solarpos(transit)
-            )?;
+            write!(writer, ",{},", format_datetime_solarpos(transit))?;
         }
         SunriseResult::AllNight { transit } => {
-            write!(
-                writer,
-                "polar_night,{},polar_night",
-                format_datetime_solarpos(transit)
-            )?;
+            write!(writer, ",{},", format_datetime_solarpos(transit))?;
         }
     }
 
@@ -282,8 +392,8 @@ fn print_twilight_csv(
                     format_datetime_solarpos(sunset)
                 )?;
             }
-            SunriseResult::AllDay { .. } => write!(writer, ",polar_day,polar_day")?,
-            SunriseResult::AllNight { .. } => write!(writer, ",polar_night,polar_night")?,
+            SunriseResult::AllDay { .. } => write!(writer, ",,")?,
+            SunriseResult::AllNight { .. } => write!(writer, ",,")?,
         }
     }
     Ok(())
@@ -292,16 +402,22 @@ fn print_twilight_csv(
 fn print_json(
     writer: &mut BufWriter<io::StdoutLock>,
     result: &SunriseResultData,
+    show_inputs: bool,
     show_twilight: bool,
 ) -> io::Result<()> {
-    write!(
-        writer,
-        "{{\"latitude\":{:.5},\"longitude\":{:.5},\"dateTime\":\"{}\",\"deltaT\":{:.3}",
-        result.latitude,
-        result.longitude,
-        format_datetime_solarpos(&result.datetime),
-        result.delta_t
-    )?;
+    write!(writer, "{{")?;
+
+    // Only include input fields when show_inputs is true
+    if show_inputs {
+        write!(
+            writer,
+            "\"latitude\":{:.5},\"longitude\":{:.5},\"dateTime\":\"{}\",\"deltaT\":{:.3},",
+            result.latitude,
+            result.longitude,
+            format_datetime_solarpos(&result.datetime),
+            result.delta_t
+        )?;
+    }
 
     match &result.sunrise_result {
         SunriseResult::RegularDay {
@@ -311,7 +427,7 @@ fn print_json(
         } => {
             write!(
                 writer,
-                ",\"type\":\"NORMAL\",\"sunrise\":\"{}\",\"transit\":\"{}\",\"sunset\":\"{}\"",
+                "\"type\":\"NORMAL\",\"sunrise\":\"{}\",\"transit\":\"{}\",\"sunset\":\"{}\"",
                 format_datetime_solarpos(sunrise),
                 format_datetime_solarpos(transit),
                 format_datetime_solarpos(sunset)
@@ -320,14 +436,14 @@ fn print_json(
         SunriseResult::AllDay { transit } => {
             write!(
                 writer,
-                ",\"type\":\"POLAR_DAY\",\"sunrise\":\"polar_day\",\"transit\":\"{}\",\"sunset\":\"polar_day\"",
+                "\"type\":\"ALL_DAY\",\"sunrise\":null,\"transit\":\"{}\",\"sunset\":null",
                 format_datetime_solarpos(transit)
             )?;
         }
         SunriseResult::AllNight { transit } => {
             write!(
                 writer,
-                ",\"type\":\"POLAR_NIGHT\",\"sunrise\":\"polar_night\",\"transit\":\"{}\",\"sunset\":\"polar_night\"",
+                "\"type\":\"ALL_NIGHT\",\"sunrise\":null,\"transit\":\"{}\",\"sunset\":null",
                 format_datetime_solarpos(transit)
             )?;
         }
@@ -355,7 +471,7 @@ fn print_twilight_json(
             } => {
                 write!(
                     writer,
-                    ",\"{}_dawn\":\"{}\",\"{}_dusk\":\"{}\"",
+                    ",\"{}_start\":\"{}\",\"{}_end\":\"{}\"",
                     name,
                     format_datetime_solarpos(sunrise),
                     name,
@@ -363,18 +479,10 @@ fn print_twilight_json(
                 )?;
             }
             SunriseResult::AllDay { .. } => {
-                write!(
-                    writer,
-                    ",\"{}_dawn\":\"polar_day\",\"{}_dusk\":\"polar_day\"",
-                    name, name
-                )?;
+                write!(writer, ",\"{}_start\":null,\"{}_end\":null", name, name)?;
             }
             SunriseResult::AllNight { .. } => {
-                write!(
-                    writer,
-                    ",\"{}_dawn\":\"polar_night\",\"{}_dusk\":\"polar_night\"",
-                    name, name
-                )?;
+                write!(writer, ",\"{}_start\":null,\"{}_end\":null", name, name)?;
             }
         }
     }

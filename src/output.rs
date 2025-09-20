@@ -12,6 +12,7 @@ pub struct PositionResult {
     pub pressure: f64,
     pub temperature: f64,
     pub delta_t: f64,
+    pub apply_refraction: bool,
 }
 
 pub fn output_position_results<I>(
@@ -74,16 +75,18 @@ where
                 "elevation  :                        {:.3} m",
                 result.elevation
             )?;
-            writeln!(
-                writer,
-                "pressure   :                     {:.3} hPa",
-                result.pressure
-            )?;
-            writeln!(
-                writer,
-                "temperature:                       {:.3} °C",
-                result.temperature
-            )?;
+            if result.apply_refraction {
+                writeln!(
+                    writer,
+                    "pressure   :                     {:.3} hPa",
+                    result.pressure
+                )?;
+                writeln!(
+                    writer,
+                    "temperature:                       {:.3} °C",
+                    result.temperature
+                )?;
+            }
             writeln!(
                 writer,
                 "date/time  : {}",
@@ -149,27 +152,44 @@ fn output_csv_format<I>(
 where
     I: Iterator<Item = PositionResult>,
 {
-    if show_headers {
-        if show_inputs {
-            if elevation_angle {
+    let mut first_result = true;
+
+    for result in results {
+        // Check first result to determine header format
+        if first_result && show_headers && show_inputs {
+            if result.apply_refraction {
+                if elevation_angle {
+                    writeln!(
+                        writer,
+                        "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
+                    )?;
+                } else {
+                    writeln!(
+                        writer,
+                        "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
+                    )?;
+                }
+            } else if elevation_angle {
                 writeln!(
                     writer,
-                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
+                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,elevation-angle"
                 )?;
             } else {
                 writeln!(
                     writer,
-                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
+                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,zenith"
                 )?;
             }
-        } else if elevation_angle {
-            writeln!(writer, "dateTime,azimuth,elevation-angle")?;
-        } else {
-            writeln!(writer, "dateTime,azimuth,zenith")?;
+        } else if first_result && show_headers && !show_inputs {
+            if elevation_angle {
+                writeln!(writer, "dateTime,azimuth,elevation-angle")?;
+            } else {
+                writeln!(writer, "dateTime,azimuth,zenith")?;
+            }
         }
-    }
 
-    for result in results {
+        first_result = false;
+
         let angle_value = if elevation_angle {
             result.position.elevation_angle()
         } else {
@@ -177,19 +197,33 @@ where
         };
 
         if show_inputs {
-            writeln!(
-                writer,
-                "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}",
-                result.latitude,
-                result.longitude,
-                result.elevation,
-                result.pressure,
-                result.temperature,
-                format_datetime_solarpos(&result.datetime),
-                result.delta_t,
-                result.position.azimuth(),
-                angle_value
-            )?;
+            if result.apply_refraction {
+                writeln!(
+                    writer,
+                    "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}",
+                    result.latitude,
+                    result.longitude,
+                    result.elevation,
+                    result.pressure,
+                    result.temperature,
+                    format_datetime_solarpos(&result.datetime),
+                    result.delta_t,
+                    result.position.azimuth(),
+                    angle_value
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "{:.5},{:.5},{:.3},{},{:.3},{:.5},{:.5}",
+                    result.latitude,
+                    result.longitude,
+                    result.elevation,
+                    format_datetime_solarpos(&result.datetime),
+                    result.delta_t,
+                    result.position.azimuth(),
+                    angle_value
+                )?;
+            }
         } else {
             writeln!(
                 writer,
@@ -221,20 +255,35 @@ where
         };
 
         if show_inputs {
-            writeln!(
-                writer,
-                r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"pressure":{:.3},"temperature":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,
-                result.latitude,
-                result.longitude,
-                result.elevation,
-                result.pressure,
-                result.temperature,
-                format_datetime_solarpos(&result.datetime),
-                result.delta_t,
-                result.position.azimuth(),
-                angle_name,
-                angle_value
-            )?;
+            if result.apply_refraction {
+                writeln!(
+                    writer,
+                    r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"pressure":{:.3},"temperature":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,
+                    result.latitude,
+                    result.longitude,
+                    result.elevation,
+                    result.pressure,
+                    result.temperature,
+                    format_datetime_solarpos(&result.datetime),
+                    result.delta_t,
+                    result.position.azimuth(),
+                    angle_name,
+                    angle_value
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,
+                    result.latitude,
+                    result.longitude,
+                    result.elevation,
+                    format_datetime_solarpos(&result.datetime),
+                    result.delta_t,
+                    result.position.azimuth(),
+                    angle_name,
+                    angle_value
+                )?;
+            }
         } else {
             writeln!(
                 writer,
@@ -278,6 +327,7 @@ mod tests {
             pressure: 1013.25,
             temperature: 20.0,
             delta_t: 69.2,
+            apply_refraction: true,
         }
     }
 

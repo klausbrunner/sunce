@@ -4,6 +4,7 @@ pub fn build_cli() -> Command {
     Command::new("sunce")
         .version("0.1.0")
         .about("Calculates topocentric solar coordinates or sunrise/sunset times.")
+        .subcommand_required(true)
         .long_about(Some(concat!(
             "Examples:\n",
             "  sunce 52.0 13.4 2024-01-01 position\n",

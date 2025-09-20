@@ -74,7 +74,7 @@ fn test_solarpos_sunrise_compatibility() {
     // Verify coordinates and type are exact
     assert!(stdout.contains("52.00000"));
     assert!(stdout.contains("13.40000"));
-    assert!(stdout.contains("normal"));
+    assert!(stdout.contains("NORMAL"));
 
     // Verify times are reasonable for summer solstice (UTC timezone)
     assert!(stdout.contains("02:4") || stdout.contains("02:5")); // sunrise around 02:46 UTC

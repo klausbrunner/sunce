@@ -165,6 +165,7 @@ pub fn calculate_single_position(
         pressure: params.pressure,
         temperature: params.temperature,
         delta_t: params.delta_t,
+        apply_refraction: params.apply_refraction,
     }
 }
 
