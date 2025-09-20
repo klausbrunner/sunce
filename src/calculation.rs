@@ -1,43 +1,8 @@
 use crate::output::PositionResult;
 use crate::sunrise_output::SunriseResultData;
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::Utc;
 use clap::ArgMatches;
 use solar_positioning::{grena3, spa};
-
-/// Generic calculation trait for streaming architecture
-pub trait CalculationEngine<T>: Sync {
-    fn calculate_single(&self, datetime: DateTime<FixedOffset>, lat: f64, lon: f64) -> T;
-}
-
-pub struct PositionCalculationEngine {
-    pub params: CalculationParameters,
-}
-
-impl CalculationEngine<PositionResult> for PositionCalculationEngine {
-    fn calculate_single(
-        &self,
-        datetime: DateTime<FixedOffset>,
-        lat: f64,
-        lon: f64,
-    ) -> PositionResult {
-        calculate_single_position(datetime, lat, lon, &self.params)
-    }
-}
-
-pub struct SunriseCalculationEngine {
-    pub params: SunriseCalculationParameters,
-}
-
-impl CalculationEngine<SunriseResultData> for SunriseCalculationEngine {
-    fn calculate_single(
-        &self,
-        datetime: DateTime<FixedOffset>,
-        lat: f64,
-        lon: f64,
-    ) -> SunriseResultData {
-        calculate_single_sunrise(datetime, lat, lon, &self.params)
-    }
-}
 
 #[derive(Clone)]
 pub struct CalculationParameters {
@@ -51,16 +16,8 @@ pub struct CalculationParameters {
 
 #[derive(Clone)]
 pub struct SunriseCalculationParameters {
-    #[allow(dead_code)]
-    pub algorithm: String,
     pub elevation: f64,
     pub delta_t: f64,
-    #[allow(dead_code)]
-    pub pressure: f64,
-    #[allow(dead_code)]
-    pub temperature: f64,
-    #[allow(dead_code)]
-    pub apply_refraction: bool,
     pub show_twilight: bool,
 }
 
@@ -132,25 +89,19 @@ pub fn get_sunrise_calculation_parameters(
     let _sunrise_options = crate::parse_sunrise_options(cmd_matches);
 
     Ok(SunriseCalculationParameters {
-        algorithm: "SPA".to_string(), // Sunrise always uses SPA
-        elevation: 0.0,               // Sunrise uses sea level by default
+        elevation: 0.0,
         delta_t: input
             .global_options
             .deltat
             .as_deref()
             .and_then(|s| {
                 if s.is_empty() {
-                    // --deltat flag without value = use estimate
                     Some(69.0)
                 } else {
-                    // --deltat=value = parse specific value
                     s.parse::<f64>().ok()
                 }
             })
             .unwrap_or(0.0),
-        pressure: 1013.0,       // Default atmospheric pressure
-        temperature: 15.0,      // Default temperature
-        apply_refraction: true, // Sunrise typically includes refraction
         show_twilight,
     })
 }

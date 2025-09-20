@@ -71,3 +71,5 @@ cargo-dist-version = "0.30.0"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+
+unix-archive = ".tar.zst"

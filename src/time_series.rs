@@ -246,11 +246,15 @@ mod tests {
             None,
         );
 
-        let times: Vec<_> = iter.collect();
-        assert_eq!(times.len(), 3);
-        assert_eq!(times[0].time().hour(), 0);
-        assert_eq!(times[1].time().hour(), 1);
-        assert_eq!(times[2].time().hour(), 2);
+        let mut iter = iter;
+        let first = iter.next().unwrap();
+        let second = iter.next().unwrap();
+        let third = iter.next().unwrap();
+        assert!(iter.next().is_none());
+
+        assert_eq!(first.time().hour(), 0);
+        assert_eq!(second.time().hour(), 1);
+        assert_eq!(third.time().hour(), 2);
     }
 
     #[test]
@@ -258,17 +262,24 @@ mod tests {
         let step = TimeStep::default();
         let input = DateTimeInput::PartialYear(2024);
         let iter = expand_datetime_input(&input, &step, None).unwrap();
-        let times: Vec<_> = iter.take(25).collect();
+        let mut iter = iter.take(25);
 
-        assert_eq!(times.len(), 25);
+        let first = iter.next().unwrap();
         assert_eq!(
-            times[0].date_naive(),
+            first.date_naive(),
             NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()
         );
-        assert_eq!(times[0].time().hour(), 0);
-        assert_eq!(times[24].time().hour(), 0);
+        assert_eq!(first.time().hour(), 0);
+
+        let count = iter.count();
+        assert_eq!(count, 24); // 24 more after the first
+
+        // Test the 25th element separately
+        let mut iter = expand_datetime_input(&input, &step, None).unwrap().take(25);
+        let last = iter.nth(24).unwrap();
+        assert_eq!(last.time().hour(), 0);
         assert_eq!(
-            times[24].date_naive(),
+            last.date_naive(),
             NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()
         );
     }

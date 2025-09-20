@@ -1,10 +1,7 @@
 /// Business logic coordination for sunce calculations
 ///
-use crate::calculation::{
-    PositionCalculationEngine, SunriseCalculationEngine, get_calculation_parameters,
-    get_sunrise_calculation_parameters,
-};
-use crate::iterators::create_calculation_iterator;
+use crate::calculation::{get_calculation_parameters, get_sunrise_calculation_parameters};
+use crate::iterators::{create_position_iterator, create_sunrise_iterator};
 use crate::output::output_position_results;
 use crate::parsing::ParsedInput;
 use crate::performance::PerformanceTracker;
@@ -22,12 +19,11 @@ pub fn execute_position_command(
     elevation_angle: bool,
 ) -> Result<(), String> {
     let params = get_calculation_parameters(input, matches)?;
-    let engine = PositionCalculationEngine { params };
 
     let show_perf = matches.get_flag("perf");
     let tracker = PerformanceTracker::create(show_perf);
 
-    let position_iter = create_calculation_iterator(input, matches, &engine)?;
+    let position_iter = create_position_iterator(input, matches, &params)?;
 
     // Convert Result<T, String> iterator to T iterator, handling errors
     let processed_iter = position_iter.map(|result| {
@@ -68,12 +64,11 @@ pub fn execute_sunrise_command(
     show_twilight: bool,
 ) -> Result<(), String> {
     let params = get_sunrise_calculation_parameters(input, matches, show_twilight)?;
-    let engine = SunriseCalculationEngine { params };
 
     let show_perf = matches.get_flag("perf");
     let tracker = PerformanceTracker::create(show_perf);
 
-    let sunrise_iter = create_calculation_iterator(input, matches, &engine)?;
+    let sunrise_iter = create_sunrise_iterator(input, matches, &params)?;
 
     // Convert Result<T, String> iterator to T iterator, handling errors
     let processed_iter = sunrise_iter.map(|result| {
