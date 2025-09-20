@@ -1,6 +1,7 @@
 use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SolarPosition;
+use std::io::{self, BufWriter, Write};
 
 pub struct PositionResult {
     pub datetime: DateTime<FixedOffset>,
@@ -22,97 +23,149 @@ pub fn output_position_results<I>(
 ) where
     I: Iterator<Item = PositionResult>,
 {
-    match format {
-        OutputFormat::Human => output_human_format(results, show_inputs, elevation_angle),
-        OutputFormat::Csv => output_csv_format(results, show_inputs, show_headers, elevation_angle),
-        OutputFormat::Json => output_json_format(results, show_inputs, elevation_angle),
+    let stdout = io::stdout().lock();
+    let mut writer = BufWriter::with_capacity(1024, stdout);
+
+    let result = match format {
+        OutputFormat::Human => {
+            output_human_format(results, &mut writer, show_inputs, elevation_angle)
+        }
+        OutputFormat::Csv => output_csv_format(
+            results,
+            &mut writer,
+            show_inputs,
+            show_headers,
+            elevation_angle,
+        ),
+        OutputFormat::Json => {
+            output_json_format(results, &mut writer, show_inputs, elevation_angle)
+        }
+    };
+
+    if let Err(e) = result {
+        eprintln!("✗ Output error: {}", e);
+        std::process::exit(1);
     }
 }
 
-fn output_human_format<I>(results: I, show_inputs: bool, elevation_angle: bool)
+fn output_human_format<I>(
+    results: I,
+    writer: &mut BufWriter<io::StdoutLock>,
+    show_inputs: bool,
+    elevation_angle: bool,
+) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
 {
     for result in results {
         if show_inputs {
-            println!("latitude   :                     {:.5}°", result.latitude);
-            println!("longitude  :                     {:.5}°", result.longitude);
-            println!(
+            writeln!(
+                writer,
+                "latitude   :                     {:.5}°",
+                result.latitude
+            )?;
+            writeln!(
+                writer,
+                "longitude  :                     {:.5}°",
+                result.longitude
+            )?;
+            writeln!(
+                writer,
                 "elevation  :                        {:.3} m",
                 result.elevation
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "pressure   :                     {:.3} hPa",
                 result.pressure
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "temperature:                       {:.3} °C",
                 result.temperature
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "date/time  : {}",
                 result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "delta T    :                        {:.3} s",
                 result.delta_t
-            );
+            )?;
         }
 
         if elevation_angle {
             if !show_inputs {
-                println!(
+                writeln!(
+                    writer,
                     "date/time      : {}",
                     result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-                );
+                )?;
             }
-            println!(
+            writeln!(
+                writer,
                 "azimuth        :                    {:.5}°",
                 result.position.azimuth()
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "elevation-angle:                     {:.5}°",
                 result.position.elevation_angle()
-            );
+            )?;
         } else {
             if !show_inputs {
-                println!(
+                writeln!(
+                    writer,
                     "date/time: {}",
                     result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-                );
+                )?;
             }
-            println!(
+            writeln!(
+                writer,
                 "azimuth  :                    {:.5}°",
                 result.position.azimuth()
-            );
-            println!(
+            )?;
+            writeln!(
+                writer,
                 "zenith   :                     {:.5}°",
                 result.position.zenith_angle()
-            );
+            )?;
         }
-        println!();
+        writeln!(writer)?;
     }
+    writer.flush()?;
+    Ok(())
 }
 
-fn output_csv_format<I>(results: I, show_inputs: bool, show_headers: bool, elevation_angle: bool)
+fn output_csv_format<I>(
+    results: I,
+    writer: &mut BufWriter<io::StdoutLock>,
+    show_inputs: bool,
+    show_headers: bool,
+    elevation_angle: bool,
+) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
 {
     if show_headers {
         if show_inputs {
             if elevation_angle {
-                println!(
+                writeln!(
+                    writer,
                     "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
-                );
+                )?;
             } else {
-                println!(
+                writeln!(
+                    writer,
                     "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
-                );
+                )?;
             }
         } else if elevation_angle {
-            println!("dateTime,azimuth,elevation-angle");
+            writeln!(writer, "dateTime,azimuth,elevation-angle")?;
         } else {
-            println!("dateTime,azimuth,zenith");
+            writeln!(writer, "dateTime,azimuth,zenith")?;
         }
     }
 
@@ -124,7 +177,8 @@ where
         };
 
         if show_inputs {
-            println!(
+            writeln!(
+                writer,
                 "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}",
                 result.latitude,
                 result.longitude,
@@ -135,19 +189,27 @@ where
                 result.delta_t,
                 result.position.azimuth(),
                 angle_value
-            );
+            )?;
         } else {
-            println!(
+            writeln!(
+                writer,
                 "{},{:.5},{:.5}",
                 format_datetime_solarpos(&result.datetime),
                 result.position.azimuth(),
                 angle_value
-            );
+            )?;
         }
     }
+    writer.flush()?;
+    Ok(())
 }
 
-fn output_json_format<I>(results: I, show_inputs: bool, elevation_angle: bool)
+fn output_json_format<I>(
+    results: I,
+    writer: &mut BufWriter<io::StdoutLock>,
+    show_inputs: bool,
+    elevation_angle: bool,
+) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
 {
@@ -159,7 +221,8 @@ where
         };
 
         if show_inputs {
-            println!(
+            writeln!(
+                writer,
                 r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"pressure":{:.3},"temperature":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,
                 result.latitude,
                 result.longitude,
@@ -171,17 +234,20 @@ where
                 result.position.azimuth(),
                 angle_name,
                 angle_value
-            );
+            )?;
         } else {
-            println!(
+            writeln!(
+                writer,
                 r#"{{"dateTime":"{}","azimuth":{:.5},"{}":{:.5}}}"#,
                 format_datetime_solarpos(&result.datetime),
                 result.position.azimuth(),
                 angle_name,
                 angle_value
-            );
+            )?;
         }
     }
+    writer.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]

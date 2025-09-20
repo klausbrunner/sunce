@@ -91,51 +91,6 @@ pub fn create_coordinate_iterator(coord: &Coordinate) -> Box<dyn Iterator<Item =
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ascending_range() {
-        let mut iter = CoordinateRangeIterator::new(1.0, 3.0, 1.0);
-        assert_eq!(iter.next(), Some(1.0));
-        assert_eq!(iter.next(), Some(2.0));
-        assert_eq!(iter.next(), Some(3.0));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_descending_range() {
-        let mut iter = CoordinateRangeIterator::new(3.0, 1.0, -1.0);
-        assert_eq!(iter.next(), Some(3.0));
-        assert_eq!(iter.next(), Some(2.0));
-        assert_eq!(iter.next(), Some(1.0));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_fractional_step() {
-        let mut iter = CoordinateRangeIterator::new(0.0, 1.0, 0.5);
-        assert_eq!(iter.next(), Some(0.0));
-        assert_eq!(iter.next(), Some(0.5));
-        assert_eq!(iter.next(), Some(1.0));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_coordinate_range_endpoint_inclusion() {
-        let iter = CoordinateRangeIterator::new(10.0, 15.0, 0.1);
-        let count = iter.count();
-        assert_eq!(count, 51); // Should be exactly 51 values: 10.0, 10.1, ..., 15.0
-
-        let mut iter = CoordinateRangeIterator::new(10.0, 15.0, 0.1);
-        assert_eq!(iter.next(), Some(10.0));
-
-        let last = iter.last().unwrap();
-        assert!((last - 15.0).abs() < 1e-10); // Last value should be very close to 15.0
-    }
-}
-
 pub fn create_position_iterator<'a>(
     input: &'a ParsedInput,
     matches: &'a ArgMatches,
@@ -458,5 +413,50 @@ fn create_standard_sunrise_iterator<'a>(
             })
         }))
             as Box<dyn Iterator<Item = SunriseResultData> + 'a>),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ascending_range() {
+        let mut iter = CoordinateRangeIterator::new(1.0, 3.0, 1.0);
+        assert_eq!(iter.next(), Some(1.0));
+        assert_eq!(iter.next(), Some(2.0));
+        assert_eq!(iter.next(), Some(3.0));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_descending_range() {
+        let mut iter = CoordinateRangeIterator::new(3.0, 1.0, -1.0);
+        assert_eq!(iter.next(), Some(3.0));
+        assert_eq!(iter.next(), Some(2.0));
+        assert_eq!(iter.next(), Some(1.0));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_fractional_step() {
+        let mut iter = CoordinateRangeIterator::new(0.0, 1.0, 0.5);
+        assert_eq!(iter.next(), Some(0.0));
+        assert_eq!(iter.next(), Some(0.5));
+        assert_eq!(iter.next(), Some(1.0));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_coordinate_range_endpoint_inclusion() {
+        let iter = CoordinateRangeIterator::new(10.0, 15.0, 0.1);
+        let count = iter.count();
+        assert_eq!(count, 51); // Should be exactly 51 values: 10.0, 10.1, ..., 15.0
+
+        let mut iter = CoordinateRangeIterator::new(10.0, 15.0, 0.1);
+        assert_eq!(iter.next(), Some(10.0));
+
+        let last = iter.last().unwrap();
+        assert!((last - 15.0).abs() < 1e-10); // Last value should be very close to 15.0
     }
 }
