@@ -27,7 +27,7 @@ fn main() {
     let matches = app.get_matches();
 
     if let Err(e) = run_app(&matches) {
-        eprintln!("✗ {}", e);
+        eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }

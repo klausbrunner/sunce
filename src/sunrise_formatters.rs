@@ -3,7 +3,6 @@ use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SunriseResult;
 use std::io::{self, BufWriter, Write};
 
-// Date format constants for human-readable output (solarpos compatibility)
 const DATE_FORMAT: &str = "%Y-%m-%d";
 const TIME_FORMAT: &str = "%H:%M:%S%:z";
 
@@ -44,7 +43,7 @@ pub fn output_sunrise_results<I>(
     );
 
     if let Err(e) = result {
-        eprintln!("✗ Output error: {}", e);
+        eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }

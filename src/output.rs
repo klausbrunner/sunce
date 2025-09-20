@@ -44,7 +44,7 @@ pub fn output_position_results<I>(
     };
 
     if let Err(e) = result {
-        eprintln!("✗ Output error: {}", e);
+        eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }

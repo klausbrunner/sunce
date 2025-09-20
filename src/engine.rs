@@ -28,7 +28,7 @@ pub fn execute_position_command(
     // Convert Result<T, String> iterator to T iterator, handling errors
     let processed_iter = position_iter.map(|result| {
         result.unwrap_or_else(|e| {
-            eprintln!("✗ {}", e);
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         })
     });
@@ -73,7 +73,7 @@ pub fn execute_sunrise_command(
     // Convert Result<T, String> iterator to T iterator, handling errors
     let processed_iter = sunrise_iter.map(|result| {
         result.unwrap_or_else(|e| {
-            eprintln!("✗ {}", e);
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         })
     });

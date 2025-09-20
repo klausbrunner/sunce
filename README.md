@@ -93,11 +93,7 @@ Run `sunce help` or `sunce help <command>` for the full reference.
 
 ## Performance
 
-`sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth. Performance characteristics:
-
-- **Position calculations:** 150K+ calculations per second (SPA algorithm)
-- **Memory usage:** constant regardless of input size
-- **Startup time:** sub-second for simple calculations
+`sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth.
 
 ## Accuracy
 

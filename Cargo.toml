@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.1.4"
+version = "0.1.5-dev"
 edition = "2024"
 rust-version = "1.90"
 description = "High-performance command-line solar position calculator"
@@ -10,7 +10,7 @@ homepage = "https://github.com/klausbrunner/sunce"
 documentation = "https://github.com/klausbrunner/sunce"
 readme = "README.md"
 authors = ["Klaus Brunner <klaus.brunner@gmail.com>"]
-keywords = ["solar", "astronomy", "calculator", "cli"]
+keywords = ["solar", "sun", "astronomy", "sunrise", "sunset"]
 categories = ["command-line-utilities", "science"]
 exclude = [
     "/.github/",
