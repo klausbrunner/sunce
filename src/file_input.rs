@@ -50,25 +50,6 @@ pub fn create_file_reader(file_path: &str) -> Result<FileReader, io::Error> {
     }
 }
 
-fn parse_fields(line: &str, expected_count: usize) -> Result<Vec<&str>, ParseError> {
-    let fields: Vec<&str> = if line.contains(',') {
-        line.split(',').collect()
-    } else {
-        line.split_whitespace().collect()
-    };
-
-    if fields.len() != expected_count {
-        return Err(ParseError::InvalidCoordinate(format!(
-            "Expected {} fields, found {} in: {}",
-            expected_count,
-            fields.len(),
-            line
-        )));
-    }
-
-    Ok(fields)
-}
-
 pub fn parse_coordinate_file_line(line: &str) -> Result<(f64, f64), ParseError> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -77,17 +58,34 @@ pub fn parse_coordinate_file_line(line: &str) -> Result<(f64, f64), ParseError> 
         ));
     }
 
-    let fields = parse_fields(line, 2)?;
+    let mut parts: Box<dyn Iterator<Item = &str>> = if line.contains(',') {
+        Box::new(line.split(','))
+    } else {
+        Box::new(line.split_whitespace())
+    };
 
-    let lat: f64 = fields[0]
+    let lat_str = parts
+        .next()
+        .ok_or_else(|| ParseError::InvalidCoordinate("Missing latitude".to_string()))?;
+    let lon_str = parts
+        .next()
+        .ok_or_else(|| ParseError::InvalidCoordinate("Missing longitude".to_string()))?;
+
+    if parts.next().is_some() {
+        return Err(ParseError::InvalidCoordinate(format!(
+            "Expected 2 fields, found more in: {}",
+            line
+        )));
+    }
+
+    let lat: f64 = lat_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", fields[0])))?;
-
-    let lon: f64 = fields[1]
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", lat_str)))?;
+    let lon: f64 = lon_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", fields[1])))?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
 
     Ok((lat, lon))
 }
@@ -117,21 +115,38 @@ pub fn parse_paired_file_line(
         ));
     }
 
-    let fields = parse_fields(line, 3).map_err(|_| {
-        ParseError::InvalidDateTime(format!("Invalid paired data format: {}", line))
+    let mut parts: Box<dyn Iterator<Item = &str>> = if line.contains(',') {
+        Box::new(line.split(','))
+    } else {
+        Box::new(line.split_whitespace())
+    };
+
+    let lat_str = parts.next().ok_or_else(|| {
+        ParseError::InvalidDateTime("Missing latitude in paired data".to_string())
+    })?;
+    let lon_str = parts.next().ok_or_else(|| {
+        ParseError::InvalidDateTime("Missing longitude in paired data".to_string())
+    })?;
+    let dt_str = parts.next().ok_or_else(|| {
+        ParseError::InvalidDateTime("Missing datetime in paired data".to_string())
     })?;
 
-    let lat: f64 = fields[0]
+    if parts.next().is_some() {
+        return Err(ParseError::InvalidDateTime(format!(
+            "Expected 3 fields, found more in: {}",
+            line
+        )));
+    }
+
+    let lat: f64 = lat_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", fields[0])))?;
-
-    let lon: f64 = fields[1]
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid latitude: {}", lat_str)))?;
+    let lon: f64 = lon_str
         .trim()
         .parse()
-        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", fields[1])))?;
-
-    let datetime = parse_datetime(fields[2].trim(), timezone_override)?;
+        .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
+    let datetime = parse_datetime(dt_str.trim(), timezone_override)?;
 
     Ok((lat, lon, datetime))
 }

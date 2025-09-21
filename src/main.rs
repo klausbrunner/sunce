@@ -1,11 +1,9 @@
 mod calculation;
 mod cli;
-mod coordinate_parser;
-mod datetime_parser;
 mod datetime_utils;
 mod engine;
 mod file_input;
-mod input_parser;
+mod input_parsing;
 mod iterators;
 mod output;
 mod parsing;

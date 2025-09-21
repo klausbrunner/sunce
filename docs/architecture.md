@@ -14,11 +14,11 @@ Sunce supports two primary commands. The position command calculates topocentric
 
 ## Input Processing Pipeline
 
-Input handling is distributed across several specialized modules. The `cli.rs` module defines the command-line interface using clap, while `parsing.rs` provides the high-level parsing coordination. More specialized parsers handle specific input types: `coordinate_parser.rs` processes latitude/longitude values including range syntax, `datetime_parser.rs` handles various datetime formats and partial dates, and `file_input.rs` manages file-based input including stdin support.
+Input handling is distributed across several specialized modules. The `cli.rs` module defines the command-line interface using clap, while `parsing.rs` provides the high-level parsing coordination. The consolidated `input_parsing.rs` module handles all input parsing including coordinate processing (latitude/longitude values with range syntax), datetime parsing (various formats and partial dates), and input type determination. The `file_input.rs` module manages file-based input including stdin support with streaming iterators.
 
 ## Streaming Architecture
 
-The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges.
+The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges. File input parsing uses direct iterator chains without intermediate Vec allocations, maintaining zero-allocation parsing for individual lines.
 
 ## Calculation Layer
 
