@@ -35,8 +35,6 @@ pub enum ParseError {
     InvalidDateTime(String),
     #[error("Invalid timezone: {0}")]
     InvalidTimezone(String),
-    #[error("Coordinate out of bounds: {0} (expected {1})")]
-    CoordinateOutOfBounds(f64, String),
     #[error("Step cannot be zero")]
     ZeroStep,
 }

@@ -291,3 +291,73 @@ fn test_error_handling() {
     // Test invalid algorithm
     invalid_algorithm_test().assert_failure();
 }
+
+/// Test unix timestamp support
+#[test]
+fn test_unix_timestamp_basic() {
+    // Test basic unix timestamp (2020-01-01 00:00:00 UTC)
+    SunceTest::new()
+        .args(&["52.0", "13.4", "1577836800", "position"])
+        .assert_success_contains_all(&["2020-01-01", "00:00:00", "azimuth", "zenith"]);
+}
+
+/// Test unix timestamp with timezone
+#[test]
+fn test_unix_timestamp_with_timezone() {
+    // Test unix timestamp with timezone override
+    SunceTest::new()
+        .args(&[
+            "--timezone=+01:00",
+            "52.0",
+            "13.4",
+            "1577836800",
+            "position",
+        ])
+        .assert_success_contains("2020-01-01 00:00:00+01:00");
+
+    // Test with named timezone
+    SunceTest::new()
+        .args(&[
+            "--timezone=Europe/Berlin",
+            "52.0",
+            "13.4",
+            "1577836800",
+            "position",
+        ])
+        .assert_success_contains("2020-01-01 00:00:00+01:00");
+}
+
+/// Test unix timestamp range validation
+#[test]
+fn test_unix_timestamp_validation() {
+    // Test minimum timestamp (1970-01-01)
+    SunceTest::new()
+        .args(&["52.0", "13.4", "0", "position"])
+        .assert_success_contains("1970-01-01");
+
+    // Test a valid timestamp
+    SunceTest::new()
+        .args(&["52.0", "13.4", "100000000", "position"])
+        .assert_success_contains("1973-03-03");
+
+    // Test out of range timestamp (should be rejected with range error)
+    SunceTest::new()
+        .args(&["52.0", "13.4", "99999999999", "position"])
+        .assert_failure();
+}
+
+/// Test unix timestamp in files
+#[test]
+fn test_unix_timestamp_in_files() {
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    // Create temporary file with unix timestamp
+    let file = NamedTempFile::new().unwrap();
+    fs::write(&file, "52.0 13.4 1577836800\n").unwrap();
+
+    // Test paired file with unix timestamp
+    SunceTest::new()
+        .args(&[&format!("@{}", file.path().display()), "position"])
+        .assert_success_contains_all(&["2020-01-01", "52.00000", "13.40000"]);
+}

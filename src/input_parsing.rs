@@ -70,7 +70,10 @@ fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
     };
 
     if value < min || value > max {
-        Err(ParseError::CoordinateOutOfBounds(value, name.to_string()))
+        Err(ParseError::InvalidCoordinate(format!(
+            "{} out of {}: {}",
+            coord_type, name, value
+        )))
     } else {
         Ok(())
     }
@@ -86,6 +89,10 @@ pub fn parse_datetime(
 ) -> Result<DateTimeInput, ParseError> {
     if input == "now" {
         return Ok(DateTimeInput::Now);
+    }
+
+    if is_unix_timestamp(input) {
+        return parse_unix_timestamp(input, timezone_override);
     }
 
     if is_partial_date(input) {
@@ -219,6 +226,58 @@ fn validate_day(year: i32, month: u32, day: u32) -> Result<(), ParseError> {
     } else {
         Ok(())
     }
+}
+
+fn is_unix_timestamp(input: &str) -> bool {
+    // Check if input contains only digits
+    if input.is_empty() || !input.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    // 4-digit numbers are more likely to be years than unix timestamps
+    // Let partial date parsing handle those
+    if input.len() == 4 {
+        return false;
+    }
+
+    true
+}
+
+fn parse_unix_timestamp(
+    input: &str,
+    timezone_override: Option<&str>,
+) -> Result<DateTimeInput, ParseError> {
+    let timestamp: i64 = input
+        .parse()
+        .map_err(|_| ParseError::InvalidDateTime(format!("Invalid unix timestamp: {}", input)))?;
+
+    // Range check: 1970-01-01 00:00:00 UTC (0) to 2300-01-01 00:00:00 UTC (~10.4B)
+    const MIN_TIMESTAMP: i64 = 0;
+    const MAX_TIMESTAMP: i64 = 10_413_792_000; // 2300-01-01 00:00:00 UTC
+
+    if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&timestamp) {
+        return Err(ParseError::InvalidDateTime(format!(
+            "Unix timestamp {} out of range (1970-2300)",
+            timestamp
+        )));
+    }
+
+    use chrono::DateTime;
+
+    let utc_dt = DateTime::from_timestamp(timestamp, 0).ok_or_else(|| {
+        ParseError::InvalidDateTime(format!("Invalid unix timestamp: {}", timestamp))
+    })?;
+
+    // Convert to fixed offset - default to UTC unless timezone override provided
+    let dt_with_tz = if let Some(tz_str) = timezone_override {
+        let naive = utc_dt.naive_utc();
+        apply_timezone_to_datetime(naive, Some(tz_str))
+            .map_err(|e| ParseError::InvalidTimezone(e.to_string()))?
+    } else {
+        utc_dt.fixed_offset()
+    };
+
+    Ok(DateTimeInput::Single(dt_with_tz))
 }
 
 use crate::types::{GlobalOptions, InputType, ParsedInput, PositionOptions, SunriseOptions};
@@ -470,5 +529,168 @@ pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
 
     if should_auto_enable {
         input.global_options.show_inputs = Some(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::DateTimeInput;
+
+    #[test]
+    fn test_unix_timestamp_detection() {
+        // Should detect pure numeric strings as unix timestamps
+        assert!(is_unix_timestamp("1577836800")); // 2020-01-01 00:00:00 UTC
+        assert!(is_unix_timestamp("0")); // Minimum
+        assert!(is_unix_timestamp("123")); // Short number
+        assert!(is_unix_timestamp("9999999999")); // Long number
+
+        // Should not detect 4-digit numbers (likely years)
+        assert!(!is_unix_timestamp("2024")); // 4-digit year
+
+        // Should not detect other formats
+        assert!(!is_unix_timestamp("1577836800.5")); // Decimal
+        assert!(!is_unix_timestamp("2024-01-01")); // Date format
+        assert!(!is_unix_timestamp("now")); // String
+        assert!(!is_unix_timestamp("")); // Empty
+        assert!(!is_unix_timestamp("abc123")); // Non-numeric
+        assert!(!is_unix_timestamp("123abc")); // Mixed
+        assert!(!is_unix_timestamp("-123")); // Negative sign
+        assert!(!is_unix_timestamp("+123")); // Positive sign
+    }
+
+    #[test]
+    fn test_unix_timestamp_parsing_utc() {
+        // Test basic UTC parsing
+        let result = parse_unix_timestamp("1577836800", None).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "2020-01-01 00:00:00"
+                );
+                assert_eq!(dt.offset().local_minus_utc(), 0); // UTC offset
+            }
+            _ => panic!("Expected Single datetime"),
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamp_parsing_with_timezone() {
+        // Test with offset timezone
+        let result = parse_unix_timestamp("1577836800", Some("+01:00")).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "2020-01-01 00:00:00"
+                );
+                assert_eq!(dt.offset().local_minus_utc(), 3600); // +1 hour in seconds
+            }
+            _ => panic!("Expected Single datetime"),
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamp_range_validation() {
+        // Test minimum (1970-01-01)
+        assert!(parse_unix_timestamp("0", None).is_ok());
+
+        // Test maximum (2300-01-01)
+        assert!(parse_unix_timestamp("10413792000", None).is_ok());
+
+        // Test out of range (too large)
+        let result = parse_unix_timestamp("10413792001", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("out of range"));
+
+        // Test negative (would be out of range but parsing fails first)
+        let result = parse_unix_timestamp("-1", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unix_timestamp_invalid_format() {
+        // Test non-numeric
+        let result = parse_unix_timestamp("abc", None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid unix timestamp")
+        );
+
+        // Test empty
+        let result = parse_unix_timestamp("", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_datetime_unix_timestamp_integration() {
+        // Test that parse_datetime correctly routes to unix timestamp parsing
+        let result = parse_datetime("1577836800", None).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(dt.format("%Y-%m-%d").to_string(), "2020-01-01");
+            }
+            _ => panic!("Expected Single datetime"),
+        }
+
+        // Test that regular datetime parsing still works
+        let result = parse_datetime("2020-01-01T00:00:00", None).unwrap();
+        match result {
+            DateTimeInput::Single(_) => {} // Success
+            _ => panic!("Expected Single datetime"),
+        }
+
+        // Test that partial dates still work
+        let result = parse_datetime("2024", None).unwrap();
+        match result {
+            DateTimeInput::PartialYear(2024) => {} // Success
+            _ => panic!("Expected PartialYear"),
+        }
+    }
+
+    #[test]
+    fn test_coordinate_parsing() {
+        // Test single coordinate
+        let result = parse_coordinate("52.5", "latitude").unwrap();
+        match result {
+            Coordinate::Single(val) => assert!((val - 52.5).abs() < f64::EPSILON),
+            _ => panic!("Expected Single coordinate"),
+        }
+
+        // Test coordinate range
+        let result = parse_coordinate("52:53:0.5", "latitude").unwrap();
+        match result {
+            Coordinate::Range { start, end, step } => {
+                assert!((start - 52.0).abs() < f64::EPSILON);
+                assert!((end - 53.0).abs() < f64::EPSILON);
+                assert!((step - 0.5).abs() < f64::EPSILON);
+            }
+            _ => panic!("Expected Range coordinate"),
+        }
+    }
+
+    #[test]
+    fn test_coordinate_validation() {
+        // Test valid latitude
+        assert!(parse_coordinate("45.0", "latitude").is_ok());
+        assert!(parse_coordinate("-90.0", "latitude").is_ok());
+        assert!(parse_coordinate("90.0", "latitude").is_ok());
+
+        // Test invalid latitude
+        assert!(parse_coordinate("91.0", "latitude").is_err());
+        assert!(parse_coordinate("-91.0", "latitude").is_err());
+
+        // Test valid longitude
+        assert!(parse_coordinate("0.0", "longitude").is_ok());
+        assert!(parse_coordinate("-180.0", "longitude").is_ok());
+        assert!(parse_coordinate("180.0", "longitude").is_ok());
+
+        // Test invalid longitude
+        assert!(parse_coordinate("181.0", "longitude").is_err());
+        assert!(parse_coordinate("-181.0", "longitude").is_err());
     }
 }

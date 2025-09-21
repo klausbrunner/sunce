@@ -35,11 +35,12 @@ pub fn build_cli() -> Command {
             .index(2))
         .arg(Arg::new("dateTime")
             .help(concat!(
-                "Date/time: ISO format, partial dates, or file\n",
+                "Date/time: ISO format, partial dates, unix timestamps, or file\n",
                 "  2024-01-01           specific date (midnight)\n",
                 "  2024-01-01T12:00:00  specific date and time\n",
                 "  2024                 entire year (with --step)\n",
                 "  now                  current date and time\n",
+                "  1577836800           unix timestamp (seconds since 1970, UTC)\n",
                 "  @times.txt           file with times (or @- for stdin)\n",
                 "                       (files require explicit dates like 2024-01-15)"
             ))

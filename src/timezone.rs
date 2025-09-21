@@ -142,19 +142,54 @@ fn parse_named_timezone(tz_str: &str) -> Result<Tz, ParseError> {
     }
 }
 
-/// Legacy helper for time series module
+/// Parse timezone to fixed offset (unified handling for all timezone formats)
 pub fn parse_timezone_to_offset(tz_str: &str) -> Result<FixedOffset, ParseError> {
+    // Try offset format first (most common)
     if let Ok(offset) = parse_offset(tz_str) {
         return Ok(offset);
     }
 
+    // Handle UTC/GMT as special cases
     match tz_str {
-        "UTC" | "GMT" => Ok(FixedOffset::east_opt(0).unwrap()),
-        _ => Err(ParseError::InvalidTimezone(format!(
-            "Unsupported timezone for time series: {}. Use offset format like +01:00",
-            tz_str
-        ))),
+        "UTC" | "GMT" => return Ok(FixedOffset::east_opt(0).unwrap()),
+        _ => {}
     }
+
+    // Try named timezone - for time series we need a fixed offset
+    // Use a reference date (2024-01-01 12:00 UTC) to get the offset
+    if let Ok(tz) = parse_named_timezone(tz_str) {
+        use chrono::{NaiveDate, NaiveTime};
+        let ref_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let ref_time = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let ref_naive = ref_date.and_time(ref_time);
+
+        match tz.from_local_datetime(&ref_naive) {
+            chrono::LocalResult::Single(dt) => {
+                return Ok(*dt.fixed_offset().offset());
+            }
+            chrono::LocalResult::Ambiguous(dt1, _) => {
+                return Ok(*dt1.fixed_offset().offset());
+            }
+            chrono::LocalResult::None => {
+                // DST transition - try an hour later
+                let adjusted = ref_naive + chrono::Duration::try_hours(1).unwrap();
+                match tz.from_local_datetime(&adjusted) {
+                    chrono::LocalResult::Single(dt) => {
+                        return Ok(*dt.fixed_offset().offset());
+                    }
+                    chrono::LocalResult::Ambiguous(dt1, _) => {
+                        return Ok(*dt1.fixed_offset().offset());
+                    }
+                    chrono::LocalResult::None => {}
+                }
+            }
+        }
+    }
+
+    Err(ParseError::InvalidTimezone(format!(
+        "Unsupported timezone: {}. Use format like +01:00, UTC, or Europe/Berlin",
+        tz_str
+    )))
 }
 
 #[cfg(test)]
