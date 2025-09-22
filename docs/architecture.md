@@ -2,7 +2,7 @@
 
 Sunce is a high-performance command-line solar position calculator written in Rust. The application provides two primary commands for calculating solar coordinates and sunrise/sunset times, built around a streaming architecture that maintains constant memory usage regardless of input size.
 
-Sunce aims to be a drop-in replacement for the original Java project, `solarpos`. It's based on a similar architecture though adapted to Rust.
+Sunce provides almost-feature-parity with the original Java project, `solarpos`, while adding several enhancements like unix timestamp support and optimized coordinate range processing. It's based on a similar architecture though adapted to Rust's strengths.
 
 ## Core Architecture
 
@@ -14,11 +14,11 @@ Sunce supports two primary commands. The position command calculates topocentric
 
 ## Input Processing Pipeline
 
-Input handling is distributed across several specialized modules. The `cli.rs` module defines the command-line interface using clap, while `parsing.rs` provides the high-level parsing coordination. The consolidated `input_parsing.rs` module handles all input parsing including coordinate processing (latitude/longitude values with range syntax), datetime parsing (various formats and partial dates), and input type determination. The `file_input.rs` module manages file-based input including stdin support with streaming iterators.
+Input handling is distributed across several specialized modules. The `cli.rs` module defines the command-line interface using clap, while `parsing.rs` provides the high-level parsing coordination. The consolidated `input_parsing.rs` module handles all input parsing including coordinate processing (latitude/longitude values with range syntax), datetime parsing (various formats, partial dates, and unix timestamps), and input type determination. The `file_input.rs` module manages file-based input including stdin support with streaming iterators.
 
 ## Streaming Architecture
 
-The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges. File input parsing uses direct iterator chains without intermediate Vec allocations, maintaining zero-allocation parsing for individual lines.
+The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results, including optimized coordinate range processing with split-mode calculations for geographic sweeps. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges. File input parsing uses direct iterator chains without intermediate Vec allocations, maintaining zero-allocation parsing for individual lines.
 
 ## Calculation Layer
 
@@ -42,4 +42,4 @@ Input processing begins with command-line argument parsing in `cli.rs`, followed
 
 The entire pipeline maintains streaming semantics, ensuring that the first result appears immediately and memory usage remains constant regardless of input size. This architecture enables the application to process infinite coordinate ranges or endless time series without memory growth.
 
-In the Java project, parallel processing is very simply enabled using Java's built-in `parallel()`, which automatically handles chunking, ordering, efficient work-stealing etc. with auto-sized thread pools. In Rust, it seems that this requires a bit more complexity and a library like Rayon. This is still an open point to be investigated.
+The architecture prioritizes streaming and memory efficiency over parallel processing. While the Java project supports simple parallel processing through `parallel()`, the Rust implementation focuses on single-threaded streaming performance and optimized algorithms for maximum throughput.

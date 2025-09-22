@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.1.5-dev"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.90"
 description = "High-performance command-line solar position calculator"
@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 iana-time-zone = "0.1"
 thiserror = "1.0"
-solar-positioning = "0.3.1"
+solar-positioning = "0.3.2"
 
 [dev-dependencies]
 assert_cmd = "2.0"
