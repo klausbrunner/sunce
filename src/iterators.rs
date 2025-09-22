@@ -1,6 +1,6 @@
 use crate::calculation::{
-    CalculationParameters, SunriseCalculationParameters, calculate_single_position,
-    calculate_single_sunrise,
+    CalculationParameters, CoordinateSweepCalculator, SunriseCalculationParameters,
+    calculate_single_position, calculate_single_sunrise,
 };
 use crate::datetime_utils::datetime_input_to_single;
 use crate::file_input::{
@@ -11,8 +11,25 @@ use crate::parsing::{Coordinate, InputType, ParsedInput};
 use crate::sunrise_output::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
 use crate::timezone::parse_timezone_to_offset;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Utc};
 use clap::ArgMatches;
+use solar_positioning::RefractionCorrection;
+
+/// Create a RefractionCorrection object from parameters, failing on invalid input
+fn create_refraction_correction(
+    pressure: f64,
+    temperature: f64,
+    apply: bool,
+) -> Option<RefractionCorrection> {
+    if apply {
+        Some(RefractionCorrection::new(pressure, temperature)
+            .expect("Invalid atmospheric parameters: pressure must be 1-2000 hPa, temperature must be -273.15 to 100°C"))
+    } else {
+        None
+    }
+}
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Streaming iterator for coordinate ranges (no Vec collection)
 pub struct CoordinateRangeIterator {
@@ -200,8 +217,13 @@ fn create_coordinate_file_position_iterator<'a>(
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
     let coord_iter = CoordinateFileIterator::new(reader);
 
+    // Use optimized calculator for coordinate sweeps
+    let calculator = Rc::new(RefCell::new(CoordinateSweepCalculator::new(params.clone())));
+
     Ok(coord_iter.map(move |coord_result| match coord_result {
-        Ok((lat, lon)) => Ok(calculate_single_position(datetime, lat, lon, params)),
+        Ok((lat, lon)) => Ok(calculator
+            .borrow_mut()
+            .calculate_position(datetime, lat, lon)),
         Err(e) => Err(format!("Error reading coordinate data: {}", e)),
     }))
 }
@@ -352,13 +374,54 @@ fn create_standard_position_iterator<'a>(
             datetime_iter.map(move |dt| calculate_single_position(dt, *lat_val, *lon_val, params)),
         )
             as Box<dyn Iterator<Item = PositionResult> + 'a>),
-        _ => Ok(Box::new(datetime_iter.flat_map(move |dt| {
-            let lat_iter = create_coordinate_iterator(lat);
-            lat_iter.flat_map(move |lat_val| {
-                let lon_iter = create_coordinate_iterator(lon);
-                lon_iter.map(move |lon_val| calculate_single_position(dt, lat_val, lon_val, params))
-            })
-        })) as Box<dyn Iterator<Item = PositionResult> + 'a>),
+        _ => {
+            // Check if this is a pure coordinate sweep by peeking at the datetime iterator
+            let mut datetime_iter = datetime_iter.peekable();
+            let first_datetime = datetime_iter.next();
+            let is_single_datetime = datetime_iter.peek().is_none();
+
+            if let Some(single_datetime) = first_datetime {
+                if is_single_datetime && params.algorithm.to_uppercase() == "SPA" {
+                    // Pure coordinate sweep optimization using time-dependent parts caching
+                    let utc_datetime = single_datetime.with_timezone(&chrono::Utc);
+
+                    // Create optimized iterator using direct SPA optimization APIs
+                    Ok(Box::new(CoordinateSweepOptimizedIterator::new(
+                        lat,
+                        lon,
+                        single_datetime,
+                        utc_datetime,
+                        params.clone(),
+                    ))
+                        as Box<dyn Iterator<Item = PositionResult> + 'a>)
+                } else {
+                    // General case with time-based caching
+                    let calculator =
+                        Rc::new(RefCell::new(CoordinateSweepCalculator::new(params.clone())));
+
+                    // Reconstruct datetime iterator from consumed elements
+                    let datetime_iter = std::iter::once(single_datetime).chain(datetime_iter);
+
+                    Ok(Box::new(datetime_iter.flat_map(move |dt| {
+                        let calculator = calculator.clone();
+                        let lat_iter = create_coordinate_iterator(lat);
+                        lat_iter.flat_map(move |lat_val| {
+                            let calculator = calculator.clone();
+                            let lon_iter = create_coordinate_iterator(lon);
+                            lon_iter.map(move |lon_val| {
+                                calculator
+                                    .borrow_mut()
+                                    .calculate_position(dt, lat_val, lon_val)
+                            })
+                        })
+                    }))
+                        as Box<dyn Iterator<Item = PositionResult> + 'a>)
+                }
+            } else {
+                // Empty datetime iterator
+                Ok(Box::new(std::iter::empty()) as Box<dyn Iterator<Item = PositionResult> + 'a>)
+            }
+        }
     }
 }
 
@@ -416,6 +479,159 @@ fn create_standard_sunrise_iterator<'a>(
     }
 }
 
+/// Optimized iterator for coordinate sweeps using direct SPA time-dependent parts caching
+pub struct CoordinateSweepOptimizedIterator {
+    // Direct coordinate ranges to avoid boxing
+    lat_end: f64,
+    lat_step: f64,
+    lon_start: f64,
+    lon_end: f64,
+    lon_step: f64,
+    // Current state
+    current_lat: f64,
+    current_lon: f64,
+    lat_finished: bool,
+    first_iteration: bool,
+    // Cached values to avoid cloning
+    time_parts: solar_positioning::spa::SpaTimeDependent,
+    datetime: DateTime<FixedOffset>,
+    utc_datetime: DateTime<Utc>,
+    elevation: f64,
+    delta_t: f64,
+    refraction: Option<RefractionCorrection>,
+}
+
+impl CoordinateSweepOptimizedIterator {
+    pub fn new(
+        lat: &Coordinate,
+        lon: &Coordinate,
+        datetime: DateTime<FixedOffset>,
+        utc_datetime: DateTime<Utc>,
+        params: CalculationParameters,
+    ) -> Self {
+        // Pre-compute time-dependent parts once for coordinate sweep optimization
+        let time_parts =
+            solar_positioning::spa::spa_time_dependent_parts(utc_datetime, params.delta_t)
+                .expect("Time-dependent parts calculation should not fail");
+
+        // Extract ranges directly to avoid iterator overhead
+        let (lat_start, lat_end, lat_step) = match lat {
+            Coordinate::Range { start, end, step } => (*start, *end, *step),
+            Coordinate::Single(val) => (*val, *val, 1.0),
+        };
+
+        let (lon_start, lon_end, lon_step) = match lon {
+            Coordinate::Range { start, end, step } => (*start, *end, *step),
+            Coordinate::Single(val) => (*val, *val, 1.0),
+        };
+
+        let refraction = create_refraction_correction(
+            params.pressure,
+            params.temperature,
+            params.apply_refraction,
+        );
+
+        Self {
+            lat_end,
+            lat_step,
+            lon_start,
+            lon_end,
+            lon_step,
+            current_lat: lat_start,
+            current_lon: lon_start,
+            lat_finished: false,
+            first_iteration: true,
+            time_parts,
+            datetime,
+            utc_datetime,
+            elevation: params.elevation,
+            delta_t: params.delta_t,
+            refraction,
+        }
+    }
+}
+
+impl Iterator for CoordinateSweepOptimizedIterator {
+    type Item = PositionResult;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.lat_finished {
+            return None;
+        }
+
+        // Handle first iteration
+        if self.first_iteration {
+            self.first_iteration = false;
+        } else {
+            // Advance to next coordinate
+            self.advance_coordinates();
+            if self.lat_finished {
+                return None;
+            }
+        }
+
+        // Direct SPA calculation with minimal overhead
+        let solar_position = solar_positioning::spa::spa_with_time_dependent_parts(
+            self.utc_datetime,
+            self.current_lat,
+            self.current_lon,
+            self.elevation,
+            self.delta_t,
+            self.refraction,
+            &self.time_parts,
+        )
+        .unwrap();
+
+        // Extract pressure and temperature for PositionResult
+        let (pressure, temperature, apply_refraction) =
+            if let Some(ref refraction) = self.refraction {
+                (refraction.pressure(), refraction.temperature(), true)
+            } else {
+                (f64::NAN, f64::NAN, false)
+            };
+
+        // Optimize PositionResult construction - reorder fields for better cache behavior
+        Some(PositionResult {
+            position: solar_position,
+            latitude: self.current_lat,
+            longitude: self.current_lon,
+            datetime: self.datetime,
+            elevation: self.elevation,
+            pressure,
+            temperature,
+            delta_t: self.delta_t,
+            apply_refraction,
+        })
+    }
+}
+
+impl CoordinateSweepOptimizedIterator {
+    #[inline(always)]
+    fn advance_coordinates(&mut self) {
+        // Advance longitude first - optimized for the common case
+        self.current_lon += self.lon_step;
+
+        // Fast check without epsilon for performance (most coordinate steps are clean)
+        if (self.lon_step > 0.0 && self.current_lon > self.lon_end)
+            || (self.lon_step < 0.0 && self.current_lon < self.lon_end)
+        {
+            // Longitude finished, advance latitude and reset longitude
+            self.current_lat += self.lat_step;
+
+            // Check if latitude is finished
+            if (self.lat_step > 0.0 && self.current_lat > self.lat_end)
+                || (self.lat_step < 0.0 && self.current_lat < self.lat_end)
+            {
+                self.lat_finished = true;
+                return;
+            }
+
+            // Reset longitude
+            self.current_lon = self.lon_start;
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

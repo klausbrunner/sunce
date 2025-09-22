@@ -2,7 +2,22 @@ use crate::output::PositionResult;
 use crate::sunrise_output::SunriseResultData;
 use chrono::Utc;
 use clap::ArgMatches;
-use solar_positioning::{grena3, spa};
+use solar_positioning::{RefractionCorrection, grena3, spa};
+use std::collections::HashMap;
+
+/// Create a RefractionCorrection object from parameters, failing on invalid input
+fn create_refraction_correction(
+    pressure: f64,
+    temperature: f64,
+    apply: bool,
+) -> Option<RefractionCorrection> {
+    if apply {
+        Some(RefractionCorrection::new(pressure, temperature)
+            .expect("Invalid atmospheric parameters: pressure must be 1-2000 hPa, temperature must be -273.15 to 100°C"))
+    } else {
+        None
+    }
+}
 
 #[derive(Clone)]
 pub struct CalculationParameters {
@@ -118,39 +133,27 @@ pub fn calculate_single_position(
 
     let solar_position = match params.algorithm.to_uppercase().as_str() {
         "GRENA3" => {
-            if params.apply_refraction {
-                grena3::solar_position_with_refraction(
-                    utc_datetime,
-                    lat,
-                    lon,
-                    params.delta_t,
-                    Some(params.pressure),
-                    Some(params.temperature),
-                )
-            } else {
-                grena3::solar_position(utc_datetime, lat, lon, params.delta_t)
-            }
+            let refraction = create_refraction_correction(
+                params.pressure,
+                params.temperature,
+                params.apply_refraction,
+            );
+            grena3::solar_position(utc_datetime, lat, lon, params.delta_t, refraction)
         }
         "SPA" => {
-            if params.apply_refraction {
-                spa::solar_position(
-                    utc_datetime,
-                    lat,
-                    lon,
-                    params.elevation,
-                    params.delta_t,
-                    params.pressure,
-                    params.temperature,
-                )
-            } else {
-                spa::solar_position_no_refraction(
-                    utc_datetime,
-                    lat,
-                    lon,
-                    params.elevation,
-                    params.delta_t,
-                )
-            }
+            let refraction = create_refraction_correction(
+                params.pressure,
+                params.temperature,
+                params.apply_refraction,
+            );
+            spa::solar_position(
+                utc_datetime,
+                lat,
+                lon,
+                params.elevation,
+                params.delta_t,
+                refraction,
+            )
         }
         _ => panic!("Unknown algorithm: {}", params.algorithm),
     }
@@ -238,5 +241,78 @@ pub fn calculate_single_sunrise(
         delta_t,
         sunrise_result,
         twilight_results,
+    }
+}
+
+/// Optimized calculation for coordinate sweeps with time-based caching
+pub struct CoordinateSweepCalculator {
+    params: CalculationParameters,
+    time_cache: HashMap<chrono::DateTime<chrono::Utc>, spa::SpaTimeDependent>,
+}
+
+impl CoordinateSweepCalculator {
+    pub fn new(params: CalculationParameters) -> Self {
+        Self {
+            params,
+            time_cache: HashMap::new(),
+        }
+    }
+
+    pub fn calculate_position(
+        &mut self,
+        datetime: chrono::DateTime<chrono::FixedOffset>,
+        lat: f64,
+        lon: f64,
+    ) -> PositionResult {
+        // Convert to UTC for cache key
+        let utc_datetime = datetime.with_timezone(&Utc);
+
+        // Only use caching for SPA algorithm (GRENA3 doesn't benefit as much)
+        if self.params.algorithm.to_uppercase() == "SPA" {
+            // Get or compute time-dependent parts (cache grows as needed for large sweeps)
+            let time_parts = self.time_cache.entry(utc_datetime).or_insert_with(|| {
+                // Fallback to simpler calculation if time-dependent parts fail
+                spa::spa_time_dependent_parts(utc_datetime, self.params.delta_t).unwrap_or_else(
+                    |_| {
+                        // This should never happen with valid inputs, but handle gracefully
+                        spa::spa_time_dependent_parts(utc_datetime, 69.0)
+                            .expect("Fallback time-dependent parts should work")
+                    },
+                )
+            });
+
+            // Calculate position using cached time parts
+            let refraction = create_refraction_correction(
+                self.params.pressure,
+                self.params.temperature,
+                self.params.apply_refraction,
+            );
+
+            let solar_position = spa::spa_with_time_dependent_parts(
+                utc_datetime,
+                lat,
+                lon,
+                self.params.elevation,
+                self.params.delta_t,
+                refraction,
+                time_parts,
+            )
+            .expect("Solar calculation should not fail with validated inputs");
+
+            PositionResult {
+                datetime,
+                position: solar_position,
+                latitude: lat,
+                longitude: lon,
+                elevation: self.params.elevation,
+                pressure: self.params.pressure,
+                temperature: self.params.temperature,
+                delta_t: self.params.delta_t,
+                apply_refraction: self.params.apply_refraction,
+            }
+        } else {
+            // Fall back to regular calculation for GRENA3
+            calculate_single_position(datetime, lat, lon, &self.params)
+        }
     }
 }

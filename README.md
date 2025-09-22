@@ -2,7 +2,9 @@
 
 `sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, and streaming, and produces machine-friendly output (CSV or JSON Lines) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
-This project aims to be a drop-in replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos) tool while benefiting from Rust's performance and distribution advantages.
+## Status
+
+This project aims to be a drop-in replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos) tool while benefiting from Rust's performance and distribution advantages. While the core functionality is stable and extensively tested with compatibility validation against solarpos, the tool hasn't seen much user testing yet.
 
 ## Use cases
 
@@ -94,14 +96,6 @@ Run `sunce help` or `sunce help <command>` for the full reference.
 ## Performance
 
 `sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth.
-
-## Accuracy
-
-Calculations use the NREL Solar Position Algorithm (SPA) by default for maximum accuracy, with the faster Grena3 algorithm available as an option. The implementation achieves numerical agreement with the reference Java [solarpos](https://github.com/klausbrunner/solarpos) tool.
-
-## Status
-
-Core functionality is stable and extensively tested with compatibility validation against solarpos.
 
 ## License
 

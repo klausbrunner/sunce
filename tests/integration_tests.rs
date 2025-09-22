@@ -297,7 +297,7 @@ fn test_error_handling() {
 fn test_unix_timestamp_basic() {
     // Test basic unix timestamp (2020-01-01 00:00:00 UTC)
     SunceTest::new()
-        .args(&["52.0", "13.4", "1577836800", "position"])
+        .args(["52.0", "13.4", "1577836800", "position"])
         .assert_success_contains_all(&["2020-01-01", "00:00:00", "azimuth", "zenith"]);
 }
 
@@ -306,7 +306,7 @@ fn test_unix_timestamp_basic() {
 fn test_unix_timestamp_with_timezone() {
     // Test unix timestamp with timezone override
     SunceTest::new()
-        .args(&[
+        .args([
             "--timezone=+01:00",
             "52.0",
             "13.4",
@@ -317,7 +317,7 @@ fn test_unix_timestamp_with_timezone() {
 
     // Test with named timezone
     SunceTest::new()
-        .args(&[
+        .args([
             "--timezone=Europe/Berlin",
             "52.0",
             "13.4",
@@ -332,17 +332,17 @@ fn test_unix_timestamp_with_timezone() {
 fn test_unix_timestamp_validation() {
     // Test minimum timestamp (1970-01-01)
     SunceTest::new()
-        .args(&["52.0", "13.4", "0", "position"])
+        .args(["52.0", "13.4", "0", "position"])
         .assert_success_contains("1970-01-01");
 
     // Test a valid timestamp
     SunceTest::new()
-        .args(&["52.0", "13.4", "100000000", "position"])
+        .args(["52.0", "13.4", "100000000", "position"])
         .assert_success_contains("1973-03-03");
 
     // Test out of range timestamp (should be rejected with range error)
     SunceTest::new()
-        .args(&["52.0", "13.4", "99999999999", "position"])
+        .args(["52.0", "13.4", "99999999999", "position"])
         .assert_failure();
 }
 
@@ -358,6 +358,6 @@ fn test_unix_timestamp_in_files() {
 
     // Test paired file with unix timestamp
     SunceTest::new()
-        .args(&[&format!("@{}", file.path().display()), "position"])
+        .args([&format!("@{}", file.path().display()), "position"])
         .assert_success_contains_all(&["2020-01-01", "52.00000", "13.40000"]);
 }
