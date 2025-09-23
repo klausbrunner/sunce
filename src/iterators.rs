@@ -11,7 +11,7 @@ use crate::parsing::{Coordinate, InputType, ParsedInput};
 use crate::sunrise_output::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
 use crate::timezone::parse_timezone_to_offset;
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset};
 use clap::ArgMatches;
 use solar_positioning::RefractionCorrection;
 
@@ -383,14 +383,11 @@ fn create_standard_position_iterator<'a>(
             if let Some(single_datetime) = first_datetime {
                 if is_single_datetime && params.algorithm.to_uppercase() == "SPA" {
                     // Pure coordinate sweep optimization using time-dependent parts caching
-                    let utc_datetime = single_datetime.with_timezone(&chrono::Utc);
-
                     // Create optimized iterator using direct SPA optimization APIs
                     Ok(Box::new(CoordinateSweepOptimizedIterator::new(
                         lat,
                         lon,
                         single_datetime,
-                        utc_datetime,
                         params.clone(),
                     ))
                         as Box<dyn Iterator<Item = PositionResult> + 'a>)
@@ -495,7 +492,6 @@ pub struct CoordinateSweepOptimizedIterator {
     // Cached values to avoid cloning
     time_parts: solar_positioning::spa::SpaTimeDependent,
     datetime: DateTime<FixedOffset>,
-    utc_datetime: DateTime<Utc>,
     elevation: f64,
     delta_t: f64,
     refraction: Option<RefractionCorrection>,
@@ -506,13 +502,11 @@ impl CoordinateSweepOptimizedIterator {
         lat: &Coordinate,
         lon: &Coordinate,
         datetime: DateTime<FixedOffset>,
-        utc_datetime: DateTime<Utc>,
         params: CalculationParameters,
     ) -> Self {
         // Pre-compute time-dependent parts once for coordinate sweep optimization
-        let time_parts =
-            solar_positioning::spa::spa_time_dependent_parts(utc_datetime, params.delta_t)
-                .expect("Time-dependent parts calculation should not fail");
+        let time_parts = solar_positioning::spa::spa_time_dependent_parts(datetime, params.delta_t)
+            .expect("Time-dependent parts calculation should not fail");
 
         // Extract ranges directly to avoid iterator overhead
         let (lat_start, lat_end, lat_step) = match lat {
@@ -543,7 +537,6 @@ impl CoordinateSweepOptimizedIterator {
             first_iteration: true,
             time_parts,
             datetime,
-            utc_datetime,
             elevation: params.elevation,
             delta_t: params.delta_t,
             refraction,
@@ -554,7 +547,7 @@ impl CoordinateSweepOptimizedIterator {
 impl Iterator for CoordinateSweepOptimizedIterator {
     type Item = PositionResult;
 
-    #[inline]
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.lat_finished {
             return None;
@@ -573,11 +566,9 @@ impl Iterator for CoordinateSweepOptimizedIterator {
 
         // Direct SPA calculation with minimal overhead
         let solar_position = solar_positioning::spa::spa_with_time_dependent_parts(
-            self.utc_datetime,
             self.current_lat,
             self.current_lon,
             self.elevation,
-            self.delta_t,
             self.refraction,
             &self.time_parts,
         )

@@ -289,11 +289,9 @@ impl CoordinateSweepCalculator {
             );
 
             let solar_position = spa::spa_with_time_dependent_parts(
-                utc_datetime,
                 lat,
                 lon,
                 self.params.elevation,
-                self.params.delta_t,
                 refraction,
                 time_parts,
             )

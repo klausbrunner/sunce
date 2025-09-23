@@ -21,11 +21,14 @@ pub fn output_position_results<I>(
     show_inputs: bool,
     show_headers: bool,
     elevation_angle: bool,
+    is_stdin: bool,
 ) where
     I: Iterator<Item = PositionResult>,
 {
     let stdout = io::stdout().lock();
-    let mut writer = BufWriter::with_capacity(1024, stdout);
+    // Adaptive buffering: small for stdin (low latency), larger for batch processing
+    let buffer_size = if is_stdin { 128 } else { 8 * 1024 };
+    let mut writer = BufWriter::with_capacity(buffer_size, stdout);
 
     let result = match format {
         OutputFormat::Human => {
@@ -142,6 +145,14 @@ where
     Ok(())
 }
 
+/// Write datetime directly to writer without allocating a string
+#[inline(always)]
+fn write_datetime_csv<W: Write>(writer: &mut W, dt: &DateTime<FixedOffset>) -> io::Result<()> {
+    // Format: YYYY-MM-DDTHH:MM:SS±HH:MM
+    // Using write! with Display formatting directly to avoid string allocation
+    write!(writer, "{}", dt.format("%Y-%m-%dT%H:%M:%S%:z"))
+}
+
 fn output_csv_format<I>(
     results: I,
     writer: &mut BufWriter<io::StdoutLock>,
@@ -198,37 +209,43 @@ where
 
         if show_inputs {
             if result.apply_refraction {
-                writeln!(
+                write!(
                     writer,
-                    "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}",
+                    "{:.5},{:.5},{:.3},{:.3},{:.3},",
                     result.latitude,
                     result.longitude,
                     result.elevation,
                     result.pressure,
                     result.temperature,
-                    format_datetime_solarpos(&result.datetime),
-                    result.delta_t,
-                    result.position.azimuth(),
-                    angle_value
                 )?;
-            } else {
+                write_datetime_csv(writer, &result.datetime)?;
                 writeln!(
                     writer,
-                    "{:.5},{:.5},{:.3},{},{:.3},{:.5},{:.5}",
-                    result.latitude,
-                    result.longitude,
-                    result.elevation,
-                    format_datetime_solarpos(&result.datetime),
+                    ",{:.3},{:.5},{:.5}",
                     result.delta_t,
                     result.position.azimuth(),
                     angle_value
+                )?
+            } else {
+                write!(
+                    writer,
+                    "{:.5},{:.5},{:.3},",
+                    result.latitude, result.longitude, result.elevation,
                 )?;
+                write_datetime_csv(writer, &result.datetime)?;
+                writeln!(
+                    writer,
+                    ",{:.3},{:.5},{:.5}",
+                    result.delta_t,
+                    result.position.azimuth(),
+                    angle_value
+                )?
             }
         } else {
+            write_datetime_csv(writer, &result.datetime)?;
             writeln!(
                 writer,
-                "{},{:.5},{:.5}",
-                format_datetime_solarpos(&result.datetime),
+                ",{:.5},{:.5}",
                 result.position.azimuth(),
                 angle_value
             )?;

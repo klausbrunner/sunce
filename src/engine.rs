@@ -42,12 +42,21 @@ pub fn execute_position_command(
         Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
     };
 
+    // Check if stdin is being used for adaptive buffering
+    let is_stdin = matches!(
+        input.input_type,
+        crate::parsing::InputType::StdinCoords
+            | crate::parsing::InputType::StdinTimes
+            | crate::parsing::InputType::StdinPaired
+    );
+
     output_position_results(
         tracked_iter,
         format,
         show_inputs,
         show_headers,
         elevation_angle,
+        is_stdin,
     );
 
     PerformanceTracker::report_if_needed(&tracker);
@@ -87,12 +96,21 @@ pub fn execute_sunrise_command(
         Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
     };
 
+    // Check if stdin is being used for adaptive buffering
+    let is_stdin = matches!(
+        input.input_type,
+        crate::parsing::InputType::StdinCoords
+            | crate::parsing::InputType::StdinTimes
+            | crate::parsing::InputType::StdinPaired
+    );
+
     output_sunrise_results(
         tracked_iter,
         format,
         show_inputs,
         show_headers,
         show_twilight,
+        is_stdin,
     );
 
     PerformanceTracker::report_if_needed(&tracker);

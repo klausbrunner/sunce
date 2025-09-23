@@ -27,11 +27,14 @@ pub fn output_sunrise_results<I>(
     show_inputs: bool,
     show_headers: bool,
     show_twilight: bool,
+    is_stdin: bool,
 ) where
     I: Iterator<Item = SunriseResultData>,
 {
     let stdout = io::stdout().lock();
-    let mut writer = BufWriter::with_capacity(1024, stdout);
+    // Adaptive buffering: small for stdin (low latency), larger for batch processing
+    let buffer_size = if is_stdin { 128 } else { 8 * 1024 };
+    let mut writer = BufWriter::with_capacity(buffer_size, stdout);
 
     let result = output_sunrise_results_buffered(
         results,
