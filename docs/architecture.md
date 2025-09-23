@@ -26,7 +26,7 @@ Solar calculations are abstracted through calculation engines defined in `calcul
 
 ## Output Management
 
-Output formatting is handled by two parallel systems. Position results flow through `output.rs`, which provides formatters for human-readable, CSV, and JSON output formats. Sunrise results use a separate path through `sunrise_output.rs` and `sunrise_formatters.rs`, reflecting the different data structures and formatting requirements for sunrise/sunset calculations.
+Output formatting is handled by two separate systems. Position results flow through `output.rs`, which provides formatters for human-readable, CSV, and JSON output formats. Sunrise results use a separate path through `sunrise_output.rs` and `sunrise_formatters.rs`, reflecting the different data structures and formatting requirements for sunrise/sunset calculations.
 
 ## Timezone and Time Handling
 
@@ -42,4 +42,4 @@ Input processing begins with command-line argument parsing in `cli.rs`, followed
 
 The entire pipeline maintains streaming semantics, ensuring that the first result appears immediately and memory usage remains constant regardless of input size. This architecture enables the application to process infinite coordinate ranges or endless time series without memory growth.
 
-The architecture prioritizes streaming and memory efficiency over parallel processing. While the Java project supports simple parallel processing through `parallel()`, the Rust implementation focuses on single-threaded streaming performance and optimized algorithms for maximum throughput.
+The architecture prioritizes streaming and memory efficiency, focusing on single-threaded streaming performance and optimized algorithms for maximum throughput.
