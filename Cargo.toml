@@ -12,12 +12,15 @@ readme = "README.md"
 authors = ["Klaus Brunner <klaus.brunner@gmail.com>"]
 keywords = ["solar", "sun", "astronomy", "sunrise", "sunset"]
 categories = ["command-line-utilities", "science"]
-exclude = [
-    "/.github/",
-    "/tests/",
-    "/docs/",
-    "*.md",
-    "!README.md"
+include = [
+    "src/**/*",
+    "build.rs",
+    "completions/**/*",
+    "install-completions.sh",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE"
 ]
 
 [[bin]]
@@ -26,11 +29,16 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "help"] }
+clap_complete = "4.5"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 iana-time-zone = "0.1"
 thiserror = "1.0"
 solar-positioning = "0.3"
+
+[build-dependencies]
+clap = { version = "4.5", features = ["derive", "help"] }
+clap_complete = "4.5"
 
 [dev-dependencies]
 assert_cmd = "2.0"

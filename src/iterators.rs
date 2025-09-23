@@ -114,14 +114,20 @@ pub fn create_position_iterator<'a>(
     params: &'a CalculationParameters,
 ) -> Result<Box<dyn Iterator<Item = Result<PositionResult, String>> + 'a>, String> {
     let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-    let step = if cmd_name == "position" {
+    let (step, watch_mode) = if cmd_name == "position" {
         if let Some(step_str) = cmd_matches.get_one::<String>("step") {
-            TimeStep::parse(step_str).map_err(|e| format!("Invalid step parameter: {}", e))?
+            let step =
+                TimeStep::parse(step_str).map_err(|e| format!("Invalid step parameter: {}", e))?;
+            let watch = matches!(
+                input.parsed_datetime,
+                Some(crate::parsing::DateTimeInput::Now)
+            );
+            (step, watch)
         } else {
-            TimeStep::default()
+            (TimeStep::default(), false)
         }
     } else {
-        TimeStep::default()
+        (TimeStep::default(), false)
     };
 
     match input.input_type {
@@ -135,7 +141,7 @@ pub fn create_position_iterator<'a>(
             Ok(Box::new(create_time_file_position_iterator(input, params)?))
         }
         InputType::Standard => Ok(Box::new(
-            create_standard_position_iterator(input, params, step, false)?.map(Ok),
+            create_standard_position_iterator(input, params, step, false, watch_mode)?.map(Ok),
         )),
     }
 }
@@ -334,6 +340,7 @@ fn create_standard_position_iterator<'a>(
     params: &'a CalculationParameters,
     step: TimeStep,
     is_sunrise_command: bool,
+    watch_mode: bool,
 ) -> Result<impl Iterator<Item = PositionResult> + 'a, String> {
     let lat = input
         .parsed_latitude
@@ -364,8 +371,13 @@ fn create_standard_position_iterator<'a>(
         Box::new(std::iter::once(single_dt))
     } else {
         // For position commands or sunrise with single coordinates, expand datetime input into time series
-        let expanded =
-            expand_datetime_input(datetime, &step, timezone_override).map_err(|e| e.to_string())?;
+        let expanded = crate::time_series::expand_datetime_input_with_watch(
+            datetime,
+            &step,
+            timezone_override,
+            watch_mode,
+        )
+        .map_err(|e| e.to_string())?;
         Box::new(expanded)
     };
 

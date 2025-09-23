@@ -110,10 +110,54 @@ impl Iterator for TimeSeriesIterator {
     }
 }
 
+struct WatchIterator {
+    step: Duration,
+    timezone_override: Option<FixedOffset>,
+    first: bool,
+}
+
+impl WatchIterator {
+    fn new(step: Duration, timezone_override: Option<FixedOffset>) -> Self {
+        Self {
+            step,
+            timezone_override,
+            first: true,
+        }
+    }
+}
+
+impl Iterator for WatchIterator {
+    type Item = DateTime<FixedOffset>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.first {
+            std::thread::sleep(self.step.to_std().ok()?);
+        }
+        self.first = false;
+
+        let now = if let Some(tz) = self.timezone_override {
+            chrono::Utc::now().with_timezone(&tz)
+        } else {
+            Local::now().fixed_offset()
+        };
+
+        Some(now)
+    }
+}
+
 pub fn expand_datetime_input(
     input: &DateTimeInput,
     step: &TimeStep,
     timezone_override: Option<FixedOffset>,
+) -> Result<Box<dyn Iterator<Item = DateTime<FixedOffset>>>, ParseError> {
+    expand_datetime_input_with_watch(input, step, timezone_override, false)
+}
+
+pub fn expand_datetime_input_with_watch(
+    input: &DateTimeInput,
+    step: &TimeStep,
+    timezone_override: Option<FixedOffset>,
+    watch_mode: bool,
 ) -> Result<Box<dyn Iterator<Item = DateTime<FixedOffset>>>, ParseError> {
     match input {
         DateTimeInput::Single(dt) => {
@@ -125,12 +169,19 @@ pub fn expand_datetime_input(
             Ok(Box::new(std::iter::once(adjusted_dt)))
         }
         DateTimeInput::Now => {
-            let now = if let Some(tz) = timezone_override {
-                chrono::Utc::now().with_timezone(&tz)
+            if watch_mode {
+                Ok(Box::new(WatchIterator::new(
+                    step.duration,
+                    timezone_override,
+                )))
             } else {
-                Local::now().fixed_offset()
-            };
-            Ok(Box::new(std::iter::once(now)))
+                let now = if let Some(tz) = timezone_override {
+                    chrono::Utc::now().with_timezone(&tz)
+                } else {
+                    Local::now().fixed_offset()
+                };
+                Ok(Box::new(std::iter::once(now)))
+            }
         }
         DateTimeInput::PartialYear(year) => {
             let start_date = NaiveDate::from_ymd_opt(*year, 1, 1)

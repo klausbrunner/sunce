@@ -32,9 +32,7 @@ pub fn output_sunrise_results<I>(
     I: Iterator<Item = SunriseResultData>,
 {
     let stdout = io::stdout().lock();
-    // Adaptive buffering: small for stdin (low latency), larger for batch processing
-    let buffer_size = if is_stdin { 128 } else { 8 * 1024 };
-    let mut writer = BufWriter::with_capacity(buffer_size, stdout);
+    let mut writer = BufWriter::new(stdout);
 
     let result = output_sunrise_results_buffered(
         results,
@@ -43,6 +41,7 @@ pub fn output_sunrise_results<I>(
         show_inputs,
         show_headers,
         show_twilight,
+        is_stdin,
     );
 
     if let Err(e) = result {
@@ -58,6 +57,7 @@ fn output_sunrise_results_buffered<I>(
     show_inputs: bool,
     show_headers: bool,
     show_twilight: bool,
+    flush_each: bool,
 ) -> io::Result<()>
 where
     I: Iterator<Item = SunriseResultData>,
@@ -72,6 +72,9 @@ where
             OutputFormat::Human => print_human(writer, &result, show_inputs, show_twilight)?,
             OutputFormat::Csv => print_csv(writer, &result, show_inputs, show_twilight)?,
             OutputFormat::Json => print_json(writer, &result, show_inputs, show_twilight)?,
+        }
+        if flush_each {
+            writer.flush()?;
         }
     }
     writer.flush()?;

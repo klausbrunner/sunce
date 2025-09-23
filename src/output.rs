@@ -26,13 +26,11 @@ pub fn output_position_results<I>(
     I: Iterator<Item = PositionResult>,
 {
     let stdout = io::stdout().lock();
-    // Adaptive buffering: small for stdin (low latency), larger for batch processing
-    let buffer_size = if is_stdin { 128 } else { 8 * 1024 };
-    let mut writer = BufWriter::with_capacity(buffer_size, stdout);
+    let mut writer = BufWriter::new(stdout);
 
     let result = match format {
         OutputFormat::Human => {
-            output_human_format(results, &mut writer, show_inputs, elevation_angle)
+            output_human_format(results, &mut writer, show_inputs, elevation_angle, is_stdin)
         }
         OutputFormat::Csv => output_csv_format(
             results,
@@ -40,9 +38,10 @@ pub fn output_position_results<I>(
             show_inputs,
             show_headers,
             elevation_angle,
+            is_stdin,
         ),
         OutputFormat::Json => {
-            output_json_format(results, &mut writer, show_inputs, elevation_angle)
+            output_json_format(results, &mut writer, show_inputs, elevation_angle, is_stdin)
         }
     };
 
@@ -57,6 +56,7 @@ fn output_human_format<I>(
     writer: &mut BufWriter<io::StdoutLock>,
     show_inputs: bool,
     elevation_angle: bool,
+    flush_each: bool,
 ) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
@@ -140,6 +140,9 @@ where
             )?;
         }
         writeln!(writer)?;
+        if flush_each {
+            writer.flush()?;
+        }
     }
     writer.flush()?;
     Ok(())
@@ -159,6 +162,7 @@ fn output_csv_format<I>(
     show_inputs: bool,
     show_headers: bool,
     elevation_angle: bool,
+    flush_each: bool,
 ) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
@@ -250,6 +254,9 @@ where
                 angle_value
             )?;
         }
+        if flush_each {
+            writer.flush()?;
+        }
     }
     writer.flush()?;
     Ok(())
@@ -260,6 +267,7 @@ fn output_json_format<I>(
     writer: &mut BufWriter<io::StdoutLock>,
     show_inputs: bool,
     elevation_angle: bool,
+    flush_each: bool,
 ) -> io::Result<()>
 where
     I: Iterator<Item = PositionResult>,
@@ -310,6 +318,9 @@ where
                 angle_name,
                 angle_value
             )?;
+        }
+        if flush_each {
+            writer.flush()?;
         }
     }
     writer.flush()?;

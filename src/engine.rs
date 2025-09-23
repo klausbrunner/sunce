@@ -42,13 +42,19 @@ pub fn execute_position_command(
         Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
     };
 
-    // Check if stdin is being used for adaptive buffering
+    // Check if stdin or watch mode is being used for adaptive buffering (low latency)
+    let (_, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
+    let watch_mode = cmd_matches.get_one::<String>("step").is_some()
+        && matches!(
+            input.parsed_datetime,
+            Some(crate::parsing::DateTimeInput::Now)
+        );
     let is_stdin = matches!(
         input.input_type,
         crate::parsing::InputType::StdinCoords
             | crate::parsing::InputType::StdinTimes
             | crate::parsing::InputType::StdinPaired
-    );
+    ) || watch_mode;
 
     output_position_results(
         tracked_iter,

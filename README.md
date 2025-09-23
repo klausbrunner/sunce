@@ -75,6 +75,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 - **Time ranges:** pass a year (e.g., `2026`) or year-month (`2026-06`) to obtain a daily series for that period when using the `sunrise` command. The `position` command produces per-step samples for the period or day specified; the step is controlled with `--step` (default 1 hour).
 - **Geographic ranges:** use `start:end:step` syntax for latitude and/or longitude to define a grid (e.g., `40.0:45.0:0.5`). Geographic sweeps combine with time series to produce spatio-temporal datasets.
+- **Watch mode:** combine `now` with `--step` to periodically track sun position in real-time (e.g., `sunce 52.5 13.4 now position --step=1s` updates every second). Press Ctrl+C to stop.
 
 ## Output formats
 
