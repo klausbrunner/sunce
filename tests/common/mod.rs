@@ -179,6 +179,7 @@ pub fn position_no_refraction_test() -> SunceTest {
 pub fn position_with_timezone(tz: &str) -> SunceTest {
     SunceTest::new().args([
         &format!("--timezone={}", tz),
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-01-01T12:00:00",

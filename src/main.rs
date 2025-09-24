@@ -11,6 +11,7 @@ mod performance;
 mod refraction;
 mod sunrise_formatters;
 mod sunrise_output;
+mod table_format;
 mod time_series;
 mod timezone;
 mod types;

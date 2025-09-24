@@ -4,7 +4,7 @@ use common::*;
 /// Test basic position calculation
 #[test]
 fn test_basic_position_calculation() {
-    position_test().assert_success_contains_all(&["date/time", "azimuth", "zenith"]);
+    position_test().assert_success_contains_all(&["│ Azimuth", "│ Zenith"]);
 }
 
 /// Test position with different algorithms
@@ -20,8 +20,8 @@ fn test_position_algorithms() {
 /// Test different output formats
 #[test]
 fn test_output_formats() {
-    // Test HUMAN format (default)
-    position_test().assert_success_contains("date/time");
+    // Test HUMAN format (default) - table format
+    position_test().assert_success_contains("│ Azimuth");
 
     // Test CSV format
     position_test_with_format("CSV").assert_success_contains("dateTime,azimuth,zenith");
@@ -297,8 +297,8 @@ fn test_error_handling() {
 fn test_unix_timestamp_basic() {
     // Test basic unix timestamp (2020-01-01 00:00:00 UTC)
     SunceTest::new()
-        .args(["52.0", "13.4", "1577836800", "position"])
-        .assert_success_contains_all(&["2020-01-01", "00:00:00", "azimuth", "zenith"]);
+        .args(["--show-inputs", "52.0", "13.4", "1577836800", "position"])
+        .assert_success_contains_all(&["2020-01-01", "00:00:00", "│ Azimuth", "│ Zenith"]);
 }
 
 /// Test unix timestamp with timezone
@@ -308,23 +308,25 @@ fn test_unix_timestamp_with_timezone() {
     SunceTest::new()
         .args([
             "--timezone=+01:00",
+            "--show-inputs",
             "52.0",
             "13.4",
             "1577836800",
             "position",
         ])
-        .assert_success_contains("2020-01-01 00:00:00+01:00");
+        .assert_success_contains("DateTime:    2020-01-01 00:00:00+01:00");
 
     // Test with named timezone
     SunceTest::new()
         .args([
             "--timezone=Europe/Berlin",
+            "--show-inputs",
             "52.0",
             "13.4",
             "1577836800",
             "position",
         ])
-        .assert_success_contains("2020-01-01 00:00:00+01:00");
+        .assert_success_contains("DateTime:    2020-01-01 00:00:00+01:00");
 }
 
 /// Test unix timestamp range validation
@@ -332,12 +334,12 @@ fn test_unix_timestamp_with_timezone() {
 fn test_unix_timestamp_validation() {
     // Test minimum timestamp (1970-01-01)
     SunceTest::new()
-        .args(["52.0", "13.4", "0", "position"])
+        .args(["--show-inputs", "52.0", "13.4", "0", "position"])
         .assert_success_contains("1970-01-01");
 
     // Test a valid timestamp
     SunceTest::new()
-        .args(["52.0", "13.4", "100000000", "position"])
+        .args(["--show-inputs", "52.0", "13.4", "100000000", "position"])
         .assert_success_contains("1973-03-03");
 
     // Test out of range timestamp (should be rejected with range error)

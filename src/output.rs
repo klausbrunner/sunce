@@ -1,3 +1,4 @@
+use crate::table_format::{TableFormatter, VarianceFlags, write_header_section};
 use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SolarPosition;
@@ -52,7 +53,7 @@ pub fn output_position_results<I>(
 }
 
 fn output_human_format<I>(
-    results: I,
+    mut results: I,
     writer: &mut BufWriter<io::StdoutLock>,
     show_inputs: bool,
     elevation_angle: bool,
@@ -61,89 +62,56 @@ fn output_human_format<I>(
 where
     I: Iterator<Item = PositionResult>,
 {
-    for result in results {
-        if show_inputs {
-            writeln!(
-                writer,
-                "latitude   :                     {:.5}°",
-                result.latitude
-            )?;
-            writeln!(
-                writer,
-                "longitude  :                     {:.5}°",
-                result.longitude
-            )?;
-            writeln!(
-                writer,
-                "elevation  :                        {:.3} m",
-                result.elevation
-            )?;
-            if result.apply_refraction {
-                writeln!(
-                    writer,
-                    "pressure   :                     {:.3} hPa",
-                    result.pressure
-                )?;
-                writeln!(
-                    writer,
-                    "temperature:                       {:.3} °C",
-                    result.temperature
-                )?;
-            }
-            writeln!(
-                writer,
-                "date/time  : {}",
-                result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            )?;
-            writeln!(
-                writer,
-                "delta T    :                        {:.3} s",
-                result.delta_t
-            )?;
-        }
+    let first = match results.next() {
+        Some(r) => r,
+        None => return Ok(()),
+    };
 
-        if elevation_angle {
-            if !show_inputs {
-                writeln!(
-                    writer,
-                    "date/time      : {}",
-                    result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-                )?;
-            }
-            writeln!(
-                writer,
-                "azimuth        :                    {:.5}°",
-                result.position.azimuth()
-            )?;
-            writeln!(
-                writer,
-                "elevation-angle:                     {:.5}°",
-                result.position.elevation_angle()
-            )?;
-        } else {
-            if !show_inputs {
-                writeln!(
-                    writer,
-                    "date/time: {}",
-                    result.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-                )?;
-            }
-            writeln!(
-                writer,
-                "azimuth  :                    {:.5}°",
-                result.position.azimuth()
-            )?;
-            writeln!(
-                writer,
-                "zenith   :                     {:.5}°",
-                result.position.zenith_angle()
-            )?;
+    let second = results.next();
+
+    let (variance, buffered) = match second {
+        Some(s) => {
+            let v = VarianceFlags::detect(&first, &s);
+            (v, Some(s))
         }
-        writeln!(writer)?;
+        None => (VarianceFlags::default(), None),
+    };
+
+    if show_inputs {
+        write_header_section(writer, &first, &variance)?;
+    }
+
+    let formatter = TableFormatter {
+        variance: variance.clone(),
+        elevation_angle,
+        apply_refraction: first.apply_refraction,
+    };
+
+    let headers = formatter.column_headers();
+    let widths = formatter.calculate_column_widths(&headers);
+
+    formatter.write_table_header(writer, &headers, &widths)?;
+    formatter.write_table_row(writer, &first, &widths)?;
+
+    if flush_each {
+        writer.flush()?;
+    }
+
+    if let Some(second_result) = buffered {
+        formatter.write_table_row(writer, &second_result, &widths)?;
         if flush_each {
             writer.flush()?;
         }
     }
+
+    for result in results {
+        formatter.write_table_row(writer, &result, &widths)?;
+        if flush_each {
+            writer.flush()?;
+        }
+    }
+
+    formatter.write_table_footer(writer, &widths)?;
     writer.flush()?;
     Ok(())
 }

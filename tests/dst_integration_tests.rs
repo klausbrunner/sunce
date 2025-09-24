@@ -9,6 +9,7 @@ fn test_dst_spring_forward_single_datetime() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=+01:00",
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-03-31T02:00:00",
@@ -17,7 +18,9 @@ fn test_dst_spring_forward_single_datetime() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("2024-03-31 02:00:00+01:00"))
+        .stdout(predicate::str::contains(
+            "DateTime:    2024-03-31 02:00:00+01:00",
+        ))
         .stdout(predicate::str::contains("31.64778°"));
 }
 
@@ -53,15 +56,16 @@ fn test_dst_fall_back_single_datetime() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=+01:00",
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-10-27T02:00:00",
         "position",
     ]);
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("2024-10-27 02:00:00+01:00"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "DateTime:    2024-10-27 02:00:00+01:00",
+    ));
 }
 
 #[test]
@@ -93,15 +97,16 @@ fn test_dst_normal_summer_time() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=+02:00",
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-07-15T12:00:00",
         "position",
     ]);
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("2024-07-15 12:00:00+02:00"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "DateTime:    2024-07-15 12:00:00+02:00",
+    ));
 }
 
 #[test]
@@ -110,15 +115,16 @@ fn test_dst_normal_winter_time() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=+01:00",
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-01-15T12:00:00",
         "position",
     ]);
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("2024-01-15 12:00:00+01:00"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "DateTime:    2024-01-15 12:00:00+01:00",
+    ));
 }
 
 #[test]
@@ -127,15 +133,16 @@ fn test_dst_different_timezone_us_eastern() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=-05:00",
+        "--show-inputs",
         "40.7",
         "-74.0",
         "2024-03-10T02:00:00",
         "position",
     ]);
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("2024-03-10 02:00:00-05:00"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "DateTime:    2024-03-10 02:00:00-05:00",
+    ));
 }
 
 #[test]
@@ -144,6 +151,7 @@ fn test_dst_timezone_override() {
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--timezone=+02:00",
+        "--show-inputs",
         "52.0",
         "13.4",
         "2024-03-31T02:00:00",
@@ -151,9 +159,9 @@ fn test_dst_timezone_override() {
     ]);
 
     // With fixed offset +02:00, there's no DST transition - 02:00:00 should be valid
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("2024-03-31 02:00:00+02:00"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "DateTime:    2024-03-31 02:00:00+02:00",
+    ));
 }
 
 #[test]
@@ -346,7 +354,13 @@ fn test_system_timezone_detection() {
     // Test that system timezone detection works properly without any TZ override
     // This verifies that iana-time-zone works correctly on all platforms
     let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-01-15T12:00:00", "position"]);
+    cmd.args([
+        "--show-inputs",
+        "52.0",
+        "13.4",
+        "2024-01-15T12:00:00",
+        "position",
+    ]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
@@ -354,7 +368,7 @@ fn test_system_timezone_detection() {
     // The output should contain a valid timezone offset
     // We can't assert the exact timezone since it depends on the system, but we can verify
     // that it produces a valid datetime with timezone information
-    assert!(output_str.contains("2024-01-15 12:00:00"));
+    assert!(output_str.contains("DateTime:    2024-01-15 12:00:00"));
 
     // Should contain some timezone offset (either + or -)
     let has_timezone = output_str.contains("+") || output_str.contains("-");
