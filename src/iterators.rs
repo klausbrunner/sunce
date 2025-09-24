@@ -8,26 +8,13 @@ use crate::file_input::{
 };
 use crate::output::PositionResult;
 use crate::parsing::{Coordinate, InputType, ParsedInput};
+use crate::refraction::create_refraction_correction;
 use crate::sunrise_output::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
-use crate::timezone::parse_timezone_to_offset;
+use crate::timezone::parse_timezone_spec;
 use chrono::{DateTime, FixedOffset};
 use clap::ArgMatches;
 use solar_positioning::RefractionCorrection;
-
-/// Create a RefractionCorrection object from parameters, failing on invalid input
-fn create_refraction_correction(
-    pressure: f64,
-    temperature: f64,
-    apply: bool,
-) -> Option<RefractionCorrection> {
-    if apply {
-        Some(RefractionCorrection::new(pressure, temperature)
-            .expect("Invalid atmospheric parameters: pressure must be 1-2000 hPa, temperature must be -273.15 to 100°C"))
-    } else {
-        None
-    }
-}
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -355,11 +342,11 @@ fn create_standard_position_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?;
 
-    let timezone_override = input
+    let timezone_spec = input
         .global_options
         .timezone
         .as_ref()
-        .map(|tz| parse_timezone_to_offset(tz))
+        .map(|tz| parse_timezone_spec(tz))
         .transpose()
         .map_err(|e| e.to_string())?;
 
@@ -374,7 +361,7 @@ fn create_standard_position_iterator<'a>(
         let expanded = crate::time_series::expand_datetime_input_with_watch(
             datetime,
             &step,
-            timezone_override,
+            timezone_spec,
             watch_mode,
         )
         .map_err(|e| e.to_string())?;
@@ -453,11 +440,11 @@ fn create_standard_sunrise_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?;
 
-    let timezone_override = input
+    let timezone_spec = input
         .global_options
         .timezone
         .as_ref()
-        .map(|tz| parse_timezone_to_offset(tz))
+        .map(|tz| parse_timezone_spec(tz))
         .transpose()
         .map_err(|e| e.to_string())?;
 
@@ -468,7 +455,7 @@ fn create_standard_sunrise_iterator<'a>(
         Box::new(std::iter::once(single_dt))
     } else {
         let expanded =
-            expand_datetime_input(datetime, &step, timezone_override).map_err(|e| e.to_string())?;
+            expand_datetime_input(datetime, &step, timezone_spec).map_err(|e| e.to_string())?;
         Box::new(expanded)
     };
 

@@ -1,23 +1,10 @@
 use crate::output::PositionResult;
+use crate::refraction::create_refraction_correction;
 use crate::sunrise_output::SunriseResultData;
 use chrono::Utc;
 use clap::ArgMatches;
-use solar_positioning::{RefractionCorrection, grena3, spa};
+use solar_positioning::{grena3, spa};
 use std::collections::HashMap;
-
-/// Create a RefractionCorrection object from parameters, failing on invalid input
-fn create_refraction_correction(
-    pressure: f64,
-    temperature: f64,
-    apply: bool,
-) -> Option<RefractionCorrection> {
-    if apply {
-        Some(RefractionCorrection::new(pressure, temperature)
-            .expect("Invalid atmospheric parameters: pressure must be 1-2000 hPa, temperature must be -273.15 to 100°C"))
-    } else {
-        None
-    }
-}
 
 #[derive(Clone)]
 pub struct CalculationParameters {
@@ -155,7 +142,10 @@ pub fn calculate_single_position(
                 refraction,
             )
         }
-        _ => panic!("Unknown algorithm: {}", params.algorithm),
+        _ => unreachable!(
+            "Algorithm validation should prevent this: {}",
+            params.algorithm
+        ),
     }
     .expect("Solar calculation should not fail with validated inputs");
 

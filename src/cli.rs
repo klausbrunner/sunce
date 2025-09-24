@@ -2,7 +2,7 @@ use clap::{Arg, ArgAction, Command};
 
 pub fn build_cli() -> Command {
     Command::new("sunce")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Calculates topocentric solar coordinates or sunrise/sunset times.")
         .subcommand_required(true)
         .long_about(Some(concat!(

@@ -254,6 +254,94 @@ fn test_dst_comparison_with_utc() {
 }
 
 #[test]
+fn test_dst_named_timezone_spring_forward() {
+    // Test Europe/Berlin with DST spring forward: 02:00 doesn't exist on 2024-03-31
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--timezone=Europe/Berlin",
+        "--format=CSV",
+        "--no-headers",
+        "52.0",
+        "13.4",
+        "2024-03-31",
+        "position",
+        "--step=1h",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should have times before DST transition
+    assert!(output_str.contains("2024-03-31T00:00:00+01:00"));
+    assert!(output_str.contains("2024-03-31T01:00:00+01:00"));
+
+    // Should NOT have 02:00 (DST gap - clocks jump to 03:00)
+    assert!(!output_str.contains("2024-03-31T02:00:00"));
+
+    // Should have time after DST transition with +02:00 offset
+    assert!(output_str.contains("2024-03-31T03:00:00+02:00"));
+    assert!(output_str.contains("2024-03-31T04:00:00+02:00"));
+}
+
+#[test]
+fn test_dst_named_timezone_fall_back() {
+    // Test Europe/Berlin with DST fall back: 02:00 occurs twice on 2024-10-27
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--timezone=Europe/Berlin",
+        "--format=CSV",
+        "--no-headers",
+        "52.0",
+        "13.4",
+        "2024-10-27",
+        "position",
+        "--step=1h",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should have summer time before fall-back
+    assert!(output_str.contains("2024-10-27T01:00:00+02:00"));
+
+    // 02:00 is ambiguous - should show BOTH occurrences (like solarpos/Java)
+    assert!(output_str.contains("2024-10-27T02:00:00+02:00")); // First 02:00 (summer)
+    assert!(output_str.contains("2024-10-27T02:00:00+01:00")); // Second 02:00 (winter)
+
+    // After fall-back should be winter time (+01:00)
+    assert!(output_str.contains("2024-10-27T03:00:00+01:00"));
+    assert!(output_str.contains("2024-10-27T04:00:00+01:00"));
+}
+
+#[test]
+fn test_dst_named_timezone_us_eastern() {
+    // Test US/Eastern DST spring forward: 2024-03-10 02:00 doesn't exist
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--timezone=America/New_York",
+        "--format=CSV",
+        "--no-headers",
+        "40.7",
+        "-74.0",
+        "2024-03-10",
+        "position",
+        "--step=1h",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Before DST: EST (-05:00)
+    assert!(output_str.contains("2024-03-10T01:00:00-05:00"));
+
+    // Should NOT have 02:00 (DST gap)
+    assert!(!output_str.contains("2024-03-10T02:00:00"));
+
+    // After DST: EDT (-04:00)
+    assert!(output_str.contains("2024-03-10T03:00:00-04:00"));
+}
+
+#[test]
 fn test_system_timezone_detection() {
     // Test that system timezone detection works properly without any TZ override
     // This verifies that iana-time-zone works correctly on all platforms

@@ -1,6 +1,6 @@
 use crate::parsing::{DateTimeInput, ParseError};
-use crate::timezone::apply_timezone_to_datetime;
-use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeZone};
+use crate::timezone::{TimezoneSpec, apply_timezone_to_datetime};
+use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeStep {
@@ -72,7 +72,8 @@ struct TimeSeriesIterator {
     current_naive: NaiveDateTime,
     end_naive: NaiveDateTime,
     step: Duration,
-    timezone_override: Option<FixedOffset>,
+    timezone_spec: Option<TimezoneSpec>,
+    buffered_ambiguous: Option<DateTime<FixedOffset>>,
 }
 
 impl TimeSeriesIterator {
@@ -80,13 +81,14 @@ impl TimeSeriesIterator {
         start_naive: NaiveDateTime,
         end_naive: NaiveDateTime,
         step: Duration,
-        timezone_override: Option<FixedOffset>,
+        timezone_spec: Option<TimezoneSpec>,
     ) -> Self {
         Self {
             current_naive: start_naive,
             end_naive,
             step,
-            timezone_override,
+            timezone_spec,
+            buffered_ambiguous: None,
         }
     }
 }
@@ -95,32 +97,46 @@ impl Iterator for TimeSeriesIterator {
     type Item = DateTime<FixedOffset>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_naive > self.end_naive {
-            return None;
+        if let Some(buffered) = self.buffered_ambiguous.take() {
+            return Some(buffered);
         }
 
-        let dt = if let Some(tz) = self.timezone_override {
-            tz.from_local_datetime(&self.current_naive).single()?
-        } else {
-            apply_timezone_to_datetime(self.current_naive, None).ok()?
-        };
+        loop {
+            if self.current_naive > self.end_naive {
+                return None;
+            }
 
-        self.current_naive += self.step;
-        Some(dt)
+            let dt_result = if let Some(ref tz_spec) = self.timezone_spec {
+                tz_spec.apply_to_naive_with_ambiguous(self.current_naive)
+            } else {
+                apply_timezone_to_datetime(self.current_naive, None).map(|dt| vec![dt])
+            };
+
+            self.current_naive += self.step;
+
+            if let Ok(dts) = dt_result {
+                if dts.len() == 2 {
+                    self.buffered_ambiguous = Some(dts[1]);
+                    return Some(dts[0]);
+                } else if !dts.is_empty() {
+                    return Some(dts[0]);
+                }
+            }
+        }
     }
 }
 
 struct WatchIterator {
     step: Duration,
-    timezone_override: Option<FixedOffset>,
+    timezone_spec: Option<TimezoneSpec>,
     first: bool,
 }
 
 impl WatchIterator {
-    fn new(step: Duration, timezone_override: Option<FixedOffset>) -> Self {
+    fn new(step: Duration, timezone_spec: Option<TimezoneSpec>) -> Self {
         Self {
             step,
-            timezone_override,
+            timezone_spec,
             first: true,
         }
     }
@@ -135,8 +151,14 @@ impl Iterator for WatchIterator {
         }
         self.first = false;
 
-        let now = if let Some(tz) = self.timezone_override {
-            chrono::Utc::now().with_timezone(&tz)
+        let now_naive = if self.timezone_spec.is_some() {
+            chrono::Utc::now().naive_utc()
+        } else {
+            Local::now().naive_local()
+        };
+
+        let now = if let Some(ref tz_spec) = self.timezone_spec {
+            tz_spec.apply_to_naive(now_naive).ok()?
         } else {
             Local::now().fixed_offset()
         };
@@ -148,21 +170,24 @@ impl Iterator for WatchIterator {
 pub fn expand_datetime_input(
     input: &DateTimeInput,
     step: &TimeStep,
-    timezone_override: Option<FixedOffset>,
+    timezone_spec: Option<TimezoneSpec>,
 ) -> Result<Box<dyn Iterator<Item = DateTime<FixedOffset>>>, ParseError> {
-    expand_datetime_input_with_watch(input, step, timezone_override, false)
+    expand_datetime_input_with_watch(input, step, timezone_spec, false)
 }
 
 pub fn expand_datetime_input_with_watch(
     input: &DateTimeInput,
     step: &TimeStep,
-    timezone_override: Option<FixedOffset>,
+    timezone_spec: Option<TimezoneSpec>,
     watch_mode: bool,
 ) -> Result<Box<dyn Iterator<Item = DateTime<FixedOffset>>>, ParseError> {
     match input {
         DateTimeInput::Single(dt) => {
-            let adjusted_dt = if let Some(tz) = timezone_override {
-                dt.with_timezone(&tz)
+            let adjusted_dt = if let Some(ref tz_spec) = timezone_spec {
+                match tz_spec {
+                    TimezoneSpec::Fixed(offset) => dt.with_timezone(offset),
+                    TimezoneSpec::Named(_) => tz_spec.apply_to_naive(dt.naive_local())?,
+                }
             } else {
                 *dt
             };
@@ -170,13 +195,11 @@ pub fn expand_datetime_input_with_watch(
         }
         DateTimeInput::Now => {
             if watch_mode {
-                Ok(Box::new(WatchIterator::new(
-                    step.duration,
-                    timezone_override,
-                )))
+                Ok(Box::new(WatchIterator::new(step.duration, timezone_spec)))
             } else {
-                let now = if let Some(tz) = timezone_override {
-                    chrono::Utc::now().with_timezone(&tz)
+                let now_naive = chrono::Utc::now().naive_utc();
+                let now = if let Some(ref tz_spec) = timezone_spec {
+                    tz_spec.apply_to_naive(now_naive)?
                 } else {
                     Local::now().fixed_offset()
                 };
@@ -196,7 +219,7 @@ pub fn expand_datetime_input_with_watch(
                 start_naive,
                 end_naive,
                 step.duration,
-                timezone_override,
+                timezone_spec,
             )))
         }
         DateTimeInput::PartialYearMonth(year, month) => {
@@ -223,7 +246,7 @@ pub fn expand_datetime_input_with_watch(
                 start_naive,
                 end_naive,
                 step.duration,
-                timezone_override,
+                timezone_spec,
             )))
         }
         DateTimeInput::PartialDate(year, month, day) => {
@@ -241,7 +264,7 @@ pub fn expand_datetime_input_with_watch(
                 start_naive,
                 end_naive,
                 step.duration,
-                timezone_override,
+                timezone_spec,
             )))
         }
     }

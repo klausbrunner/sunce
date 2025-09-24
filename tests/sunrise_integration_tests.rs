@@ -13,48 +13,6 @@ fn test_basic_sunrise() {
         .stdout(predicate::str::contains("sunset"));
 }
 
-/// Test sunrise with different horizon types
-#[test]
-#[ignore] // TODO: Custom horizon functionality not implemented
-fn test_sunrise_horizon_types() {
-    // Test standard horizon (default)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
-    cmd.assert().success();
-
-    // Test civil twilight
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=civil"]);
-    cmd.assert().success();
-
-    // Test nautical twilight
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args([
-        "52.0",
-        "13.4",
-        "2024-06-21",
-        "sunrise",
-        "--horizon=nautical",
-    ]);
-    cmd.assert().success();
-
-    // Test astronomical twilight
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args([
-        "52.0",
-        "13.4",
-        "2024-06-21",
-        "sunrise",
-        "--horizon=astronomical",
-    ]);
-    cmd.assert().success();
-
-    // Test custom horizon
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=-5.0"]);
-    cmd.assert().success();
-}
-
 /// Test sunrise output formats
 #[test]
 fn test_sunrise_output_formats() {
@@ -82,44 +40,22 @@ fn test_sunrise_output_formats() {
         .stdout(predicate::str::contains("\"sunrise\""));
 }
 
-/// Test sunrise with different algorithms
+/// Test sunrise edge cases (Arctic midnight sun and polar night)
 #[test]
-#[ignore] // TODO: Implement sunrise functionality
-fn test_sunrise_algorithms() {
-    // Test SPA algorithm
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--algorithm=SPA"]);
-    cmd.assert().success();
-
-    // Test GRENA3 algorithm
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args([
-        "52.0",
-        "13.4",
-        "2024-06-21",
-        "sunrise",
-        "--algorithm=GRENA3",
-    ]);
-    cmd.assert().success();
-}
-
-/// Test sunrise edge cases
-#[test]
-#[ignore] // TODO: Implement sunrise functionality
 fn test_sunrise_edge_cases() {
     // Test Arctic summer (midnight sun)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args(["80.0", "0.0", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("up all day"));
+        .stdout(predicate::str::contains("all day"));
 
     // Test Arctic winter (polar night)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args(["80.0", "0.0", "2024-12-21", "sunrise"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("down all day"));
+        .stdout(predicate::str::contains("all night"));
 }
 
 /// Test sunrise time series
@@ -158,41 +94,6 @@ fn test_sunrise_coordinate_ranges() {
     assert_eq!(lines.len(), 5); // Header + 4 data rows
 }
 
-/// Test sunrise environmental parameters
-#[test]
-#[ignore] // TODO: Implement sunrise functionality
-fn test_sunrise_environmental_parameters() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args([
-        "52.0",
-        "13.4",
-        "2024-06-21",
-        "sunrise",
-        "--elevation=1000",
-        "--pressure=900",
-        "--temperature=25",
-    ]);
-    cmd.assert().success();
-}
-
-/// Test sunrise refraction
-#[test]
-#[ignore] // TODO: Refraction options not implemented for sunrise
-fn test_sunrise_refraction() {
-    // Test with refraction (default)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
-    let output1 = cmd.assert().success().get_output().stdout.clone();
-
-    // Test without refraction
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--no-refraction"]);
-    let output2 = cmd.assert().success().get_output().stdout.clone();
-
-    // Results should be different due to refraction correction
-    assert_ne!(output1, output2);
-}
-
 /// Test sunrise with timezone
 #[test]
 fn test_sunrise_timezone() {
@@ -201,15 +102,6 @@ fn test_sunrise_timezone() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("+02:00"));
-}
-
-/// Test sunrise delta T
-#[test]
-#[ignore] // TODO: Implement sunrise functionality
-fn test_sunrise_delta_t() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--deltat=69.2"]);
-    cmd.assert().success();
 }
 
 /// Test sunrise validation

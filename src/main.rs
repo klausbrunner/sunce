@@ -8,6 +8,7 @@ mod iterators;
 mod output;
 mod parsing;
 mod performance;
+mod refraction;
 mod sunrise_formatters;
 mod sunrise_output;
 mod time_series;

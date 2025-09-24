@@ -3,6 +3,53 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
 use chrono_tz::{Tz, UTC};
 use std::sync::OnceLock;
 
+#[derive(Debug, Clone)]
+pub enum TimezoneSpec {
+    Fixed(FixedOffset),
+    Named(Tz),
+}
+
+impl TimezoneSpec {
+    pub fn apply_to_naive(
+        &self,
+        naive_dt: NaiveDateTime,
+    ) -> Result<DateTime<FixedOffset>, ParseError> {
+        match self {
+            TimezoneSpec::Fixed(offset) => offset
+                .from_local_datetime(&naive_dt)
+                .single()
+                .ok_or_else(|| {
+                    ParseError::InvalidDateTime(format!(
+                        "Invalid datetime with offset: {}",
+                        naive_dt
+                    ))
+                }),
+            TimezoneSpec::Named(tz) => apply_named_timezone(naive_dt, tz),
+        }
+    }
+
+    pub fn apply_to_naive_with_ambiguous(
+        &self,
+        naive_dt: NaiveDateTime,
+    ) -> Result<Vec<DateTime<FixedOffset>>, ParseError> {
+        match self {
+            TimezoneSpec::Fixed(offset) => {
+                let dt = offset
+                    .from_local_datetime(&naive_dt)
+                    .single()
+                    .ok_or_else(|| {
+                        ParseError::InvalidDateTime(format!(
+                            "Invalid datetime with offset: {}",
+                            naive_dt
+                        ))
+                    })?;
+                Ok(vec![dt])
+            }
+            TimezoneSpec::Named(tz) => apply_named_timezone_with_ambiguous(naive_dt, tz),
+        }
+    }
+}
+
 /// Cached system timezone - computed once at first access
 static SYSTEM_TIMEZONE: OnceLock<Tz> = OnceLock::new();
 
@@ -52,13 +99,16 @@ fn apply_system_timezone(naive_dt: NaiveDateTime) -> Result<DateTime<FixedOffset
         chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
         chrono::LocalResult::Ambiguous(dt1, _) => Ok(dt1.fixed_offset()),
         chrono::LocalResult::None => {
-            // DST gap - spring forward by 1 hour (standard behavior)
-            let adjusted_naive = naive_dt + chrono::Duration::try_hours(1).unwrap();
-            match get_system_timezone().from_local_datetime(&adjusted_naive) {
+            let duration = chrono::Duration::try_hours(1)
+                .ok_or_else(|| ParseError::InvalidDateTime("Invalid duration".to_string()))?;
+            let adjusted = naive_dt.checked_add_signed(duration).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Overflow adding 1 hour to {}", naive_dt))
+            })?;
+            match get_system_timezone().from_local_datetime(&adjusted) {
                 chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
                 chrono::LocalResult::Ambiguous(dt1, _) => Ok(dt1.fixed_offset()),
                 chrono::LocalResult::None => Err(ParseError::InvalidDateTime(format!(
-                    "Cannot resolve DST transition for time: {}",
+                    "DST gap at {}: no valid local time exists",
                     naive_dt
                 ))),
             }
@@ -103,17 +153,24 @@ fn apply_named_timezone(
     match timezone.from_local_datetime(&naive_dt) {
         chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
         chrono::LocalResult::Ambiguous(dt1, _) => Ok(dt1.fixed_offset()),
-        chrono::LocalResult::None => {
-            // DST gap - add 1 hour to find valid time
-            let adjusted_naive = naive_dt + chrono::Duration::try_hours(1).unwrap();
-            match timezone.from_local_datetime(&adjusted_naive) {
-                chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
-                _ => Err(ParseError::InvalidDateTime(format!(
-                    "Cannot resolve DST transition for time: {}",
-                    naive_dt
-                ))),
-            }
+        chrono::LocalResult::None => Err(ParseError::InvalidDateTime(format!(
+            "DST gap: {} does not exist in timezone {}",
+            naive_dt, timezone
+        ))),
+    }
+}
+
+/// Apply named timezone with DST handling, returning both ambiguous times
+fn apply_named_timezone_with_ambiguous(
+    naive_dt: NaiveDateTime,
+    timezone: &Tz,
+) -> Result<Vec<DateTime<FixedOffset>>, ParseError> {
+    match timezone.from_local_datetime(&naive_dt) {
+        chrono::LocalResult::Single(dt) => Ok(vec![dt.fixed_offset()]),
+        chrono::LocalResult::Ambiguous(dt1, dt2) => {
+            Ok(vec![dt1.fixed_offset(), dt2.fixed_offset()])
         }
+        chrono::LocalResult::None => Ok(vec![]),
     }
 }
 
@@ -142,48 +199,14 @@ fn parse_named_timezone(tz_str: &str) -> Result<Tz, ParseError> {
     }
 }
 
-/// Parse timezone to fixed offset (unified handling for all timezone formats)
-pub fn parse_timezone_to_offset(tz_str: &str) -> Result<FixedOffset, ParseError> {
-    // Try offset format first (most common)
+/// Parse timezone string to TimezoneSpec (handles both fixed offsets and named timezones)
+pub fn parse_timezone_spec(tz_str: &str) -> Result<TimezoneSpec, ParseError> {
     if let Ok(offset) = parse_offset(tz_str) {
-        return Ok(offset);
+        return Ok(TimezoneSpec::Fixed(offset));
     }
 
-    // Handle UTC/GMT as special cases
-    match tz_str {
-        "UTC" | "GMT" => return Ok(FixedOffset::east_opt(0).unwrap()),
-        _ => {}
-    }
-
-    // Try named timezone - for time series we need a fixed offset
-    // Use a reference date (2024-01-01 12:00 UTC) to get the offset
     if let Ok(tz) = parse_named_timezone(tz_str) {
-        use chrono::{NaiveDate, NaiveTime};
-        let ref_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        let ref_time = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-        let ref_naive = ref_date.and_time(ref_time);
-
-        match tz.from_local_datetime(&ref_naive) {
-            chrono::LocalResult::Single(dt) => {
-                return Ok(*dt.fixed_offset().offset());
-            }
-            chrono::LocalResult::Ambiguous(dt1, _) => {
-                return Ok(*dt1.fixed_offset().offset());
-            }
-            chrono::LocalResult::None => {
-                // DST transition - try an hour later
-                let adjusted = ref_naive + chrono::Duration::try_hours(1).unwrap();
-                match tz.from_local_datetime(&adjusted) {
-                    chrono::LocalResult::Single(dt) => {
-                        return Ok(*dt.fixed_offset().offset());
-                    }
-                    chrono::LocalResult::Ambiguous(dt1, _) => {
-                        return Ok(*dt1.fixed_offset().offset());
-                    }
-                    chrono::LocalResult::None => {}
-                }
-            }
-        }
+        return Ok(TimezoneSpec::Named(tz));
     }
 
     Err(ParseError::InvalidTimezone(format!(
