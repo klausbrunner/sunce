@@ -1,5 +1,5 @@
 use crate::parsing::{DateTimeInput, ParseError};
-use crate::timezone::{TimezoneSpec, apply_timezone_to_datetime};
+use crate::timezone::TimezoneSpec;
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,8 +69,8 @@ impl TimeStep {
 }
 
 struct TimeSeriesIterator {
-    current_naive: NaiveDateTime,
-    end_naive: NaiveDateTime,
+    current_utc: DateTime<chrono::Utc>,
+    end_utc: DateTime<chrono::Utc>,
     step: Duration,
     timezone_spec: Option<TimezoneSpec>,
     buffered_ambiguous: Option<DateTime<FixedOffset>>,
@@ -83,9 +83,28 @@ impl TimeSeriesIterator {
         step: Duration,
         timezone_spec: Option<TimezoneSpec>,
     ) -> Self {
+        let start_dt = if let Some(ref tz_spec) = timezone_spec {
+            tz_spec.apply_to_naive(start_naive).ok()
+        } else {
+            crate::timezone::apply_timezone_to_datetime(start_naive, None).ok()
+        };
+
+        let end_dt = if let Some(ref tz_spec) = timezone_spec {
+            tz_spec.apply_to_naive(end_naive).ok()
+        } else {
+            crate::timezone::apply_timezone_to_datetime(end_naive, None).ok()
+        };
+
+        let current_utc = start_dt
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let end_utc = end_dt
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
         Self {
-            current_naive: start_naive,
-            end_naive,
+            current_utc,
+            end_utc,
             step,
             timezone_spec,
             buffered_ambiguous: None,
@@ -101,28 +120,35 @@ impl Iterator for TimeSeriesIterator {
             return Some(buffered);
         }
 
-        loop {
-            if self.current_naive > self.end_naive {
-                return None;
-            }
-
-            let dt_result = if let Some(ref tz_spec) = self.timezone_spec {
-                tz_spec.apply_to_naive_with_ambiguous(self.current_naive)
-            } else {
-                apply_timezone_to_datetime(self.current_naive, None).map(|dt| vec![dt])
-            };
-
-            self.current_naive += self.step;
-
-            if let Ok(dts) = dt_result {
-                if dts.len() == 2 {
-                    self.buffered_ambiguous = Some(dts[1]);
-                    return Some(dts[0]);
-                } else if !dts.is_empty() {
-                    return Some(dts[0]);
-                }
-            }
+        if self.current_utc > self.end_utc {
+            return None;
         }
+
+        let result = match &self.timezone_spec {
+            Some(TimezoneSpec::Named(tz)) => {
+                use chrono::TimeZone;
+                Some(
+                    tz.from_utc_datetime(&self.current_utc.naive_utc())
+                        .fixed_offset(),
+                )
+            }
+            Some(TimezoneSpec::Fixed(offset)) => {
+                use chrono::TimeZone;
+                Some(offset.from_utc_datetime(&self.current_utc.naive_utc()))
+            }
+            None => {
+                use chrono::TimeZone;
+                let tz = crate::timezone::get_system_timezone();
+                Some(
+                    tz.from_utc_datetime(&self.current_utc.naive_utc())
+                        .fixed_offset(),
+                )
+            }
+        };
+
+        self.current_utc += self.step;
+
+        result
     }
 }
 

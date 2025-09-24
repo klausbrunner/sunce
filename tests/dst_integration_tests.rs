@@ -312,9 +312,11 @@ fn test_dst_named_timezone_fall_back() {
     // Should have summer time before fall-back
     assert!(output_str.contains("2024-10-27T01:00:00+02:00"));
 
-    // 02:00 is ambiguous - should show BOTH occurrences (like solarpos/Java)
-    assert!(output_str.contains("2024-10-27T02:00:00+02:00")); // First 02:00 (summer)
-    assert!(output_str.contains("2024-10-27T02:00:00+01:00")); // Second 02:00 (winter)
+    // 02:00 appears with both offsets due to 1-hour absolute time intervals
+    // 00:00 UTC -> 02:00+02:00
+    // 01:00 UTC -> 02:00+01:00 (wall clock repeats but absolute time advances)
+    assert!(output_str.contains("2024-10-27T02:00:00+02:00"));
+    assert!(output_str.contains("2024-10-27T02:00:00+01:00"));
 
     // After fall-back should be winter time (+01:00)
     assert!(output_str.contains("2024-10-27T03:00:00+01:00"));

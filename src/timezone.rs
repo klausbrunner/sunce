@@ -27,27 +27,6 @@ impl TimezoneSpec {
             TimezoneSpec::Named(tz) => apply_named_timezone(naive_dt, tz),
         }
     }
-
-    pub fn apply_to_naive_with_ambiguous(
-        &self,
-        naive_dt: NaiveDateTime,
-    ) -> Result<Vec<DateTime<FixedOffset>>, ParseError> {
-        match self {
-            TimezoneSpec::Fixed(offset) => {
-                let dt = offset
-                    .from_local_datetime(&naive_dt)
-                    .single()
-                    .ok_or_else(|| {
-                        ParseError::InvalidDateTime(format!(
-                            "Invalid datetime with offset: {}",
-                            naive_dt
-                        ))
-                    })?;
-                Ok(vec![dt])
-            }
-            TimezoneSpec::Named(tz) => apply_named_timezone_with_ambiguous(naive_dt, tz),
-        }
-    }
 }
 
 /// Cached system timezone - computed once at first access
@@ -98,21 +77,10 @@ fn apply_system_timezone(naive_dt: NaiveDateTime) -> Result<DateTime<FixedOffset
     match get_system_timezone().from_local_datetime(&naive_dt) {
         chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
         chrono::LocalResult::Ambiguous(dt1, _) => Ok(dt1.fixed_offset()),
-        chrono::LocalResult::None => {
-            let duration = chrono::Duration::try_hours(1)
-                .ok_or_else(|| ParseError::InvalidDateTime("Invalid duration".to_string()))?;
-            let adjusted = naive_dt.checked_add_signed(duration).ok_or_else(|| {
-                ParseError::InvalidDateTime(format!("Overflow adding 1 hour to {}", naive_dt))
-            })?;
-            match get_system_timezone().from_local_datetime(&adjusted) {
-                chrono::LocalResult::Single(dt) => Ok(dt.fixed_offset()),
-                chrono::LocalResult::Ambiguous(dt1, _) => Ok(dt1.fixed_offset()),
-                chrono::LocalResult::None => Err(ParseError::InvalidDateTime(format!(
-                    "DST gap at {}: no valid local time exists",
-                    naive_dt
-                ))),
-            }
-        }
+        chrono::LocalResult::None => Err(ParseError::InvalidDateTime(format!(
+            "DST gap: {} does not exist in system timezone",
+            naive_dt
+        ))),
     }
 }
 
@@ -157,20 +125,6 @@ fn apply_named_timezone(
             "DST gap: {} does not exist in timezone {}",
             naive_dt, timezone
         ))),
-    }
-}
-
-/// Apply named timezone with DST handling, returning both ambiguous times
-fn apply_named_timezone_with_ambiguous(
-    naive_dt: NaiveDateTime,
-    timezone: &Tz,
-) -> Result<Vec<DateTime<FixedOffset>>, ParseError> {
-    match timezone.from_local_datetime(&naive_dt) {
-        chrono::LocalResult::Single(dt) => Ok(vec![dt.fixed_offset()]),
-        chrono::LocalResult::Ambiguous(dt1, dt2) => {
-            Ok(vec![dt1.fixed_offset(), dt2.fixed_offset()])
-        }
-        chrono::LocalResult::None => Ok(vec![]),
     }
 }
 
