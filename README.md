@@ -4,7 +4,7 @@
 
 ## Status
 
-This project aims to be a drop-in replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos) tool while benefiting from Rust's performance and distribution advantages. While the core functionality is stable and extensively tested with compatibility validation against solarpos, the tool hasn't seen much user testing yet.
+This project aims to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos). While the core functionality is stable and decently tested with compatibility validation against solarpos, the tool hasn't seen much user testing yet (see [Contributing](#contributing) for how to help).
 
 ## Use cases
 

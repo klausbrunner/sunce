@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.2.0"
+version = "0.2.1-dev"
 edition = "2024"
 rust-version = "1.90"
 description = "High-performance command-line solar position calculator"
@@ -82,5 +82,4 @@ cargo-dist-version = "0.30.0"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-# The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.zst"

@@ -3,9 +3,12 @@ use clap::{Arg, ArgAction, Command};
 pub fn build_cli() -> Command {
     Command::new("sunce")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("Calculates topocentric solar coordinates or sunrise/sunset times.")
+        .about("Computes solar coordinates and events (sunrise, sunset, transit, twilight)")
         .subcommand_required(true)
         .long_about(Some(concat!(
+            "High-performance command-line solar position calculator\n\n",
+            "Computes topocentric solar coordinates and solar events (sunrise, sunset, transit, twilight).\n",
+            "Supports time series, geographic sweeps, file input, and streaming with CSV/JSON output.\n\n",
             "Examples:\n",
             "  sunce 52.0 13.4 2024-01-01 position\n",
             "  sunce 52:53:0.1 13:14:0.1 2024 position --format=csv\n",
