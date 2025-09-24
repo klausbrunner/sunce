@@ -14,7 +14,13 @@ This project aims to be a drop-in replacement for the Java-based [solarpos](http
 
 ## Requirements and installation
 
-Download the latest release binary from the [releases page](https://github.com/klausbrunner/sunce/releases/latest) or install from source if you have a Rust toolchain:
+Download the latest release binary from the [releases page](https://github.com/klausbrunner/sunce/releases/latest) or install via Homebrew (macOS/Linux):
+
+```shell
+brew install klausbrunner/tap/sunce
+```
+
+Alternatively, install from source if you have a Rust toolchain:
 
 ```shell
 cargo install sunce

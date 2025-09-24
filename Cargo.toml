@@ -14,9 +14,8 @@ keywords = ["solar", "sun", "astronomy", "sunrise", "sunset"]
 categories = ["command-line-utilities", "science"]
 include = [
     "src/**/*",
+    "tests/**/*",
     "build.rs",
-    "completions/**/*",
-    "install-completions.sh",
     "Cargo.toml",
     "Cargo.lock",
     "README.md",
@@ -68,7 +67,11 @@ dist-version = "0.30.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "klausbrunner/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
@@ -79,5 +82,5 @@ cargo-dist-version = "0.30.0"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-
+# The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.zst"
