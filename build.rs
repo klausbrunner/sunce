@@ -1,33 +1,13 @@
-use clap_complete::{generate_to, shells::*};
 use std::env;
-use std::io::Error;
 
-include!("src/cli.rs");
+fn main() {
+    let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    let build_date = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
 
-fn main() -> Result<(), Error> {
-    let outdir = match env::var_os("OUT_DIR") {
-        None => return Ok(()),
-        Some(outdir) => outdir,
-    };
-
-    let mut cmd = build_cli();
-    let path = generate_to(Bash, &mut cmd, "sunce", &outdir)?;
-    println!("cargo:warning=Generated Bash completion file: {:?}", path);
-
-    let path = generate_to(Zsh, &mut cmd, "sunce", &outdir)?;
-    println!("cargo:warning=Generated Zsh completion file: {:?}", path);
-
-    let path = generate_to(Fish, &mut cmd, "sunce", &outdir)?;
-    println!("cargo:warning=Generated Fish completion file: {:?}", path);
-
-    let path = generate_to(PowerShell, &mut cmd, "sunce", &outdir)?;
-    println!(
-        "cargo:warning=Generated PowerShell completion file: {:?}",
-        path
-    );
-
-    let path = generate_to(Elvish, &mut cmd, "sunce", &outdir)?;
-    println!("cargo:warning=Generated Elvish completion file: {:?}", path);
-
-    Ok(())
+    println!("cargo:rustc-env=BUILD_TARGET={}", target);
+    println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
+    println!("cargo:rustc-env=BUILD_DATE={}", build_date);
 }

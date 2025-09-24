@@ -1,8 +1,19 @@
 use clap::{Arg, ArgAction, Command};
+use std::sync::LazyLock;
+
+static VERSION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}\nTarget: {}\nBuild: {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        env!("BUILD_TARGET"),
+        env!("BUILD_PROFILE"),
+        env!("BUILD_DATE")
+    )
+});
 
 pub fn build_cli() -> Command {
     Command::new("sunce")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(VERSION.as_str())
         .about("Computes solar coordinates and events (sunrise, sunset, transit, twilight)")
         .subcommand_required(true)
         .long_about(Some(concat!(
