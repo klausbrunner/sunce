@@ -1,52 +1,14 @@
-use crate::parsing::{DateTimeInput, ParseError, parse_datetime};
+use crate::input_parsing::{DateTimeInput, ParseError, parse_datetime};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
-pub enum FileReader {
-    Stdin(BufReader<io::Stdin>),
-    File(BufReader<File>),
-    #[cfg(test)]
-    Test(BufReader<io::Cursor<Vec<u8>>>),
-}
-
-impl BufRead for FileReader {
-    fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        match self {
-            FileReader::Stdin(reader) => reader.fill_buf(),
-            FileReader::File(reader) => reader.fill_buf(),
-            #[cfg(test)]
-            FileReader::Test(reader) => reader.fill_buf(),
-        }
-    }
-
-    fn consume(&mut self, amt: usize) {
-        match self {
-            FileReader::Stdin(reader) => reader.consume(amt),
-            FileReader::File(reader) => reader.consume(amt),
-            #[cfg(test)]
-            FileReader::Test(reader) => reader.consume(amt),
-        }
-    }
-}
-
-impl io::Read for FileReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            FileReader::Stdin(reader) => reader.read(buf),
-            FileReader::File(reader) => reader.read(buf),
-            #[cfg(test)]
-            FileReader::Test(reader) => reader.read(buf),
-        }
-    }
-}
-
-pub fn create_file_reader(file_path: &str) -> Result<FileReader, io::Error> {
+pub fn create_file_reader(file_path: &str) -> Result<Box<dyn BufRead>, io::Error> {
     if file_path == "@-" {
-        Ok(FileReader::Stdin(BufReader::new(io::stdin())))
+        Ok(Box::new(BufReader::new(io::stdin())))
     } else {
         let path = &file_path[1..]; // Remove the '@' prefix
         let file = File::open(path)?;
-        Ok(FileReader::File(BufReader::new(file)))
+        Ok(Box::new(BufReader::new(file)))
     }
 }
 
@@ -153,11 +115,11 @@ pub fn parse_paired_file_line(
 
 // Iterator for streaming coordinate files
 pub struct CoordinateFileIterator {
-    reader: FileReader,
+    reader: Box<dyn BufRead>,
 }
 
 impl CoordinateFileIterator {
-    pub fn new(reader: FileReader) -> Self {
+    pub fn new(reader: Box<dyn BufRead>) -> Self {
         Self { reader }
     }
 }
@@ -196,12 +158,12 @@ impl Iterator for CoordinateFileIterator {
 
 // Iterator for streaming time files
 pub struct TimeFileIterator {
-    reader: FileReader,
+    reader: Box<dyn BufRead>,
     timezone_override: Option<String>,
 }
 
 impl TimeFileIterator {
-    pub fn new(reader: FileReader, timezone_override: Option<String>) -> Self {
+    pub fn new(reader: Box<dyn BufRead>, timezone_override: Option<String>) -> Self {
         Self {
             reader,
             timezone_override,
@@ -240,12 +202,12 @@ impl Iterator for TimeFileIterator {
 
 // Iterator for streaming paired files
 pub struct PairedFileIterator {
-    reader: FileReader,
+    reader: Box<dyn BufRead>,
     timezone_override: Option<String>,
 }
 
 impl PairedFileIterator {
-    pub fn new(reader: FileReader, timezone_override: Option<String>) -> Self {
+    pub fn new(reader: Box<dyn BufRead>, timezone_override: Option<String>) -> Self {
         Self {
             reader,
             timezone_override,
@@ -289,7 +251,8 @@ mod tests {
     #[test]
     fn test_coordinate_file_parsing() {
         let data = "52.0,13.4\n59.334 18.063\n# comment\n\n40.42,-3.70\n";
-        let reader = FileReader::Test(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
+        let reader: Box<dyn BufRead> =
+            Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
         let mut iter = CoordinateFileIterator::new(reader);
 
         assert_eq!(iter.next().unwrap().unwrap(), (52.0, 13.4));
@@ -301,7 +264,8 @@ mod tests {
     #[test]
     fn test_time_file_parsing() {
         let data = "2024-06-21T12:00:00\n2024-06-22T12:00:00\n# comment\n\nnow\n";
-        let reader = FileReader::Test(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
+        let reader: Box<dyn BufRead> =
+            Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
         let mut iter = TimeFileIterator::new(reader, None);
 
         match iter.next().unwrap().unwrap() {
@@ -322,7 +286,8 @@ mod tests {
     #[test]
     fn test_paired_file_parsing() {
         let data = "52.0,13.4,2024-06-21T12:00:00\n59.334 18.063 2024-06-22T12:00:00\n";
-        let reader = FileReader::Test(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
+        let reader: Box<dyn BufRead> =
+            Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
         let mut iter = PairedFileIterator::new(reader, None);
 
         let (lat, lon, _) = iter.next().unwrap().unwrap();

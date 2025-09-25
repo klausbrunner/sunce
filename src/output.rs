@@ -116,14 +116,6 @@ where
     Ok(())
 }
 
-/// Write datetime directly to writer without allocating a string
-#[inline(always)]
-fn write_datetime_csv<W: Write>(writer: &mut W, dt: &DateTime<FixedOffset>) -> io::Result<()> {
-    // Format: YYYY-MM-DDTHH:MM:SS±HH:MM
-    // Using write! with Display formatting directly to avoid string allocation
-    write!(writer, "{}", dt.format("%Y-%m-%dT%H:%M:%S%:z"))
-}
-
 fn output_csv_format<I>(
     results: I,
     writer: &mut BufWriter<io::StdoutLock>,
@@ -138,49 +130,37 @@ where
     let mut first_result = true;
 
     for result in results {
-        // Check first result to determine header format
-        if first_result && show_headers && show_inputs {
-            if result.apply_refraction {
-                if elevation_angle {
-                    writeln!(
-                        writer,
-                        "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
-                    )?;
-                } else {
-                    writeln!(
-                        writer,
-                        "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
-                    )?;
-                }
-            } else if elevation_angle {
-                writeln!(
-                    writer,
-                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,elevation-angle"
-                )?;
-            } else {
-                writeln!(
-                    writer,
-                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,zenith"
-                )?;
-            }
-        } else if first_result && show_headers && !show_inputs {
-            if elevation_angle {
-                writeln!(writer, "dateTime,azimuth,elevation-angle")?;
-            } else {
-                writeln!(writer, "dateTime,azimuth,zenith")?;
-            }
-        }
-
-        first_result = false;
-
         let angle_value = if elevation_angle {
             result.position.elevation_angle()
         } else {
             result.position.zenith_angle()
         };
+        let include_refraction_params = show_inputs && result.apply_refraction;
+
+        // Write headers on first result
+        if first_result && show_headers {
+            let headers = match (show_inputs, include_refraction_params, elevation_angle) {
+                (true, true, true) => {
+                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle"
+                }
+                (true, true, false) => {
+                    "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
+                }
+                (true, false, true) => {
+                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,elevation-angle"
+                }
+                (true, false, false) => {
+                    "latitude,longitude,elevation,dateTime,deltaT,azimuth,zenith"
+                }
+                (false, _, true) => "dateTime,azimuth,elevation-angle",
+                (false, _, false) => "dateTime,azimuth,zenith",
+            };
+            writeln!(writer, "{}", headers)?;
+        }
+        first_result = false;
 
         if show_inputs {
-            if result.apply_refraction {
+            if include_refraction_params {
                 write!(
                     writer,
                     "{:.5},{:.5},{:.3},{:.3},{:.3},",
@@ -190,31 +170,23 @@ where
                     result.pressure,
                     result.temperature,
                 )?;
-                write_datetime_csv(writer, &result.datetime)?;
-                writeln!(
-                    writer,
-                    ",{:.3},{:.5},{:.5}",
-                    result.delta_t,
-                    result.position.azimuth(),
-                    angle_value
-                )?
             } else {
                 write!(
                     writer,
                     "{:.5},{:.5},{:.3},",
                     result.latitude, result.longitude, result.elevation,
                 )?;
-                write_datetime_csv(writer, &result.datetime)?;
-                writeln!(
-                    writer,
-                    ",{:.3},{:.5},{:.5}",
-                    result.delta_t,
-                    result.position.azimuth(),
-                    angle_value
-                )?
             }
+            write!(writer, "{}", result.datetime.format("%Y-%m-%dT%H:%M:%S%:z"))?;
+            writeln!(
+                writer,
+                ",{:.3},{:.5},{:.5}",
+                result.delta_t,
+                result.position.azimuth(),
+                angle_value
+            )?;
         } else {
-            write_datetime_csv(writer, &result.datetime)?;
+            write!(writer, "{}", result.datetime.format("%Y-%m-%dT%H:%M:%S%:z"))?;
             writeln!(
                 writer,
                 ",{:.5},{:.5}",
@@ -241,14 +213,20 @@ where
     I: Iterator<Item = PositionResult>,
 {
     for result in results {
-        let (angle_name, angle_value) = if elevation_angle {
-            ("elevation-angle", result.position.elevation_angle())
+        let angle_value = if elevation_angle {
+            result.position.elevation_angle()
         } else {
-            ("zenith", result.position.zenith_angle())
+            result.position.zenith_angle()
         };
+        let angle_name = if elevation_angle {
+            "elevation-angle"
+        } else {
+            "zenith"
+        };
+        let include_refraction_params = show_inputs && result.apply_refraction;
 
         if show_inputs {
-            if result.apply_refraction {
+            if include_refraction_params {
                 writeln!(
                     writer,
                     r#"{{"latitude":{:.5},"longitude":{:.5},"elevation":{:.3},"pressure":{:.3},"temperature":{:.3},"dateTime":"{}","deltaT":{:.3},"azimuth":{:.5},"{}":{:.5}}}"#,

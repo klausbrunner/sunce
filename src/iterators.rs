@@ -1,17 +1,17 @@
+use crate::calculation::create_refraction_correction;
 use crate::calculation::{
     CalculationParameters, CoordinateSweepCalculator, SunriseCalculationParameters,
     calculate_single_position, calculate_single_sunrise,
 };
-use crate::datetime_utils::datetime_input_to_single;
 use crate::file_input::{
     CoordinateFileIterator, PairedFileIterator, TimeFileIterator, create_file_reader,
 };
 use crate::output::PositionResult;
-use crate::parsing::{Coordinate, InputType, ParsedInput};
-use crate::refraction::create_refraction_correction;
-use crate::sunrise_output::SunriseResultData;
+use crate::sunrise_formatters::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
 use crate::timezone::parse_timezone_spec;
+use crate::types::datetime_input_to_single;
+use crate::types::{Coordinate, DateTimeInput, InputType, ParsedInput};
 use chrono::{DateTime, FixedOffset};
 use clap::ArgMatches;
 use solar_positioning::RefractionCorrection;
@@ -85,12 +85,29 @@ impl Iterator for CoordinateRangeIterator {
     }
 }
 
+/// Concrete iterator type for coordinates (avoids boxing)
+pub enum CoordinateIterator {
+    Single(std::iter::Once<f64>),
+    Range(CoordinateRangeIterator),
+}
+
+impl Iterator for CoordinateIterator {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            CoordinateIterator::Single(iter) => iter.next(),
+            CoordinateIterator::Range(iter) => iter.next(),
+        }
+    }
+}
+
 /// Create a streaming iterator for a coordinate (single value or range)
-pub fn create_coordinate_iterator(coord: &Coordinate) -> Box<dyn Iterator<Item = f64>> {
+pub fn create_coordinate_iterator(coord: &Coordinate) -> CoordinateIterator {
     match coord {
-        Coordinate::Single(val) => Box::new(std::iter::once(*val)),
+        Coordinate::Single(val) => CoordinateIterator::Single(std::iter::once(*val)),
         Coordinate::Range { start, end, step } => {
-            Box::new(CoordinateRangeIterator::new(*start, *end, *step))
+            CoordinateIterator::Range(CoordinateRangeIterator::new(*start, *end, *step))
         }
     }
 }
@@ -105,10 +122,7 @@ pub fn create_position_iterator<'a>(
         if let Some(step_str) = cmd_matches.get_one::<String>("step") {
             let step =
                 TimeStep::parse(step_str).map_err(|e| format!("Invalid step parameter: {}", e))?;
-            let watch = matches!(
-                input.parsed_datetime,
-                Some(crate::parsing::DateTimeInput::Now)
-            );
+            let watch = matches!(input.parsed_datetime, Some(DateTimeInput::Now));
             (step, watch)
         } else {
             (TimeStep::default(), false)

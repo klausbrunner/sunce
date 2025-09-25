@@ -1,4 +1,4 @@
-use crate::parsing::ParseError;
+use crate::types::ParseError;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
 use chrono_tz::{Tz, UTC};
 use std::sync::OnceLock;

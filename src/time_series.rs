@@ -1,5 +1,5 @@
-use crate::parsing::{DateTimeInput, ParseError};
 use crate::timezone::TimezoneSpec;
+use crate::types::{DateTimeInput, ParseError};
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,7 +63,8 @@ impl TimeStep {
 
     pub fn default() -> Self {
         TimeStep {
-            duration: Duration::try_hours(1).unwrap(),
+            // Safe: 1 hour is always valid
+            duration: Duration::try_hours(1).expect("1 hour duration should be valid"),
         }
     }
 }
@@ -238,8 +239,12 @@ pub fn expand_datetime_input_with_watch(
             let end_date = NaiveDate::from_ymd_opt(*year, 12, 31)
                 .ok_or_else(|| ParseError::InvalidDateTime(format!("Invalid year: {}", year)))?;
 
-            let start_naive = start_date.and_hms_opt(0, 0, 0).unwrap();
-            let end_naive = end_date.and_hms_opt(23, 59, 59).unwrap();
+            let start_naive = start_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", start_date))
+            })?;
+            let end_naive = end_date.and_hms_opt(23, 59, 59).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", end_date))
+            })?;
 
             Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,
@@ -255,18 +260,30 @@ pub fn expand_datetime_input_with_watch(
 
             let end_date = if *month == 12 {
                 NaiveDate::from_ymd_opt(*year + 1, 1, 1)
-                    .unwrap()
-                    .pred_opt()
-                    .unwrap()
+                    .and_then(|d| d.pred_opt())
+                    .ok_or_else(|| {
+                        ParseError::InvalidDateTime(format!(
+                            "Invalid date calculation for year {}",
+                            year
+                        ))
+                    })?
             } else {
                 NaiveDate::from_ymd_opt(*year, *month + 1, 1)
-                    .unwrap()
-                    .pred_opt()
-                    .unwrap()
+                    .and_then(|d| d.pred_opt())
+                    .ok_or_else(|| {
+                        ParseError::InvalidDateTime(format!(
+                            "Invalid date calculation for {}-{:02}",
+                            year, month
+                        ))
+                    })?
             };
 
-            let start_naive = start_date.and_hms_opt(0, 0, 0).unwrap();
-            let end_naive = end_date.and_hms_opt(23, 59, 59).unwrap();
+            let start_naive = start_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", start_date))
+            })?;
+            let end_naive = end_date.and_hms_opt(23, 59, 59).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", end_date))
+            })?;
 
             Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,
@@ -283,8 +300,12 @@ pub fn expand_datetime_input_with_watch(
                 ))
             })?;
 
-            let start_naive = target_date.and_hms_opt(0, 0, 0).unwrap();
-            let end_naive = target_date.and_hms_opt(23, 0, 0).unwrap();
+            let start_naive = target_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", target_date))
+            })?;
+            let end_naive = target_date.and_hms_opt(23, 0, 0).ok_or_else(|| {
+                ParseError::InvalidDateTime(format!("Invalid date: {:?}", target_date))
+            })?;
 
             Ok(Box::new(TimeSeriesIterator::new(
                 start_naive,

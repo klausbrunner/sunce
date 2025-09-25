@@ -1,9 +1,8 @@
 use crate::output::PositionResult;
-use crate::refraction::create_refraction_correction;
-use crate::sunrise_output::SunriseResultData;
+use crate::sunrise_formatters::SunriseResultData;
 use chrono::Utc;
 use clap::ArgMatches;
-use solar_positioning::{grena3, spa};
+use solar_positioning::{RefractionCorrection, grena3, spa};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -169,7 +168,7 @@ pub fn calculate_single_sunrise(
     lon: f64,
     params: &SunriseCalculationParameters,
 ) -> SunriseResultData {
-    use crate::sunrise_output::TwilightResults;
+    use crate::sunrise_formatters::TwilightResults;
     use solar_positioning::types::Horizon;
 
     let delta_t = params.delta_t;
@@ -302,5 +301,19 @@ impl CoordinateSweepCalculator {
             // Fall back to regular calculation for GRENA3
             calculate_single_position(datetime, lat, lon, &self.params)
         }
+    }
+}
+
+const INVALID_ATMOSPHERIC_PARAMS: &str = "Invalid atmospheric parameters: pressure must be 1-2000 hPa, temperature must be -273.15 to 100°C";
+
+pub fn create_refraction_correction(
+    pressure: f64,
+    temperature: f64,
+    apply: bool,
+) -> Option<RefractionCorrection> {
+    if apply {
+        Some(RefractionCorrection::new(pressure, temperature).expect(INVALID_ATMOSPHERIC_PARAMS))
+    } else {
+        None
     }
 }

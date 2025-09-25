@@ -1,4 +1,8 @@
-use crate::types::{Coordinate, ParseError};
+// Re-export types for backward compatibility
+pub use crate::types::{
+    Coordinate, DateTimeInput, GlobalOptions, InputType, ParseError, ParsedInput, PositionOptions,
+    SunriseOptions,
+};
 
 pub fn parse_coordinate(input: &str, coord_type: &str) -> Result<Coordinate, ParseError> {
     if input.contains(':') {
@@ -62,25 +66,42 @@ fn parse_coordinate_range(input: &str, coord_type: &str) -> Result<Coordinate, P
     Ok(Coordinate::Range { start, end, step })
 }
 
-fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
-    let (min, max, name) = match coord_type {
-        "latitude" => (-90.0, 90.0, "latitude range -90° to 90°"),
-        "longitude" => (-180.0, 180.0, "longitude range -180° to 180°"),
-        _ => return Ok(()),
-    };
-
+// Generic validation helper for numeric ranges
+fn validate_range<T>(
+    value: T,
+    min: T,
+    max: T,
+    value_name: &str,
+    range_desc: &str,
+) -> Result<(), ParseError>
+where
+    T: PartialOrd + std::fmt::Display,
+{
     if value < min || value > max {
         Err(ParseError::InvalidCoordinate(format!(
             "{} out of {}: {}",
-            coord_type, name, value
+            value_name, range_desc, value
         )))
     } else {
         Ok(())
     }
 }
 
+fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
+    match coord_type {
+        "latitude" => validate_range(value, -90.0, 90.0, coord_type, "latitude range -90° to 90°"),
+        "longitude" => validate_range(
+            value,
+            -180.0,
+            180.0,
+            coord_type,
+            "longitude range -180° to 180°",
+        ),
+        _ => Ok(()),
+    }
+}
+
 use crate::timezone::{apply_timezone_to_datetime, get_system_timezone};
-use crate::types::DateTimeInput;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 
 pub fn parse_datetime(
@@ -165,7 +186,9 @@ fn parse_full_datetime(
     {
         // Add ":00" seconds if missing and try RFC3339 again
         let with_seconds = if input.contains('T') {
-            let t_pos = input.find('T').unwrap();
+            let t_pos = input
+                .find('T')
+                .expect("T should exist since input.contains('T') was true");
             let time_part = &input[t_pos..];
 
             // Find where timezone starts (+ or - but not in date part)
@@ -223,7 +246,7 @@ fn parse_full_datetime(
         // Date only - assume midnight
         let date = NaiveDate::parse_from_str(input, "%Y-%m-%d")
             .map_err(|_| ParseError::InvalidDateTime(format!("Invalid date format: {}", input)))?;
-        date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+        date.and_time(NaiveTime::from_hms_opt(0, 0, 0).expect("0,0,0 time should always be valid"))
     };
 
     let dt_with_tz = if let Some(tz_str) = timezone_override {
@@ -327,7 +350,6 @@ fn parse_unix_timestamp(
     Ok(DateTimeInput::Single(dt_with_tz))
 }
 
-use crate::types::{GlobalOptions, InputType, ParsedInput, PositionOptions, SunriseOptions};
 use clap::ArgMatches;
 
 pub fn parse_input(matches: &ArgMatches) -> Result<ParsedInput, String> {
@@ -364,85 +386,85 @@ fn determine_input_type(
     longitude: Option<&String>,
     datetime: Option<&String>,
 ) -> Result<InputType, String> {
-    let arg_count = count_arguments(longitude.is_some(), datetime.is_some());
-    let file_locations = identify_file_inputs(latitude, longitude, datetime)?;
-
-    match (arg_count, file_locations) {
-        (1, FileInputLocation::FirstArg) => determine_single_file_type(latitude),
-        (2, FileInputLocation::FirstArg) => determine_coordinate_file_type(latitude),
-        (3, FileInputLocation::ThirdArg) => {
-            determine_time_file_type(latitude, longitude.unwrap(), datetime.unwrap())
-        }
-        (3, FileInputLocation::None) => Ok(InputType::Standard),
-        _ => Err(format!(
-            "Invalid argument combination: {} args with file inputs at {:?}",
-            arg_count, file_locations
-        )),
-    }
-}
-
-fn count_arguments(has_longitude: bool, has_datetime: bool) -> u8 {
-    1 + has_longitude as u8 + has_datetime as u8
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FileInputLocation {
-    None,
-    FirstArg,
-    ThirdArg,
-}
-
-fn identify_file_inputs(
-    latitude: &str,
-    longitude: Option<&String>,
-    datetime: Option<&String>,
-) -> Result<FileInputLocation, String> {
-    let file_markers = [
+    // Count file inputs and validate
+    let file_count = [
         latitude.starts_with('@'),
         longitude.is_some_and(|s| s.starts_with('@')),
         datetime.is_some_and(|s| s.starts_with('@')),
-    ];
+    ]
+    .iter()
+    .filter(|&&x| x)
+    .count();
 
-    match file_markers.iter().filter(|&&x| x).count() {
-        0 => Ok(FileInputLocation::None),
-        1 => {
-            if file_markers[0] {
-                Ok(FileInputLocation::FirstArg)
-            } else if file_markers[2] {
-                Ok(FileInputLocation::ThirdArg)
+    if file_count > 1 {
+        return Err("Only one parameter can use file input (@file or @-)".to_string());
+    }
+
+    // Determine input type based on argument pattern
+    match (longitude.is_some(), datetime.is_some()) {
+        // 1 arg: latitude only (must be file)
+        (false, false) => {
+            if !latitude.starts_with('@') {
+                return Err("Single argument must be a file input (@file or @-)".to_string());
+            }
+            if latitude == "@-" {
+                Ok(InputType::StdinPaired)
             } else {
-                Err("File input in longitude position not supported".to_string())
+                Ok(InputType::PairedDataFile)
             }
         }
-        _ => Err("Only one parameter can use file input (@file or @-)".to_string()),
-    }
-}
-
-fn determine_single_file_type(latitude: &str) -> Result<InputType, String> {
-    match latitude {
-        "@-" => Ok(InputType::StdinPaired),
-        _ => Ok(InputType::PairedDataFile),
-    }
-}
-
-fn determine_coordinate_file_type(latitude: &str) -> Result<InputType, String> {
-    match latitude {
-        "@-" => Ok(InputType::StdinCoords),
-        _ => Ok(InputType::CoordinateFile),
-    }
-}
-
-fn determine_time_file_type(
-    latitude: &str,
-    longitude: &str,
-    datetime: &str,
-) -> Result<InputType, String> {
-    if latitude.starts_with('@') || longitude.starts_with('@') {
-        return Err("Only datetime parameter can be a file in this combination".to_string());
-    }
-    match datetime {
-        "@-" => Ok(InputType::StdinTimes),
-        _ => Ok(InputType::TimeFile),
+        // 2 args: latitude + longitude (latitude must be coordinate file)
+        (true, false) => {
+            if !latitude.starts_with('@') {
+                return Err("Two arguments require coordinate file as first parameter".to_string());
+            }
+            if longitude
+                .as_ref()
+                .expect("longitude exists in (true, false) case")
+                .starts_with('@')
+            {
+                return Err("File input in longitude position not supported".to_string());
+            }
+            if latitude == "@-" {
+                Ok(InputType::StdinCoords)
+            } else {
+                Ok(InputType::CoordinateFile)
+            }
+        }
+        // 2 args: latitude + datetime (coordinate file case, datetime in longitude position)
+        (false, true) => {
+            if !latitude.starts_with('@') {
+                return Err("Two arguments require coordinate file as first parameter".to_string());
+            }
+            if latitude == "@-" {
+                Ok(InputType::StdinCoords)
+            } else {
+                Ok(InputType::CoordinateFile)
+            }
+        }
+        // 3 args: latitude + longitude + datetime
+        (true, true) => {
+            let datetime = datetime
+                .as_ref()
+                .expect("datetime exists in (true, true) case");
+            if latitude.starts_with('@')
+                || longitude
+                    .as_ref()
+                    .expect("longitude exists in (true, true) case")
+                    .starts_with('@')
+            {
+                return Err("Only datetime parameter can be a file in this combination".to_string());
+            }
+            if datetime.starts_with('@') {
+                if datetime.as_str() == "@-" {
+                    Ok(InputType::StdinTimes)
+                } else {
+                    Ok(InputType::TimeFile)
+                }
+            } else {
+                Ok(InputType::Standard)
+            }
+        }
     }
 }
 
@@ -548,31 +570,20 @@ pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
         return; // User explicitly set, don't override
     }
 
-    let should_auto_enable = match (
-        &input.parsed_latitude,
-        &input.parsed_longitude,
-        &input.parsed_datetime,
-    ) {
+    let should_auto_enable =
         // Coordinate ranges auto-enable show-inputs
-        (Some(crate::types::Coordinate::Range { .. }), _, _)
-        | (_, Some(crate::types::Coordinate::Range { .. }), _) => true,
+        matches!(input.parsed_latitude, Some(crate::types::Coordinate::Range { .. })) ||
+        matches!(input.parsed_longitude, Some(crate::types::Coordinate::Range { .. })) ||
 
         // Partial dates (time series) auto-enable show-inputs
-        (_, _, Some(crate::types::DateTimeInput::PartialYear(_)))
-        | (_, _, Some(crate::types::DateTimeInput::PartialYearMonth(_, _)))
-        | (_, _, Some(crate::types::DateTimeInput::PartialDate(_, _, _))) => true,
+        matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialYear(_)) |
+                                        Some(crate::types::DateTimeInput::PartialYearMonth(_, _)) |
+                                        Some(crate::types::DateTimeInput::PartialDate(_, _, _))) ||
 
         // File inputs auto-enable show-inputs
-        _ => matches!(
-            input.input_type,
-            InputType::CoordinateFile
-                | InputType::TimeFile
-                | InputType::PairedDataFile
-                | InputType::StdinCoords
-                | InputType::StdinTimes
-                | InputType::StdinPaired
-        ),
-    };
+        matches!(input.input_type, InputType::CoordinateFile | InputType::TimeFile |
+                                   InputType::PairedDataFile | InputType::StdinCoords |
+                                   InputType::StdinTimes | InputType::StdinPaired);
 
     if should_auto_enable {
         input.global_options.show_inputs = Some(true);

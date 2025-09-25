@@ -84,7 +84,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("show-inputs")
             .long("show-inputs")
             .action(ArgAction::SetTrue)
-            .help("Show all inputs in output. Automatically enabled for coordinate ranges, time series, files unless --no-show-inputs is used."))
+            .help("Show all inputs in output. Auto-enabled for ranges, time series, files."))
         .arg(Arg::new("no-show-inputs")
             .long("no-show-inputs")
             .action(ArgAction::SetTrue)
