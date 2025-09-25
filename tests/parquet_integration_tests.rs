@@ -95,21 +95,9 @@ fn test_parquet_sunrise_basic() {
         ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
     let schema = builder.schema();
 
-    // Verify expected schema fields (partial date auto-enables show-inputs)
+    // Verify expected schema fields (specific date for sunrise does NOT auto-enable show-inputs)
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-    assert_eq!(
-        field_names,
-        vec![
-            "latitude",
-            "longitude",
-            "dateTime",
-            "deltaT",
-            "type",
-            "sunrise",
-            "transit",
-            "sunset"
-        ]
-    );
+    assert_eq!(field_names, vec!["type", "sunrise", "transit", "sunset"]);
 
     // Verify timestamp fields are nullable where expected
     let sunrise_field = schema
@@ -132,13 +120,16 @@ fn test_parquet_sunrise_basic() {
     );
     assert!(!transit_field.is_nullable(), "transit should never be null");
 
-    // Read data to verify we get 24 rows (hourly time series for the day)
+    // Read data to verify we get 1 row (single sunrise calculation for the specific date)
     let reader = builder.build().expect("Failed to build Parquet reader");
     let batches: Vec<RecordBatch> = reader
         .collect::<Result<Vec<_>, _>>()
         .expect("Failed to read batches");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 24, "Should have 24 rows for daily time series");
+    assert_eq!(
+        total_rows, 1,
+        "Should have 1 row for single sunrise calculation"
+    );
 }
 
 #[test]

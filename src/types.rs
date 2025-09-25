@@ -131,22 +131,76 @@ impl fmt::Display for DateTimeInput {
     }
 }
 
-/// Convert DateTimeInput to a concrete DateTime<FixedOffset>
-pub fn datetime_input_to_single(datetime_input: DateTimeInput) -> DateTime<FixedOffset> {
+/// Convert DateTimeInput to a concrete DateTime<FixedOffset> with timezone support
+pub fn datetime_input_to_single_with_timezone(
+    datetime_input: DateTimeInput,
+    timezone_spec: Option<crate::timezone::TimezoneSpec>,
+) -> DateTime<FixedOffset> {
     match datetime_input {
         DateTimeInput::Single(dt) => dt,
         DateTimeInput::Now => chrono::Utc::now().into(),
-        DateTimeInput::PartialYear(year) => chrono::FixedOffset::east_opt(0)
-            .unwrap()
-            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
-            .unwrap(),
-        DateTimeInput::PartialYearMonth(year, month) => chrono::FixedOffset::east_opt(0)
-            .unwrap()
-            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
-            .unwrap(),
-        DateTimeInput::PartialDate(year, month, day) => chrono::FixedOffset::east_opt(0)
-            .unwrap()
-            .with_ymd_and_hms(year, month, day, 0, 0, 0)
-            .unwrap(),
+        DateTimeInput::PartialYear(year) => {
+            let naive_dt = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            );
+            if let Some(spec) = timezone_spec {
+                spec.apply_to_naive(naive_dt).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            } else {
+                crate::timezone::apply_timezone_to_datetime(naive_dt, None).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            }
+        }
+        DateTimeInput::PartialYearMonth(year, month) => {
+            let naive_dt = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            );
+            if let Some(spec) = timezone_spec {
+                spec.apply_to_naive(naive_dt).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            } else {
+                crate::timezone::apply_timezone_to_datetime(naive_dt, None).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            }
+        }
+        DateTimeInput::PartialDate(year, month, day) => {
+            let naive_dt = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap(),
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            );
+            if let Some(spec) = timezone_spec {
+                spec.apply_to_naive(naive_dt).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            } else {
+                crate::timezone::apply_timezone_to_datetime(naive_dt, None).unwrap_or_else(|_| {
+                    chrono::FixedOffset::east_opt(0)
+                        .unwrap()
+                        .from_local_datetime(&naive_dt)
+                        .unwrap()
+                })
+            }
+        }
     }
 }

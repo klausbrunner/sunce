@@ -522,7 +522,10 @@ pub fn parse_sunrise_options(matches: &ArgMatches) -> SunriseOptions {
     }
 }
 
-pub fn parse_data_values(input: &mut ParsedInput) -> Result<(), crate::types::ParseError> {
+pub fn parse_data_values(
+    input: &mut ParsedInput,
+    command_name: Option<&str>,
+) -> Result<(), crate::types::ParseError> {
     match &input.input_type {
         InputType::Standard => {
             // Parse all three parameters
@@ -560,12 +563,12 @@ pub fn parse_data_values(input: &mut ParsedInput) -> Result<(), crate::types::Pa
     }
 
     // Apply auto show-inputs logic
-    apply_show_inputs_auto_logic(input);
+    apply_show_inputs_auto_logic(input, command_name);
 
     Ok(())
 }
 
-pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
+pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput, command_name: Option<&str>) {
     if input.global_options.show_inputs.is_some() {
         return; // User explicitly set, don't override
     }
@@ -575,10 +578,12 @@ pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput) {
         matches!(input.parsed_latitude, Some(crate::types::Coordinate::Range { .. })) ||
         matches!(input.parsed_longitude, Some(crate::types::Coordinate::Range { .. })) ||
 
-        // Partial dates (time series) auto-enable show-inputs
-        matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialYear(_)) |
-                                        Some(crate::types::DateTimeInput::PartialYearMonth(_, _)) |
-                                        Some(crate::types::DateTimeInput::PartialDate(_, _, _))) ||
+        // Partial dates (time series) auto-enable show-inputs for position command
+        // For sunrise command, specific dates should NOT auto-enable show-inputs
+        (matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialYear(_)) |
+                                         Some(crate::types::DateTimeInput::PartialYearMonth(_, _))) ||
+         (matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialDate(_, _, _))) &&
+          command_name != Some("sunrise"))) ||
 
         // File inputs auto-enable show-inputs
         matches!(input.input_type, InputType::CoordinateFile | InputType::TimeFile |
@@ -792,5 +797,77 @@ mod tests {
         // Test invalid longitude
         assert!(parse_coordinate("181.0", "longitude").is_err());
         assert!(parse_coordinate("-181.0", "longitude").is_err());
+    }
+
+    #[test]
+    fn test_show_inputs_auto_logic_sunrise_specific_date() {
+        use crate::types::{GlobalOptions, InputType, ParsedInput};
+
+        // Test that specific dates do NOT auto-enable show-inputs for sunrise command
+        let mut input = ParsedInput {
+            input_type: InputType::Standard,
+            latitude: "52.0".to_string(),
+            longitude: Some("13.4".to_string()),
+            datetime: Some("2024-01-01".to_string()),
+            global_options: GlobalOptions {
+                deltat: None,
+                format: None,
+                headers: None,
+                show_inputs: None, // Not explicitly set
+                timezone: None,
+            },
+            parsed_latitude: Some(Coordinate::Single(52.0)),
+            parsed_longitude: Some(Coordinate::Single(13.4)),
+            parsed_datetime: Some(DateTimeInput::PartialDate(2024, 1, 1)),
+        };
+
+        // For sunrise command, specific date should NOT auto-enable show-inputs
+        apply_show_inputs_auto_logic(&mut input, Some("sunrise"));
+        assert_eq!(
+            input.global_options.show_inputs, None,
+            "Specific date should not auto-enable show-inputs for sunrise command"
+        );
+
+        // Reset
+        input.global_options.show_inputs = None;
+
+        // For position command, specific date SHOULD auto-enable show-inputs
+        apply_show_inputs_auto_logic(&mut input, Some("position"));
+        assert_eq!(
+            input.global_options.show_inputs,
+            Some(true),
+            "Specific date should auto-enable show-inputs for position command"
+        );
+    }
+
+    #[test]
+    fn test_show_inputs_auto_logic_sunrise_partial_year() {
+        use crate::types::{GlobalOptions, InputType, ParsedInput};
+
+        // Test that partial years still auto-enable show-inputs even for sunrise command
+        let mut input = ParsedInput {
+            input_type: InputType::Standard,
+            latitude: "52.0".to_string(),
+            longitude: Some("13.4".to_string()),
+            datetime: Some("2024".to_string()),
+            global_options: GlobalOptions {
+                deltat: None,
+                format: None,
+                headers: None,
+                show_inputs: None,
+                timezone: None,
+            },
+            parsed_latitude: Some(Coordinate::Single(52.0)),
+            parsed_longitude: Some(Coordinate::Single(13.4)),
+            parsed_datetime: Some(DateTimeInput::PartialYear(2024)),
+        };
+
+        // For sunrise command, partial year should still auto-enable show-inputs
+        apply_show_inputs_auto_logic(&mut input, Some("sunrise"));
+        assert_eq!(
+            input.global_options.show_inputs,
+            Some(true),
+            "Partial year should auto-enable show-inputs even for sunrise command"
+        );
     }
 }

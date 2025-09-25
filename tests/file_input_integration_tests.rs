@@ -249,6 +249,130 @@ fn test_mixed_coordinate_formats() {
     assert_eq!(lines.len(), 4);
 }
 
+/// Test timezone handling with file inputs - regression test for timezone-dropping bugs
+#[test]
+fn test_file_input_timezone_handling() {
+    let dir = tempdir().unwrap();
+
+    // Test 1: Time file with --timezone option (TimeFileIterator)
+    let times_file = dir.path().join("times.txt");
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00").unwrap(); // Naive datetime
+    writeln!(file, "2024-12-21T15:30:00").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "--timezone=+02:00", // This should be applied to naive datetimes
+        "52.0",
+        "13.4",
+        &format!("@{}", times_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Verify timezone appears in output (proves timezone was applied)
+    assert!(
+        output_str.contains("+02:00"),
+        "TimeFile should apply --timezone to naive datetimes: {}",
+        output_str
+    );
+
+    // Test 2: Paired file with --timezone option (PairedFileIterator)
+    let paired_file = dir.path().join("paired.txt");
+    let mut file = File::create(&paired_file).unwrap();
+    writeln!(file, "52.0,13.4,2024-06-21T12:00:00").unwrap(); // Naive datetime
+    writeln!(file, "40.42,-3.70,2024-12-21T15:30:00").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "--timezone=-05:00", // Different timezone
+        &format!("@{}", paired_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Verify timezone appears in output
+    assert!(
+        output_str.contains("-05:00"),
+        "PairedFile should apply --timezone to naive datetimes: {}",
+        output_str
+    );
+
+    // Test 3: Coordinate file with --timezone option (coordinate file functions)
+    let coords_file = dir.path().join("coords.txt");
+    let mut file = File::create(&coords_file).unwrap();
+    writeln!(file, "52.0,13.4").unwrap();
+    writeln!(file, "40.42,-3.70").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "--timezone=+09:00", // Tokyo timezone
+        &format!("@{}", coords_file.to_str().unwrap()),
+        "2024-06-21T12:00:00", // Naive datetime
+        "sunrise",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Verify timezone appears in output
+    assert!(
+        output_str.contains("+09:00"),
+        "CoordinateFile should apply --timezone to naive datetimes: {}",
+        output_str
+    );
+}
+
+/// Test mixed timezone formats in file inputs
+#[test]
+fn test_file_input_mixed_timezones() {
+    let dir = tempdir().unwrap();
+
+    // Time file with mixed timezone formats
+    let times_file = dir.path().join("mixed_times.txt");
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00+02:00").unwrap(); // Explicit timezone
+    writeln!(file, "2024-06-21T15:00:00").unwrap(); // Naive - should use --timezone
+    writeln!(file, "2024-06-21T18:00:00Z").unwrap(); // UTC
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "--timezone=+05:00", // Should only apply to naive datetime
+        "52.0",
+        "13.4",
+        &format!("@{}", times_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Verify all timezone formats preserved/applied correctly
+    assert!(
+        output_str.contains("+02:00"),
+        "Explicit timezone should be preserved: {}",
+        output_str
+    );
+    assert!(
+        output_str.contains("+05:00"),
+        "Naive datetime should get --timezone: {}",
+        output_str
+    );
+    assert!(
+        output_str.contains("+00:00"),
+        "UTC should be preserved as +00:00: {}",
+        output_str
+    );
+}
+
 /// Test file input error handling
 #[test]
 fn test_file_input_errors() {

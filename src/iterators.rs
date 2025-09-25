@@ -10,7 +10,7 @@ use crate::output::PositionResult;
 use crate::sunrise_formatters::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
 use crate::timezone::parse_timezone_spec;
-use crate::types::datetime_input_to_single;
+use crate::types::datetime_input_to_single_with_timezone;
 use crate::types::{Coordinate, DateTimeInput, InputType, ParsedInput};
 use chrono::{DateTime, FixedOffset};
 use clap::ArgMatches;
@@ -179,10 +179,18 @@ fn create_paired_file_position_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
     let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
-            let datetime = datetime_input_to_single(datetime_input);
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
             Ok(calculate_single_position(datetime, lat, lon, params))
         }
         Err(e) => Err(format!("Error reading paired data: {}", e)),
@@ -197,10 +205,18 @@ fn create_paired_file_sunrise_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
     let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
-            let datetime = datetime_input_to_single(datetime_input);
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
             Ok(calculate_single_sunrise(datetime, lat, lon, params))
         }
         Err(e) => Err(format!("Error reading paired data: {}", e)),
@@ -218,7 +234,14 @@ fn create_coordinate_file_position_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
-    let datetime = datetime_input_to_single(datetime);
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let datetime = datetime_input_to_single_with_timezone(datetime, timezone_spec);
 
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
@@ -246,7 +269,14 @@ fn create_coordinate_file_sunrise_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
-    let datetime = datetime_input_to_single(datetime);
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let datetime = datetime_input_to_single_with_timezone(datetime, timezone_spec);
 
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
@@ -287,10 +317,18 @@ fn create_time_file_position_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
 
     Ok(time_iter.map(move |time_result| match time_result {
         Ok(datetime_input) => {
-            let datetime = datetime_input_to_single(datetime_input);
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
             Ok(calculate_single_position(datetime, lat, lon, params))
         }
         Err(e) => Err(format!("Error reading time data: {}", e)),
@@ -326,10 +364,18 @@ fn create_time_file_sunrise_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
 
     Ok(time_iter.map(move |time_result| match time_result {
         Ok(datetime_input) => {
-            let datetime = datetime_input_to_single(datetime_input);
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
             Ok(calculate_single_sunrise(datetime, lat, lon, params))
         }
         Err(e) => Err(format!("Error reading time data: {}", e)),
@@ -368,7 +414,8 @@ fn create_standard_position_iterator<'a>(
         && (matches!(lat, Coordinate::Range { .. }) || matches!(lon, Coordinate::Range { .. }))
     {
         // For sunrise commands with coordinate ranges, use single datetime to avoid Cartesian product time series expansion
-        let single_dt = datetime_input_to_single(datetime.clone());
+        let single_dt =
+            datetime_input_to_single_with_timezone(datetime.clone(), timezone_spec.clone());
         Box::new(std::iter::once(single_dt))
     } else {
         // For position commands or sunrise with single coordinates, expand datetime input into time series
@@ -463,9 +510,12 @@ fn create_standard_sunrise_iterator<'a>(
         .map_err(|e| e.to_string())?;
 
     let datetime_iter: Box<dyn Iterator<Item = DateTime<FixedOffset>> + 'a> = if is_sunrise_command
-        && (matches!(lat, Coordinate::Range { .. }) || matches!(lon, Coordinate::Range { .. }))
+        && (matches!(lat, Coordinate::Range { .. })
+            || matches!(lon, Coordinate::Range { .. })
+            || matches!(datetime, DateTimeInput::PartialDate(_, _, _)))
     {
-        let single_dt = datetime_input_to_single(datetime.clone());
+        let single_dt =
+            datetime_input_to_single_with_timezone(datetime.clone(), timezone_spec.clone());
         Box::new(std::iter::once(single_dt))
     } else {
         let expanded =

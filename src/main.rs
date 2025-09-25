@@ -43,11 +43,10 @@ fn main() {
 
 fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
     let mut input = parse_input(matches)?;
-    parse_data_values(&mut input).map_err(|e| e.to_string())?;
+    let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
+    parse_data_values(&mut input, Some(cmd_name)).map_err(|e| e.to_string())?;
 
     let format = determine_output_format(input.global_options.format.as_deref())?;
-
-    let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
     let show_inputs = input.global_options.show_inputs.unwrap_or(false);
     let show_headers = input.global_options.headers.unwrap_or(true);
 
