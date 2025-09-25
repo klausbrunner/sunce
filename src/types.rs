@@ -12,6 +12,7 @@ pub enum OutputFormat {
     Human,
     Csv,
     Json,
+    Parquet,
 }
 
 impl OutputFormat {
@@ -20,7 +21,11 @@ impl OutputFormat {
             "HUMAN" => Ok(Self::Human),
             "CSV" => Ok(Self::Csv),
             "JSON" => Ok(Self::Json),
-            _ => Err(format!("Unknown format: {}. Use HUMAN, CSV, or JSON", s)),
+            "PARQUET" => Ok(Self::Parquet),
+            _ => Err(format!(
+                "Unknown format: {}. Use HUMAN, CSV, JSON, or PARQUET",
+                s
+            )),
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::parquet_output::output_sunrise_results_parquet;
 use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::types::SunriseResult;
@@ -34,15 +35,28 @@ pub fn output_sunrise_results<I>(
     let stdout = io::stdout().lock();
     let mut writer = BufWriter::new(stdout);
 
-    let result = output_sunrise_results_buffered(
-        results,
-        &mut writer,
-        format,
-        show_inputs,
-        show_headers,
-        show_twilight,
-        is_stdin,
-    );
+    let result = match format {
+        OutputFormat::Parquet => {
+            let stdout = io::stdout();
+            output_sunrise_results_parquet(
+                results,
+                stdout,
+                show_inputs,
+                show_headers,
+                show_twilight,
+                is_stdin,
+            )
+        }
+        _ => output_sunrise_results_buffered(
+            results,
+            &mut writer,
+            format,
+            show_inputs,
+            show_headers,
+            show_twilight,
+            is_stdin,
+        ),
+    };
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
@@ -72,6 +86,10 @@ where
             OutputFormat::Human => print_human(writer, &result, show_inputs, show_twilight)?,
             OutputFormat::Csv => print_csv(writer, &result, show_inputs, show_twilight)?,
             OutputFormat::Json => print_json(writer, &result, show_inputs, show_twilight)?,
+            OutputFormat::Parquet => {
+                // This should never be reached as parquet is handled at the top level
+                unreachable!("Parquet format should be handled at the top level")
+            }
         }
         if flush_each {
             writer.flush()?;

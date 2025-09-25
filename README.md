@@ -1,6 +1,6 @@
 # sunce
 
-`sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, and streaming, and produces machine-friendly output (CSV or JSON Lines) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
+`sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, and streaming, and produces machine-friendly output (CSV, JSON Lines, or Parquet) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
 ## Status
 
@@ -49,6 +49,9 @@ sunce --format=CSV 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
 
 # Sunrise, sunset, and twilight times for Tokyo throughout March 2027, JSON output
 sunce --format=JSON --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twilight
+
+# High-performance data processing: large datasets with Parquet output (ZSTD compressed)
+sunce --format=PARQUET 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
 ```
 
 ## File input and streaming

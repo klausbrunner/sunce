@@ -16,3 +16,6 @@ Thumbs.db
 *.tmp
 *.bak
 *~.claude/
+
+# Test artifacts
+*.parquet

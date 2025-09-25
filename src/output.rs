@@ -1,3 +1,4 @@
+use crate::parquet_output::output_position_results_parquet;
 use crate::table_format::{TableFormatter, VarianceFlags, write_header_section};
 use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
@@ -43,6 +44,17 @@ pub fn output_position_results<I>(
         ),
         OutputFormat::Json => {
             output_json_format(results, &mut writer, show_inputs, elevation_angle, is_stdin)
+        }
+        OutputFormat::Parquet => {
+            let stdout = io::stdout();
+            output_position_results_parquet(
+                results,
+                stdout,
+                show_inputs,
+                show_headers,
+                elevation_angle,
+                is_stdin,
+            )
         }
     };
 
