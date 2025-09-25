@@ -1,3 +1,4 @@
+#[cfg(feature = "parquet")]
 use crate::parquet_output::output_sunrise_results_parquet;
 use crate::types::{OutputFormat, format_datetime_solarpos};
 use chrono::{DateTime, FixedOffset};
@@ -37,15 +38,24 @@ pub fn output_sunrise_results<I>(
 
     let result = match format {
         OutputFormat::Parquet => {
-            let stdout = io::stdout();
-            output_sunrise_results_parquet(
-                results,
-                stdout,
-                show_inputs,
-                show_headers,
-                show_twilight,
-                is_stdin,
-            )
+            #[cfg(feature = "parquet")]
+            {
+                let stdout = io::stdout();
+                output_sunrise_results_parquet(
+                    results,
+                    stdout,
+                    show_inputs,
+                    show_headers,
+                    show_twilight,
+                    is_stdin,
+                )
+            }
+            #[cfg(not(feature = "parquet"))]
+            {
+                unreachable!(
+                    "Parquet format should be rejected during parsing when feature is disabled"
+                )
+            }
         }
         _ => output_sunrise_results_buffered(
             results,

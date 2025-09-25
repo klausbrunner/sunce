@@ -4,6 +4,7 @@ mod file_input;
 mod input_parsing;
 mod iterators;
 mod output;
+#[cfg(feature = "parquet")]
 mod parquet_output;
 mod performance;
 mod sunrise_formatters;

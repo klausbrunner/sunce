@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.2.1"
+version = "0.2.2-dev"
 edition = "2024"
 rust-version = "1.90"
 description = "High-performance command-line solar position calculator"
@@ -27,14 +27,19 @@ name = "sunce"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive", "help"] }
+clap = { version = "4.5", features = ["help"] }
 chrono = "0.4"
 chrono-tz = "0.10"
 iana-time-zone = "0.1"
 thiserror = "2.0"
 solar-positioning = "0.3"
-arrow = { version = "56", default-features = false }
-parquet = { version = "56", features = ["arrow", "zstd"], default-features = false }
+arrow = { version = "56", default-features = false, optional = true }
+parquet = { version = "56", features = ["arrow", "zstd"], default-features = false, optional = true }
+
+[features]
+default = ["parquet"]
+parquet = ["dep:arrow", "dep:parquet"]
+minimal = []
 
 [build-dependencies]
 chrono = "0.4"
@@ -51,6 +56,21 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Optimize most dependencies for size
+[profile.release.package."*"]
+opt-level = "z"
+strip = true
+
+# Keep performance-critical crates optimized for speed
+[profile.release.package.sunce]
+opt-level = 3
+[profile.release.package.solar-positioning]
+opt-level = 3
+[profile.release.package.chrono]
+opt-level = 3
+[profile.release.package.chrono-tz]
+opt-level = 3
 
 [profile.dev]
 opt-level = 0

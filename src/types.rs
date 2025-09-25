@@ -21,11 +21,24 @@ impl OutputFormat {
             "HUMAN" => Ok(Self::Human),
             "CSV" => Ok(Self::Csv),
             "JSON" => Ok(Self::Json),
-            "PARQUET" => Ok(Self::Parquet),
-            _ => Err(format!(
-                "Unknown format: {}. Use HUMAN, CSV, JSON, or PARQUET",
-                s
-            )),
+            "PARQUET" => {
+                #[cfg(feature = "parquet")]
+                {
+                    Ok(Self::Parquet)
+                }
+                #[cfg(not(feature = "parquet"))]
+                {
+                    Err("PARQUET format not available in minimal build. Available formats: HUMAN, CSV, JSON. Rebuild with: cargo install sunce --features parquet".to_string())
+                }
+            }
+            _ => {
+                #[cfg(feature = "parquet")]
+                let available = "HUMAN, CSV, JSON, or PARQUET";
+                #[cfg(not(feature = "parquet"))]
+                let available = "HUMAN, CSV, or JSON";
+
+                Err(format!("Unknown format: {}. Use {}", s, available))
+            }
         }
     }
 }

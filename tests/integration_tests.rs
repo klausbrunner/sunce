@@ -29,12 +29,24 @@ fn test_output_formats() {
     // Test JSON format
     position_test_with_format("JSON").assert_success_contains_all(&["\"dateTime\"", "\"azimuth\""]);
 
-    // Test PARQUET format
-    let output = position_test_with_format("PARQUET").get_output();
-    assert!(output.status.success());
-    // Parquet is binary format, so we can't check string content
-    // Just verify the command succeeded and produced output
-    assert!(!output.stdout.is_empty());
+    // Test PARQUET format (only when feature enabled)
+    #[cfg(feature = "parquet")]
+    {
+        let output = position_test_with_format("PARQUET").get_output();
+        assert!(output.status.success());
+        // Parquet is binary format, so we can't check string content
+        // Just verify the command succeeded and produced output
+        assert!(!output.stdout.is_empty());
+    }
+
+    // Test PARQUET format rejection (only when feature disabled)
+    #[cfg(not(feature = "parquet"))]
+    {
+        let output = position_test_with_format("PARQUET").get_output();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("PARQUET format not available in minimal build"));
+    }
 }
 
 /// Test elevation angle vs zenith angle

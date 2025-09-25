@@ -3,11 +3,12 @@ use std::sync::LazyLock;
 
 static VERSION: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "{}\nTarget: {}\nBuild: {} ({})",
+        "{}\nTarget: {}\nBuild: {} ({})\nFeatures: {}",
         env!("CARGO_PKG_VERSION"),
         env!("BUILD_TARGET"),
         env!("BUILD_PROFILE"),
-        env!("BUILD_DATE")
+        env!("BUILD_DATE"),
+        env!("BUILD_FEATURES")
     )
 });
 
@@ -19,7 +20,7 @@ pub fn build_cli() -> Command {
         .long_about(Some(concat!(
             "High-performance command-line solar position calculator\n\n",
             "Computes topocentric solar coordinates and solar events (sunrise, sunset, transit, twilight).\n",
-            "Supports time series, geographic sweeps, file input, and streaming with CSV/JSON output.\n\n",
+            "Supports time series, geographic sweeps, file input, and streaming with CSV/JSON/Parquet output.\n\n",
             "Examples:\n",
             "  sunce 52.0 13.4 2024-01-01 position\n",
             "  sunce 52:53:0.1 13:14:0.1 2024 position --format=csv\n",
@@ -70,7 +71,7 @@ pub fn build_cli() -> Command {
             .value_name("deltaT"))
         .arg(Arg::new("format")
             .long("format")
-            .help("Output format, one of HUMAN, CSV, JSON.")
+            .help("Output format, one of HUMAN, CSV, JSON, PARQUET (if enabled).")
             .require_equals(true)
             .value_name("format"))
         .arg(Arg::new("headers")

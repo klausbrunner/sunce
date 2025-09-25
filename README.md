@@ -42,16 +42,16 @@ sunce 59.334 18.063 2026-01-15T12:30:00+01:00 position
 
 ```bash
 # Time series: positions in Berlin every 10 minutes, CSV output, with delta-T estimate
-sunce --format=CSV --deltat --timezone=Europe/Berlin 52.522 13.413 2023-03-26 position --step=10m
+sunce --format=csv --deltat --timezone=Europe/Berlin 52.522 13.413 2023-03-26 position --step=10m
 
 # Geographic grid: positions across Central Europe at noon (1° resolution)
-sunce --format=CSV 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
+sunce --format=csv 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
 
 # Sunrise, sunset, and twilight times for Tokyo throughout March 2027, JSON output
-sunce --format=JSON --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twilight
+sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twilight
 
-# High-performance data processing: large datasets with Parquet output (ZSTD compressed)
-sunce --format=PARQUET 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
+# High-performance data processing: large datasets with Parquet output (zstd compressed)
+sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
 ```
 
 ## File input and streaming
@@ -90,7 +90,8 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 - `human` (default) – readable text for quick checks.
 - `csv` – comma-separated values with headers by default; use `--no-headers` to omit them.
-- `json` – JSON Lines (one JSON object per line) for streaming and line-oriented processing.
+- `json` – JSON Lines (one JSON object per line), great for post-processing with `jq` or similar tools.
+- `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics (opt-out feature).
 
 ## Key options
 

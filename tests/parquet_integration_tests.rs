@@ -1,3 +1,5 @@
+#![cfg(feature = "parquet")]
+
 mod common;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
