@@ -157,6 +157,53 @@ fn parse_full_datetime(
         return Ok(DateTimeInput::Single(dt_fixed));
     }
 
+    // Try ISO format without seconds but with timezone (e.g., "2027-06-21T12:00Z")
+    // TODO: Workaround for chrono's strict RFC3339 parsing - consider more flexible parser
+    if input.ends_with('Z')
+        || input.contains('+')
+        || input.contains('-') && input.rfind('-').unwrap_or(0) > 10
+    {
+        // Add ":00" seconds if missing and try RFC3339 again
+        let with_seconds = if input.contains('T') {
+            let t_pos = input.find('T').unwrap();
+            let time_part = &input[t_pos..];
+
+            // Find where timezone starts (+ or - but not in date part)
+            let tz_start = time_part.find('+').or_else(|| time_part.find('-'));
+            let time_only = if let Some(tz_pos) = tz_start {
+                &time_part[..tz_pos]
+            } else if let Some(stripped) = time_part.strip_suffix('Z') {
+                stripped
+            } else {
+                time_part
+            };
+
+            // Check if time part has only hour:minute (one colon)
+            if time_only.matches(':').count() == 1 {
+                // Add ":00" seconds
+                if input.ends_with('Z') {
+                    input.replace('Z', ":00Z")
+                } else if let Some(offset_pos) = input
+                    .find('+')
+                    .or_else(|| input.rfind('-').filter(|&i| i > 10))
+                {
+                    format!("{}:00{}", &input[..offset_pos], &input[offset_pos..])
+                } else {
+                    format!("{}:00", input)
+                }
+            } else {
+                input.to_string()
+            }
+        } else {
+            input.to_string()
+        };
+
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&with_seconds) {
+            let dt_fixed = dt.fixed_offset();
+            return Ok(DateTimeInput::Single(dt_fixed));
+        }
+    }
+
     // Parse as naive datetime and apply timezone
     let naive = if input.contains('T') {
         // ISO format with T separator
@@ -649,6 +696,48 @@ mod tests {
         match result {
             DateTimeInput::PartialYear(2024) => {} // Success
             _ => panic!("Expected PartialYear"),
+        }
+    }
+
+    #[test]
+    fn test_datetime_without_seconds_with_timezone() {
+        // Test Z suffix without seconds
+        let result = parse_datetime("2027-06-21T12:00Z", None).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "2027-06-21 12:00:00"
+                );
+                assert_eq!(dt.offset().local_minus_utc(), 0); // UTC offset
+            }
+            _ => panic!("Expected Single datetime"),
+        }
+
+        // Test positive offset without seconds
+        let result = parse_datetime("2027-06-21T12:00+02:00", None).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "2027-06-21 12:00:00"
+                );
+                assert_eq!(dt.offset().local_minus_utc(), 7200); // +2 hours in seconds
+            }
+            _ => panic!("Expected Single datetime"),
+        }
+
+        // Test negative offset without seconds
+        let result = parse_datetime("2027-06-21T12:00-05:00", None).unwrap();
+        match result {
+            DateTimeInput::Single(dt) => {
+                assert_eq!(
+                    dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    "2027-06-21 12:00:00"
+                );
+                assert_eq!(dt.offset().local_minus_utc(), -18000); // -5 hours in seconds
+            }
+            _ => panic!("Expected Single datetime"),
         }
     }
 
