@@ -34,7 +34,7 @@ iana-time-zone = "0.1"
 thiserror = "2.0"
 solar-positioning = "0.3"
 arrow = { version = "56", default-features = false, optional = true }
-parquet = { version = "56", features = ["arrow", "zstd"], default-features = false, optional = true }
+parquet = { version = "56", features = ["arrow", "snap"], default-features = false, optional = true }
 
 [features]
 default = ["parquet"]

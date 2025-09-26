@@ -85,9 +85,8 @@ where
 {
     let schema = batch_builder.schema();
 
-    // Configure ZSTD compression
     let props = WriterProperties::builder()
-        .set_compression(Compression::ZSTD(Default::default()))
+        .set_compression(Compression::SNAPPY)
         .build();
 
     let mut parquet_writer = ArrowWriter::try_new(writer, schema, Some(props))
