@@ -144,6 +144,9 @@ pub fn create_position_iterator<'a>(
         InputType::Standard => Ok(Box::new(
             create_standard_position_iterator(input, params, step, false, watch_mode)?.map(Ok),
         )),
+        InputType::CoordinateFileTimeFile => Ok(Box::new(
+            create_coordinate_file_time_file_position_iterator(input, params)?,
+        )),
     }
 }
 
@@ -167,6 +170,9 @@ pub fn create_sunrise_iterator<'a>(
         }
         InputType::Standard => Ok(Box::new(
             create_standard_sunrise_iterator(input, params, step, true)?.map(Ok),
+        )),
+        InputType::CoordinateFileTimeFile => Ok(Box::new(
+            create_coordinate_file_time_file_sunrise_iterator(input, params)?,
         )),
     }
 }
@@ -372,6 +378,110 @@ fn create_time_file_sunrise_iterator<'a>(
                     Ok(calculate_single_sunrise(datetime, lat_val, lon_val, params))
                 })
             })) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+        }
+        Err(e) => Box::new(std::iter::once(Err(format!(
+            "Error reading time data: {}",
+            e
+        )))) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
+    }))
+}
+
+fn create_coordinate_file_time_file_position_iterator<'a>(
+    input: &'a ParsedInput,
+    params: &'a CalculationParameters,
+) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
+    // Coordinate file path is in latitude, time file path is in datetime
+    let coord_file_path = &input.latitude;
+    let time_file_path = input.datetime.as_ref().unwrap();
+
+    let time_reader = create_file_reader(time_file_path)
+        .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
+
+    let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
+
+    // Cartesian product: for each time, iterate through all coordinates
+    Ok(time_iter.flat_map(move |time_result| match time_result {
+        Ok(datetime_input) => {
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+            match create_file_reader(coord_file_path) {
+                Ok(coord_reader_clone) => {
+                    let coord_iter_clone = CoordinateFileIterator::new(coord_reader_clone);
+                    Box::new(
+                        coord_iter_clone.map(move |coord_result| match coord_result {
+                            Ok((lat, lon)) => {
+                                Ok(calculate_single_position(datetime, lat, lon, params))
+                            }
+                            Err(e) => Err(format!("Error reading coordinate data: {}", e)),
+                        }),
+                    )
+                        as Box<dyn Iterator<Item = Result<PositionResult, String>>>
+                }
+                Err(e) => Box::new(std::iter::once(Err(format!(
+                    "Failed to reopen coordinate file {}: {}",
+                    coord_file_path, e
+                ))))
+                    as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
+            }
+        }
+        Err(e) => Box::new(std::iter::once(Err(format!(
+            "Error reading time data: {}",
+            e
+        )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
+    }))
+}
+
+fn create_coordinate_file_time_file_sunrise_iterator<'a>(
+    input: &'a ParsedInput,
+    params: &'a SunriseCalculationParameters,
+) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
+    // Coordinate file path is in latitude, time file path is in datetime
+    let coord_file_path = &input.latitude;
+    let time_file_path = input.datetime.as_ref().unwrap();
+
+    let time_reader = create_file_reader(time_file_path)
+        .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
+
+    let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
+    let timezone_spec = input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))?;
+
+    // Cartesian product: for each time, iterate through all coordinates
+    Ok(time_iter.flat_map(move |time_result| match time_result {
+        Ok(datetime_input) => {
+            let datetime =
+                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+            match create_file_reader(coord_file_path) {
+                Ok(coord_reader_clone) => {
+                    let coord_iter_clone = CoordinateFileIterator::new(coord_reader_clone);
+                    Box::new(
+                        coord_iter_clone.map(move |coord_result| match coord_result {
+                            Ok((lat, lon)) => {
+                                Ok(calculate_single_sunrise(datetime, lat, lon, params))
+                            }
+                            Err(e) => Err(format!("Error reading coordinate data: {}", e)),
+                        }),
+                    )
+                        as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+                }
+                Err(e) => Box::new(std::iter::once(Err(format!(
+                    "Failed to reopen coordinate file {}: {}",
+                    coord_file_path, e
+                ))))
+                    as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
+            }
         }
         Err(e) => Box::new(std::iter::once(Err(format!(
             "Error reading time data: {}",

@@ -364,10 +364,16 @@ pub fn parse_input(matches: &ArgMatches) -> Result<ParsedInput, String> {
     let global_options = parse_global_options(matches);
 
     // For coordinate files, the datetime is in the longitude position
-    let (parsed_longitude, parsed_datetime) = match input_type {
-        InputType::CoordinateFile | InputType::StdinCoords => (None, longitude.cloned()),
-        _ => (longitude.cloned(), datetime.cloned()),
-    };
+    // For coordinate+time files, datetime is in the longitude position when 2 args, datetime position when 3 args
+    let (parsed_longitude, parsed_datetime) =
+        match (&input_type, longitude.is_some(), datetime.is_some()) {
+            (InputType::CoordinateFile | InputType::StdinCoords, _, _) => {
+                (None, longitude.cloned())
+            }
+            (InputType::CoordinateFileTimeFile, true, false) => (None, longitude.cloned()), // @coords.txt @times.txt
+            (InputType::CoordinateFileTimeFile, false, true) => (None, datetime.cloned()), // @coords.txt @times.txt (if parsed as lat+datetime)
+            _ => (longitude.cloned(), datetime.cloned()),
+        };
 
     Ok(ParsedInput {
         input_type,
@@ -386,18 +392,18 @@ fn determine_input_type(
     longitude: Option<&String>,
     datetime: Option<&String>,
 ) -> Result<InputType, String> {
-    // Count file inputs and validate
-    let file_count = [
-        latitude.starts_with('@'),
-        longitude.is_some_and(|s| s.starts_with('@')),
-        datetime.is_some_and(|s| s.starts_with('@')),
+    // Count stdin inputs and validate (only stdin @- is restricted to single usage)
+    let stdin_count = [
+        latitude == "@-",
+        longitude.is_some_and(|s| s.as_str() == "@-"),
+        datetime.is_some_and(|s| s.as_str() == "@-"),
     ]
     .iter()
     .filter(|&&x| x)
     .count();
 
-    if file_count > 1 {
-        return Err("Only one parameter can use file input (@file or @-)".to_string());
+    if stdin_count > 1 {
+        return Err("Only one parameter can use stdin input (@-)".to_string());
     }
 
     // Determine input type based on argument pattern
@@ -418,17 +424,20 @@ fn determine_input_type(
             if !latitude.starts_with('@') {
                 return Err("Two arguments require coordinate file as first parameter".to_string());
             }
-            if longitude
+            let longitude_arg = longitude
                 .as_ref()
-                .expect("longitude exists in (true, false) case")
-                .starts_with('@')
-            {
-                return Err("File input in longitude position not supported".to_string());
-            }
-            if latitude == "@-" {
-                Ok(InputType::StdinCoords)
+                .expect("longitude exists in (true, false) case");
+
+            // If both arguments are files, treat longitude as datetime (coordinate + time file)
+            if longitude_arg.starts_with('@') {
+                Ok(InputType::CoordinateFileTimeFile)
             } else {
-                Ok(InputType::CoordinateFile)
+                // Standard coordinate file + datetime case
+                if latitude == "@-" {
+                    Ok(InputType::StdinCoords)
+                } else {
+                    Ok(InputType::CoordinateFile)
+                }
             }
         }
         // 2 args: latitude + datetime (coordinate file case, datetime in longitude position)
@@ -436,7 +445,14 @@ fn determine_input_type(
             if !latitude.starts_with('@') {
                 return Err("Two arguments require coordinate file as first parameter".to_string());
             }
-            if latitude == "@-" {
+            let datetime = datetime
+                .as_ref()
+                .expect("datetime exists in (false, true) case");
+
+            // Check if we have coordinate file + time file
+            if datetime.starts_with('@') {
+                Ok(InputType::CoordinateFileTimeFile)
+            } else if latitude == "@-" {
                 Ok(InputType::StdinCoords)
             } else {
                 Ok(InputType::CoordinateFile)
@@ -560,6 +576,9 @@ pub fn parse_data_values(
         InputType::PairedDataFile | InputType::StdinPaired => {
             // Everything comes from the file - don't parse anything here
         }
+        InputType::CoordinateFileTimeFile => {
+            // Both coordinates and times come from files - don't parse anything here
+        }
     }
 
     // Apply auto show-inputs logic
@@ -588,7 +607,8 @@ pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput, command_name: Optio
         // File inputs auto-enable show-inputs
         matches!(input.input_type, InputType::CoordinateFile | InputType::TimeFile |
                                    InputType::PairedDataFile | InputType::StdinCoords |
-                                   InputType::StdinTimes | InputType::StdinPaired);
+                                   InputType::StdinTimes | InputType::StdinPaired |
+                                   InputType::CoordinateFileTimeFile);
 
     if should_auto_enable {
         input.global_options.show_inputs = Some(true);

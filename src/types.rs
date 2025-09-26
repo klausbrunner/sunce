@@ -81,6 +81,7 @@ pub enum InputType {
     StdinCoords,
     StdinTimes,
     StdinPaired,
+    CoordinateFileTimeFile,
 }
 
 #[derive(Debug, Clone)]
