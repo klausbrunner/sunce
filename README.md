@@ -12,6 +12,8 @@ This project aims to be an improved, largely compatible replacement for the Java
 - **Astronomical and simulation tools** – provide precise solar positions for rendering and sky models.
 - **Geospatial processing** – integrate into GIS or ETL pipelines via command-line streaming and CSV/JSON output.
 
+See [https://github.com/klausbrunner/sunpath-r](https://github.com/klausbrunner/sunpath-r) for some example uses of `sunce` in R.
+
 ## Requirements and installation
 
 Download the latest release binary from the [releases page](https://github.com/klausbrunner/sunce/releases/latest) or install via Homebrew (macOS/Linux):
