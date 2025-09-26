@@ -568,3 +568,141 @@ fn test_solarpos_compatibility_stdin() {
     assert!(sunce_str.contains("204.04406,30.22402"));
     assert!(sunce_str.contains("52.00000,13.40000"));
 }
+
+/// Test coordinate ranges with time files for position command
+#[test]
+fn test_coordinate_ranges_with_time_files_position() {
+    let dir = tempdir().unwrap();
+    let times_file = dir.path().join("times.txt");
+
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00").unwrap();
+    writeln!(file, "2024-06-21T18:00:00").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "52.0:52.1:0.1", // Latitude range
+        "13.4:13.5:0.1", // Longitude range
+        &format!("@{}", times_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should contain header with coordinates and other fields
+    assert!(output_str.contains("latitude,longitude,elevation"));
+
+    // Should contain coordinate range values for both times
+    assert!(output_str.contains("52.00000,13.40000"));
+    assert!(output_str.contains("52.10000,13.50000"));
+    assert!(output_str.contains("2024-06-21T12:00:00"));
+    assert!(output_str.contains("2024-06-21T18:00:00"));
+
+    // Should have the right number of rows:
+    // Header + (2 lat values * 2 lon values * 2 time values) = 1 + 8 = 9 lines
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 9);
+}
+
+/// Test coordinate ranges with time files for sunrise command
+#[test]
+fn test_coordinate_ranges_with_time_files_sunrise() {
+    let dir = tempdir().unwrap();
+    let times_file = dir.path().join("dates.txt");
+
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21").unwrap(); // Summer solstice
+    writeln!(file, "2024-12-21").unwrap(); // Winter solstice
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "50.0:51.0:1.0", // Latitude range (2 values)
+        "10.0:11.0:1.0", // Longitude range (2 values)
+        &format!("@{}", times_file.to_str().unwrap()),
+        "sunrise",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should contain headers with coordinates and sunrise fields
+    assert!(output_str.contains("latitude,longitude,dateTime"));
+    assert!(output_str.contains("sunrise,transit,sunset"));
+
+    // Should contain range coordinate values for both dates
+    assert!(output_str.contains("50.00000,10.00000"));
+    assert!(output_str.contains("51.00000,11.00000"));
+    assert!(output_str.contains("2024-06-21"));
+    assert!(output_str.contains("2024-12-21"));
+
+    // Should have the right number of rows:
+    // Header + (2 lat values * 2 lon values * 2 date values) = 1 + 8 = 9 lines
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 9);
+}
+
+/// Test single coordinate with time file range (ensure backward compatibility)
+#[test]
+fn test_single_coordinates_with_time_files() {
+    let dir = tempdir().unwrap();
+    let times_file = dir.path().join("times.txt");
+
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00").unwrap();
+    writeln!(file, "2024-06-21T15:00:00").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "52.0", // Single latitude
+        "13.4", // Single longitude
+        &format!("@{}", times_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should work exactly as before (backward compatibility)
+    assert!(output_str.contains("52.00000,13.40000"));
+    assert!(output_str.contains("2024-06-21T12:00:00"));
+    assert!(output_str.contains("2024-06-21T15:00:00"));
+
+    // Should have 3 lines (header + 2 time values)
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 3);
+}
+
+/// Test mixed ranges (lat range, lon single) with time files
+#[test]
+fn test_mixed_coordinate_ranges_with_time_files() {
+    let dir = tempdir().unwrap();
+    let times_file = dir.path().join("times.txt");
+
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.args([
+        "--format=CSV",
+        "52.0:53.0:1.0", // Latitude range (2 values)
+        "13.4",          // Single longitude
+        &format!("@{}", times_file.to_str().unwrap()),
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should contain both latitude values with same longitude
+    assert!(output_str.contains("52.00000,13.40000"));
+    assert!(output_str.contains("53.00000,13.40000"));
+    assert!(output_str.contains("2024-06-21T12:00:00"));
+
+    // Should have 3 lines (header + 2 latitude values * 1 longitude * 1 time)
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 3);
+}

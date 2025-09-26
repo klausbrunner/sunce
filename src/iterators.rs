@@ -292,26 +292,14 @@ fn create_time_file_position_iterator<'a>(
     input: &'a ParsedInput,
     params: &'a CalculationParameters,
 ) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
-    let lat = match input
+    let lat = input
         .parsed_latitude
         .as_ref()
-        .ok_or("Parsed latitude not available")?
-    {
-        Coordinate::Single(val) => *val,
-        Coordinate::Range { .. } => {
-            return Err("Range coordinates not supported for time files".to_string());
-        }
-    };
-    let lon = match input
+        .ok_or("Parsed latitude not available")?;
+    let lon = input
         .parsed_longitude
         .as_ref()
-        .ok_or("Parsed longitude not available")?
-    {
-        Coordinate::Single(val) => *val,
-        Coordinate::Range { .. } => {
-            return Err("Range coordinates not supported for time files".to_string());
-        }
-    };
+        .ok_or("Parsed longitude not available")?;
 
     let file_path = input.datetime.as_ref().unwrap();
     let reader = create_file_reader(file_path)
@@ -325,13 +313,25 @@ fn create_time_file_position_iterator<'a>(
         .transpose()
         .map_err(|e| format!("Invalid timezone: {}", e))?;
 
-    Ok(time_iter.map(move |time_result| match time_result {
+    Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Ok(calculate_single_position(datetime, lat, lon, params))
+            let lat_iter = create_coordinate_iterator(lat);
+            // Use streaming approach - no collect()!
+            Box::new(lat_iter.flat_map(move |lat_val| {
+                let lon_iter = create_coordinate_iterator(lon);
+                lon_iter.map(move |lon_val| {
+                    Ok(calculate_single_position(
+                        datetime, lat_val, lon_val, params,
+                    ))
+                })
+            })) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
         }
-        Err(e) => Err(format!("Error reading time data: {}", e)),
+        Err(e) => Box::new(std::iter::once(Err(format!(
+            "Error reading time data: {}",
+            e
+        )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
     }))
 }
 
@@ -339,26 +339,14 @@ fn create_time_file_sunrise_iterator<'a>(
     input: &'a ParsedInput,
     params: &'a SunriseCalculationParameters,
 ) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
-    let lat = match input
+    let lat = input
         .parsed_latitude
         .as_ref()
-        .ok_or("Parsed latitude not available")?
-    {
-        Coordinate::Single(val) => *val,
-        Coordinate::Range { .. } => {
-            return Err("Range coordinates not supported for time files".to_string());
-        }
-    };
-    let lon = match input
+        .ok_or("Parsed latitude not available")?;
+    let lon = input
         .parsed_longitude
         .as_ref()
-        .ok_or("Parsed longitude not available")?
-    {
-        Coordinate::Single(val) => *val,
-        Coordinate::Range { .. } => {
-            return Err("Range coordinates not supported for time files".to_string());
-        }
-    };
+        .ok_or("Parsed longitude not available")?;
 
     let file_path = input.datetime.as_ref().unwrap();
     let reader = create_file_reader(file_path)
@@ -372,13 +360,23 @@ fn create_time_file_sunrise_iterator<'a>(
         .transpose()
         .map_err(|e| format!("Invalid timezone: {}", e))?;
 
-    Ok(time_iter.map(move |time_result| match time_result {
+    Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Ok(calculate_single_sunrise(datetime, lat, lon, params))
+            let lat_iter = create_coordinate_iterator(lat);
+            // Use streaming approach - no collect()!
+            Box::new(lat_iter.flat_map(move |lat_val| {
+                let lon_iter = create_coordinate_iterator(lon);
+                lon_iter.map(move |lon_val| {
+                    Ok(calculate_single_sunrise(datetime, lat_val, lon_val, params))
+                })
+            })) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
         }
-        Err(e) => Err(format!("Error reading time data: {}", e)),
+        Err(e) => Box::new(std::iter::once(Err(format!(
+            "Error reading time data: {}",
+            e
+        )))) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
     }))
 }
 
