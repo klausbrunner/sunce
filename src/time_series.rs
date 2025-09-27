@@ -1,4 +1,4 @@
-use crate::timezone::TimezoneSpec;
+use crate::timezone::{TimezoneSpec, apply_timezone_to_datetime, get_system_timezone};
 use crate::types::{DateTimeInput, ParseError};
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime};
 
@@ -87,21 +87,26 @@ impl TimeSeriesIterator {
         let start_dt = if let Some(ref tz_spec) = timezone_spec {
             tz_spec.apply_to_naive(start_naive).ok()
         } else {
-            crate::timezone::apply_timezone_to_datetime(start_naive, None).ok()
+            apply_timezone_to_datetime(start_naive, None).ok()
         };
 
         let end_dt = if let Some(ref tz_spec) = timezone_spec {
             tz_spec.apply_to_naive(end_naive).ok()
         } else {
-            crate::timezone::apply_timezone_to_datetime(end_naive, None).ok()
+            apply_timezone_to_datetime(end_naive, None).ok()
         };
 
+        let program_start = crate::types::datetime_input_to_single_with_timezone(
+            crate::types::DateTimeInput::Now,
+            None,
+        )
+        .with_timezone(&chrono::Utc);
         let current_utc = start_dt
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(chrono::Utc::now);
+            .unwrap_or(program_start);
         let end_utc = end_dt
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(chrono::Utc::now);
+            .unwrap_or(program_start);
 
         Self {
             current_utc,
@@ -139,7 +144,7 @@ impl Iterator for TimeSeriesIterator {
             }
             None => {
                 use chrono::TimeZone;
-                let tz = crate::timezone::get_system_timezone();
+                let tz = get_system_timezone();
                 Some(
                     tz.from_utc_datetime(&self.current_utc.naive_utc())
                         .fixed_offset(),
@@ -178,13 +183,8 @@ impl Iterator for WatchIterator {
         }
         self.first = false;
 
-        let now_naive = if self.timezone_spec.is_some() {
-            chrono::Utc::now().naive_utc()
-        } else {
-            Local::now().naive_local()
-        };
-
         let now = if let Some(ref tz_spec) = self.timezone_spec {
+            let now_naive = chrono::Utc::now().naive_utc();
             tz_spec.apply_to_naive(now_naive).ok()?
         } else {
             Local::now().fixed_offset()
@@ -224,12 +224,10 @@ pub fn expand_datetime_input_with_watch(
             if watch_mode {
                 Ok(Box::new(WatchIterator::new(step.duration, timezone_spec)))
             } else {
-                let now_naive = chrono::Utc::now().naive_utc();
-                let now = if let Some(ref tz_spec) = timezone_spec {
-                    tz_spec.apply_to_naive(now_naive)?
-                } else {
-                    Local::now().fixed_offset()
-                };
+                let now = crate::types::datetime_input_to_single_with_timezone(
+                    crate::types::DateTimeInput::Now,
+                    timezone_spec,
+                );
                 Ok(Box::new(std::iter::once(now)))
             }
         }

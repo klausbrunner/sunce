@@ -3,6 +3,27 @@
 mod common;
 use common::*;
 
+/// Extract numeric field from CSV data line
+fn extract_csv_field(output: &str, field_index: usize) -> Option<f64> {
+    output
+        .lines()
+        .find(|line| line.contains(',') && !line.starts_with("latitude"))
+        .and_then(|line| line.split(',').nth(field_index))
+        .and_then(|field| field.trim().parse().ok())
+}
+
+/// Extract numeric field from JSON output
+fn extract_json_field(output: &str, field_name: &str) -> Option<f64> {
+    output
+        .find(&format!("\"{}\":", field_name))
+        .and_then(|start| {
+            let after_colon = start + field_name.len() + 3;
+            let remainder = &output[after_colon..];
+            let end = remainder.find([',', '}']).unwrap_or(remainder.len());
+            remainder[..end].trim().parse().ok()
+        })
+}
+
 /// Test 1: Verify exact functional compatibility with solarpos
 /// Uses hardcoded reference data captured from Java solarpos to ensure drop-in replacement capability
 #[test]
@@ -36,8 +57,18 @@ fn test_solarpos_exact_functional_match() {
 
     // Verify reasonable azimuth and zenith values for this date/location
     // (exact values may vary slightly with different algorithms or settings)
-    assert!(stdout.contains("148.") || stdout.contains("149.") || stdout.contains("147.")); // azimuth around 148°
-    assert!(stdout.contains("31.") || stdout.contains("30.") || stdout.contains("32.")); // zenith around 31°
+    let azimuth = extract_csv_field(&stdout, 7).expect("azimuth field");
+    let zenith = extract_csv_field(&stdout, 8).expect("zenith field");
+    assert!(
+        (147.0..=149.0).contains(&azimuth),
+        "azimuth {} not in range 147-149°",
+        azimuth
+    );
+    assert!(
+        (30.0..=32.0).contains(&zenith),
+        "zenith {} not in range 30-32°",
+        zenith
+    );
 }
 
 /// Test sunrise output compatibility
@@ -104,8 +135,18 @@ fn test_solarpos_json_structure() {
     assert!(stdout.contains("\"zenith\":"));
 
     // Verify reasonable numerical values (UTC timezone)
-    assert!(stdout.contains("191.") || stdout.contains("192.")); // azimuth around 191-192° in UTC
-    assert!(stdout.contains("75.") || stdout.contains("76.")); // zenith around 75-76°
+    let azimuth = extract_json_field(&stdout, "azimuth").expect("azimuth field");
+    let zenith = extract_json_field(&stdout, "zenith").expect("zenith field");
+    assert!(
+        (191.0..=192.0).contains(&azimuth),
+        "azimuth {} not in range 191-192°",
+        azimuth
+    );
+    assert!(
+        (75.0..=76.0).contains(&zenith),
+        "zenith {} not in range 75-76°",
+        zenith
+    );
 }
 
 /// Test 2: Malformed input error handling
@@ -219,13 +260,83 @@ fn test_cli_option_precedence() {
         .get_output();
 
     let stdout2 = String::from_utf8(output2.stdout).unwrap();
-    // Should use estimated value (69.0) - look for pattern in CSV data
+    // Should use estimated value (~71.2 for 2024-01-01) - look for pattern in CSV data
     assert!(
-        stdout2.contains(",69.000,"),
-        "Expected deltaT=69.000 in output: {}",
+        stdout2.contains(",71.241,"),
+        "Expected deltaT=71.241 in output: {}",
         stdout2
     );
     assert!(!stdout2.contains("69.200"));
+}
+
+/// Test delta-T handling: default zero value
+#[test]
+fn test_deltat_default_zero() {
+    let output = SunceTest::new()
+        .args([
+            "--format=CSV",
+            "--show-inputs",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00+02:00",
+            "position",
+        ])
+        .get_output();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+    assert_eq!(delta_t, 0.0, "Default delta-T should be 0.0");
+}
+
+/// Test delta-T handling: explicitly set value
+#[test]
+fn test_deltat_explicit_value() {
+    let output = SunceTest::new()
+        .args([
+            "--deltat=69.2",
+            "--format=CSV",
+            "--show-inputs",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00+02:00",
+            "position",
+        ])
+        .get_output();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+    assert_eq!(delta_t, 69.2, "Explicit delta-T should be 69.2");
+}
+
+/// Test delta-T handling: request estimation
+#[test]
+fn test_deltat_estimation() {
+    let output = SunceTest::new()
+        .args([
+            "--deltat",
+            "--format=CSV",
+            "--show-inputs",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00+02:00",
+            "position",
+        ])
+        .get_output();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+
+    // For 2024, delta-T should be estimated around 69-72 seconds
+    assert!(
+        (68.0..=72.0).contains(&delta_t),
+        "Estimated delta-T {} should be in range 68-72 seconds for 2024",
+        delta_t
+    );
+    assert_ne!(delta_t, 0.0, "Estimated delta-T should not be zero");
+    assert_ne!(
+        delta_t, 69.2,
+        "Estimated delta-T should not be hardcoded 69.2"
+    );
 }
 
 /// Test show-inputs precedence
@@ -281,4 +392,53 @@ fn test_option_positioning() {
             "--elevation-angle",
         ])
         .assert_success();
+}
+
+/// Test parameter validation error handling
+/// Verifies that invalid parameter values cause proper errors instead of silent fallbacks
+#[test]
+fn test_parameter_validation_errors() {
+    // Test invalid elevation
+    SunceTest::new()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+            "--elevation=invalid",
+        ])
+        .assert_failure();
+
+    // Test invalid pressure
+    SunceTest::new()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+            "--pressure=not_a_number",
+        ])
+        .assert_failure();
+
+    // Test invalid temperature
+    SunceTest::new()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+            "--temperature=xyz",
+        ])
+        .assert_failure();
+
+    // Test invalid delta-T value
+    SunceTest::new()
+        .args([
+            "--deltat=invalid",
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+        ])
+        .assert_failure();
 }

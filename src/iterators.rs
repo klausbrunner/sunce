@@ -9,7 +9,7 @@ use crate::file_input::{
 use crate::output::PositionResult;
 use crate::sunrise_formatters::SunriseResultData;
 use crate::time_series::{TimeStep, expand_datetime_input};
-use crate::timezone::parse_timezone_spec;
+use crate::timezone::{TimezoneSpec, parse_timezone_spec};
 use crate::types::datetime_input_to_single_with_timezone;
 use crate::types::{Coordinate, DateTimeInput, InputType, ParsedInput};
 use chrono::{DateTime, FixedOffset};
@@ -17,6 +17,17 @@ use clap::ArgMatches;
 use solar_positioning::RefractionCorrection;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// Parse timezone from ParsedInput global options with consistent error handling
+fn parse_input_timezone(input: &ParsedInput) -> Result<Option<TimezoneSpec>, String> {
+    input
+        .global_options
+        .timezone
+        .as_deref()
+        .map(parse_timezone_spec)
+        .transpose()
+        .map_err(|e| format!("Invalid timezone: {}", e))
+}
 
 /// Streaming iterator for coordinate ranges (no Vec collection)
 pub struct CoordinateRangeIterator {
@@ -55,9 +66,9 @@ impl Iterator for CoordinateRangeIterator {
 
         // Check if current value is beyond the end (should not be included)
         let past_end = if self.ascending {
-            current > self.end + EPSILON
+            current >= self.end + EPSILON
         } else {
-            current < self.end - EPSILON
+            current <= self.end - EPSILON
         };
 
         if past_end {
@@ -185,13 +196,7 @@ fn create_paired_file_position_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
     let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
@@ -211,13 +216,7 @@ fn create_paired_file_sunrise_iterator<'a>(
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
     let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
@@ -240,13 +239,7 @@ fn create_coordinate_file_position_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
     let datetime = datetime_input_to_single_with_timezone(datetime, timezone_spec);
 
     let reader = create_file_reader(file_path)
@@ -275,13 +268,7 @@ fn create_coordinate_file_sunrise_iterator<'a>(
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
     let datetime = datetime_input_to_single_with_timezone(datetime, timezone_spec);
 
     let reader = create_file_reader(file_path)
@@ -307,17 +294,14 @@ fn create_time_file_position_iterator<'a>(
         .as_ref()
         .ok_or("Parsed longitude not available")?;
 
-    let file_path = input.datetime.as_ref().unwrap();
+    let file_path = input
+        .datetime
+        .as_ref()
+        .ok_or("Time file path not available")?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
@@ -354,17 +338,14 @@ fn create_time_file_sunrise_iterator<'a>(
         .as_ref()
         .ok_or("Parsed longitude not available")?;
 
-    let file_path = input.datetime.as_ref().unwrap();
+    let file_path = input
+        .datetime
+        .as_ref()
+        .ok_or("Time file path not available")?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
     let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
@@ -394,42 +375,29 @@ fn create_coordinate_file_time_file_position_iterator<'a>(
     let coord_file_path = &input.latitude;
     let time_file_path = input.datetime.as_ref().unwrap();
 
+    // Read coordinates once and collect them (necessary for cartesian product)
+    let coord_reader = create_file_reader(coord_file_path)
+        .map_err(|e| format!("Failed to open coordinate file {}: {}", coord_file_path, e))?;
+    let coordinates: Vec<(f64, f64)> = CoordinateFileIterator::new(coord_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Error reading coordinate data: {}", e))?;
+
     let time_reader = create_file_reader(time_file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
 
     let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     // Cartesian product: for each time, iterate through all coordinates
     Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            match create_file_reader(coord_file_path) {
-                Ok(coord_reader_clone) => {
-                    let coord_iter_clone = CoordinateFileIterator::new(coord_reader_clone);
-                    Box::new(
-                        coord_iter_clone.map(move |coord_result| match coord_result {
-                            Ok((lat, lon)) => {
-                                Ok(calculate_single_position(datetime, lat, lon, params))
-                            }
-                            Err(e) => Err(format!("Error reading coordinate data: {}", e)),
-                        }),
-                    )
-                        as Box<dyn Iterator<Item = Result<PositionResult, String>>>
-                }
-                Err(e) => Box::new(std::iter::once(Err(format!(
-                    "Failed to reopen coordinate file {}: {}",
-                    coord_file_path, e
-                ))))
-                    as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
-            }
+            Box::new(
+                coordinates.clone().into_iter().map(move |(lat, lon)| {
+                    Ok(calculate_single_position(datetime, lat, lon, params))
+                }),
+            ) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
         }
         Err(e) => Box::new(std::iter::once(Err(format!(
             "Error reading time data: {}",
@@ -446,42 +414,29 @@ fn create_coordinate_file_time_file_sunrise_iterator<'a>(
     let coord_file_path = &input.latitude;
     let time_file_path = input.datetime.as_ref().unwrap();
 
+    // Read coordinates once and collect them (necessary for cartesian product)
+    let coord_reader = create_file_reader(coord_file_path)
+        .map_err(|e| format!("Failed to open coordinate file {}: {}", coord_file_path, e))?;
+    let coordinates: Vec<(f64, f64)> = CoordinateFileIterator::new(coord_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Error reading coordinate data: {}", e))?;
+
     let time_reader = create_file_reader(time_file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
 
     let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
-    let timezone_spec = input
-        .global_options
-        .timezone
-        .as_deref()
-        .map(parse_timezone_spec)
-        .transpose()
-        .map_err(|e| format!("Invalid timezone: {}", e))?;
+    let timezone_spec = parse_input_timezone(input)?;
 
     // Cartesian product: for each time, iterate through all coordinates
     Ok(time_iter.flat_map(move |time_result| match time_result {
         Ok(datetime_input) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            match create_file_reader(coord_file_path) {
-                Ok(coord_reader_clone) => {
-                    let coord_iter_clone = CoordinateFileIterator::new(coord_reader_clone);
-                    Box::new(
-                        coord_iter_clone.map(move |coord_result| match coord_result {
-                            Ok((lat, lon)) => {
-                                Ok(calculate_single_sunrise(datetime, lat, lon, params))
-                            }
-                            Err(e) => Err(format!("Error reading coordinate data: {}", e)),
-                        }),
-                    )
-                        as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
-                }
-                Err(e) => Box::new(std::iter::once(Err(format!(
-                    "Failed to reopen coordinate file {}: {}",
-                    coord_file_path, e
-                ))))
-                    as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
-            }
+            Box::new(
+                coordinates.clone().into_iter().map(move |(lat, lon)| {
+                    Ok(calculate_single_sunrise(datetime, lat, lon, params))
+                }),
+            ) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
         }
         Err(e) => Box::new(std::iter::once(Err(format!(
             "Error reading time data: {}",
@@ -583,8 +538,8 @@ fn create_standard_position_iterator<'a>(
                         as Box<dyn Iterator<Item = PositionResult> + 'a>)
                 }
             } else {
-                // Empty datetime iterator
-                Ok(Box::new(std::iter::empty()) as Box<dyn Iterator<Item = PositionResult> + 'a>)
+                // Empty datetime iterator - this should not happen with current validation
+                unreachable!("Datetime iterator should not be empty after validation")
             }
         }
     }
@@ -676,8 +631,11 @@ impl CoordinateSweepOptimizedIterator {
         params: CalculationParameters,
     ) -> Self {
         // Pre-compute time-dependent parts once for coordinate sweep optimization
-        let time_parts = solar_positioning::spa::spa_time_dependent_parts(datetime, params.delta_t)
-            .expect("Time-dependent parts calculation should not fail");
+        let time_parts = solar_positioning::spa::spa_time_dependent_parts(
+            datetime,
+            params.delta_t.resolve(datetime),
+        )
+        .expect("Time-dependent parts calculation should not fail");
 
         // Extract ranges directly to avoid iterator overhead
         let (lat_start, lat_end, lat_step) = match lat {
@@ -709,7 +667,7 @@ impl CoordinateSweepOptimizedIterator {
             time_parts,
             datetime,
             elevation: params.elevation,
-            delta_t: params.delta_t,
+            delta_t: params.delta_t.resolve(datetime),
             refraction,
         }
     }
@@ -743,7 +701,7 @@ impl Iterator for CoordinateSweepOptimizedIterator {
             self.refraction,
             &self.time_parts,
         )
-        .unwrap();
+        .expect("Solar calculation should not fail with validated coordinates");
 
         // Extract pressure and temperature for PositionResult
         let (pressure, temperature, apply_refraction) =
@@ -771,19 +729,21 @@ impl Iterator for CoordinateSweepOptimizedIterator {
 impl CoordinateSweepOptimizedIterator {
     #[inline(always)]
     fn advance_coordinates(&mut self) {
+        const EPSILON: f64 = 1e-10;
+
         // Advance longitude first - optimized for the common case
         self.current_lon += self.lon_step;
 
-        // Fast check without epsilon for performance (most coordinate steps are clean)
-        if (self.lon_step > 0.0 && self.current_lon > self.lon_end)
-            || (self.lon_step < 0.0 && self.current_lon < self.lon_end)
+        // Check longitude bounds with epsilon for floating point precision
+        if (self.lon_step > 0.0 && self.current_lon > self.lon_end + EPSILON)
+            || (self.lon_step < 0.0 && self.current_lon < self.lon_end - EPSILON)
         {
             // Longitude finished, advance latitude and reset longitude
             self.current_lat += self.lat_step;
 
             // Check if latitude is finished
-            if (self.lat_step > 0.0 && self.current_lat > self.lat_end)
-                || (self.lat_step < 0.0 && self.current_lat < self.lat_end)
+            if (self.lat_step > 0.0 && self.current_lat > self.lat_end + EPSILON)
+                || (self.lat_step < 0.0 && self.current_lat < self.lat_end - EPSILON)
             {
                 self.lat_finished = true;
                 return;
@@ -836,5 +796,41 @@ mod tests {
 
         let last = iter.last().unwrap();
         assert!((last - 15.0).abs() < 1e-10); // Last value should be very close to 15.0
+    }
+
+    #[test]
+    fn test_coordinate_range_decimal_step_endpoint_inclusion() {
+        // Test the specific case that was problematic: 0.0:1.0:0.1
+        let iter = CoordinateRangeIterator::new(0.0, 1.0, 0.1);
+        let values: Vec<f64> = iter.collect();
+
+        // Should include exactly 11 values: 0.0, 0.1, 0.2, ..., 1.0
+        assert_eq!(values.len(), 11);
+        assert_eq!(values[0], 0.0);
+        assert!((values[10] - 1.0).abs() < 1e-10); // Last value should be very close to 1.0
+
+        // Test that each step is approximately 0.1
+        for i in 1..values.len() {
+            let diff = values[i] - values[i - 1];
+            assert!(
+                (diff - 0.1).abs() < 1e-10,
+                "Step between {} and {} is {}, expected ~0.1",
+                values[i - 1],
+                values[i],
+                diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_coordinate_range_negative_endpoint_inclusion() {
+        // Test descending range with endpoint inclusion
+        let iter = CoordinateRangeIterator::new(1.0, -1.0, -0.5);
+        let values: Vec<f64> = iter.collect();
+
+        // Should include exactly 5 values: 1.0, 0.5, 0.0, -0.5, -1.0
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[0], 1.0);
+        assert!((values[4] - (-1.0)).abs() < 1e-10); // Last value should be very close to -1.0
     }
 }

@@ -14,22 +14,23 @@ mod timezone;
 mod types;
 
 use input_parsing::{
-    ParsedInput, parse_data_values, parse_input, parse_position_options, parse_sunrise_options,
+    parse_data_values, parse_input, parse_position_options, parse_sunrise_options,
 };
+use types::ParsedInput;
 
 use calculation::{get_calculation_parameters, get_sunrise_calculation_parameters};
 use iterators::{create_position_iterator, create_sunrise_iterator};
 use output::output_position_results;
 use performance::PerformanceTracker;
 use sunrise_formatters::output_sunrise_results;
-use types::{DateTimeInput, InputType, OutputFormat};
+use types::{AppError, DateTimeInput, InputType, OutputFormat};
 
-/// Determine output format from input options
-fn determine_output_format(format_str: Option<&str>) -> Result<OutputFormat, String> {
-    match format_str {
-        Some(fmt) => OutputFormat::from_string(fmt),
-        None => Ok(OutputFormat::Human),
-    }
+/// Convert Result iterator to T iterator, exiting on errors
+fn exit_on_error<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
+    result.unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    })
 }
 
 fn main() {
@@ -42,12 +43,15 @@ fn main() {
     }
 }
 
-fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
+fn run_app(matches: &clap::ArgMatches) -> Result<(), AppError> {
     let mut input = parse_input(matches)?;
     let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-    parse_data_values(&mut input, Some(cmd_name)).map_err(|e| e.to_string())?;
+    parse_data_values(&mut input, Some(cmd_name))?;
 
-    let format = determine_output_format(input.global_options.format.as_deref())?;
+    let format = match input.global_options.format.as_deref() {
+        Some(fmt) => OutputFormat::from_string(fmt)?,
+        None => OutputFormat::Human,
+    };
     let show_inputs = input.global_options.show_inputs.unwrap_or(false);
     let show_headers = input.global_options.headers.unwrap_or(true);
 
@@ -60,22 +64,7 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
             let tracker = PerformanceTracker::create(show_perf);
             let position_iter = create_position_iterator(&input, matches, &params)?;
 
-            // Convert Result<T, String> iterator to T iterator, handling errors
-            let processed_iter = position_iter.map(|result| {
-                result.unwrap_or_else(|e| {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                })
-            });
-
-            // Track performance if enabled
-            let tracked_iter = if let Some(ref t) = tracker {
-                Box::new(processed_iter.inspect(|_| {
-                    t.track_item();
-                })) as Box<dyn Iterator<Item = _>>
-            } else {
-                Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
-            };
+            let processed_iter = position_iter.map(exit_on_error);
 
             // Check if stdin or watch mode is being used for adaptive buffering (low latency)
             let watch_mode = cmd_matches.get_one::<String>("step").is_some()
@@ -85,14 +74,29 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
                 InputType::StdinCoords | InputType::StdinTimes | InputType::StdinPaired
             ) || watch_mode;
 
-            output_position_results(
-                tracked_iter,
-                &format,
-                show_inputs,
-                show_headers,
-                elevation_angle,
-                is_stdin,
-            );
+            // Track performance if enabled
+            if let Some(ref t) = tracker {
+                let tracked_iter = processed_iter.inspect(|_| {
+                    t.track_item();
+                });
+                output_position_results(
+                    tracked_iter,
+                    &format,
+                    show_inputs,
+                    show_headers,
+                    elevation_angle,
+                    is_stdin,
+                );
+            } else {
+                output_position_results(
+                    processed_iter,
+                    &format,
+                    show_inputs,
+                    show_headers,
+                    elevation_angle,
+                    is_stdin,
+                );
+            }
 
             PerformanceTracker::report_if_needed(&tracker);
             Ok(())
@@ -105,22 +109,7 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
             let tracker = PerformanceTracker::create(show_perf);
             let sunrise_iter = create_sunrise_iterator(&input, matches, &params)?;
 
-            // Convert Result<T, String> iterator to T iterator, handling errors
-            let processed_iter = sunrise_iter.map(|result| {
-                result.unwrap_or_else(|e| {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                })
-            });
-
-            // Track performance if enabled
-            let tracked_iter = if let Some(ref t) = tracker {
-                Box::new(processed_iter.inspect(|_| {
-                    t.track_item();
-                })) as Box<dyn Iterator<Item = _>>
-            } else {
-                Box::new(processed_iter) as Box<dyn Iterator<Item = _>>
-            };
+            let processed_iter = sunrise_iter.map(exit_on_error);
 
             // Check if stdin is being used for adaptive buffering
             let is_stdin = matches!(
@@ -128,18 +117,33 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), String> {
                 InputType::StdinCoords | InputType::StdinTimes | InputType::StdinPaired
             );
 
-            output_sunrise_results(
-                tracked_iter,
-                &format,
-                show_inputs,
-                show_headers,
-                show_twilight,
-                is_stdin,
-            );
+            // Track performance if enabled
+            if let Some(ref t) = tracker {
+                let tracked_iter = processed_iter.inspect(|_| {
+                    t.track_item();
+                });
+                output_sunrise_results(
+                    tracked_iter,
+                    &format,
+                    show_inputs,
+                    show_headers,
+                    show_twilight,
+                    is_stdin,
+                );
+            } else {
+                output_sunrise_results(
+                    processed_iter,
+                    &format,
+                    show_inputs,
+                    show_headers,
+                    show_twilight,
+                    is_stdin,
+                );
+            }
 
             PerformanceTracker::report_if_needed(&tracker);
             Ok(())
         }
-        _ => Err(format!("Unknown command: {}", cmd_name)),
+        _ => Err(AppError::General(format!("Unknown command: {}", cmd_name))),
     }
 }

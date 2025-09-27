@@ -6,10 +6,30 @@ use solar_positioning::{RefractionCorrection, grena3, spa};
 use std::collections::HashMap;
 
 #[derive(Clone)]
+pub enum DeltaTMode {
+    Fixed(f64),
+    Estimate,
+    Default,
+}
+
+impl DeltaTMode {
+    pub fn resolve(&self, datetime: chrono::DateTime<chrono::FixedOffset>) -> f64 {
+        match self {
+            DeltaTMode::Fixed(value) => *value,
+            DeltaTMode::Estimate => {
+                solar_positioning::time::DeltaT::estimate_from_date_like(datetime)
+                    .expect("Failed to estimate delta-T for the given date")
+            }
+            DeltaTMode::Default => 0.0,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct CalculationParameters {
     pub algorithm: String,
     pub elevation: f64,
-    pub delta_t: f64,
+    pub delta_t: DeltaTMode,
     pub pressure: f64,
     pub temperature: f64,
     pub apply_refraction: bool,
@@ -18,7 +38,7 @@ pub struct CalculationParameters {
 #[derive(Clone)]
 pub struct SunriseCalculationParameters {
     pub elevation: f64,
-    pub delta_t: f64,
+    pub delta_t: DeltaTMode,
     pub show_twilight: bool,
 }
 
@@ -46,37 +66,36 @@ pub fn get_calculation_parameters(
         }
     }
 
+    let delta_t = match input.global_options.deltat.as_deref() {
+        Some("") => DeltaTMode::Estimate, // --deltat flag without value
+        Some(s) => DeltaTMode::Fixed(
+            s.parse()
+                .map_err(|_| format!("Invalid delta-T value: {}", s))?,
+        ), // --deltat=value
+        None => DeltaTMode::Default,      // no --deltat flag
+    };
+
     Ok(CalculationParameters {
         algorithm,
-        elevation: pos_options
-            .elevation
-            .as_deref()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0),
-        delta_t: input
-            .global_options
-            .deltat
-            .as_deref()
-            .and_then(|s| {
-                if s.is_empty() {
-                    // --deltat flag without value = use estimate
-                    Some(69.0)
-                } else {
-                    // --deltat=value = parse specific value
-                    s.parse::<f64>().ok()
-                }
-            })
-            .unwrap_or(0.0),
-        pressure: pos_options
-            .pressure
-            .as_deref()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(1013.0),
-        temperature: pos_options
-            .temperature
-            .as_deref()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(15.0),
+        elevation: match pos_options.elevation.as_deref() {
+            Some(s) => s
+                .parse()
+                .map_err(|_| format!("Invalid elevation value: {}", s))?,
+            None => 0.0,
+        },
+        delta_t,
+        pressure: match pos_options.pressure.as_deref() {
+            Some(s) => s
+                .parse()
+                .map_err(|_| format!("Invalid pressure value: {}", s))?,
+            None => 1013.0,
+        },
+        temperature: match pos_options.temperature.as_deref() {
+            Some(s) => s
+                .parse()
+                .map_err(|_| format!("Invalid temperature value: {}", s))?,
+            None => 15.0,
+        },
         apply_refraction: pos_options.refraction.unwrap_or(true),
     })
 }
@@ -89,20 +108,18 @@ pub fn get_sunrise_calculation_parameters(
     let (_, cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
     let _sunrise_options = crate::parse_sunrise_options(cmd_matches);
 
+    let delta_t = match input.global_options.deltat.as_deref() {
+        Some("") => DeltaTMode::Estimate, // --deltat flag without value
+        Some(s) => DeltaTMode::Fixed(
+            s.parse()
+                .map_err(|_| format!("Invalid delta-T value: {}", s))?,
+        ), // --deltat=value
+        None => DeltaTMode::Default,      // no --deltat flag
+    };
+
     Ok(SunriseCalculationParameters {
         elevation: 0.0,
-        delta_t: input
-            .global_options
-            .deltat
-            .as_deref()
-            .and_then(|s| {
-                if s.is_empty() {
-                    Some(69.0)
-                } else {
-                    s.parse::<f64>().ok()
-                }
-            })
-            .unwrap_or(0.0),
+        delta_t,
         show_twilight,
     })
 }
@@ -117,6 +134,8 @@ pub fn calculate_single_position(
     // Convert to UTC for solar calculations
     let utc_datetime = datetime.with_timezone(&Utc);
 
+    let delta_t = params.delta_t.resolve(datetime);
+
     let solar_position = match params.algorithm.to_uppercase().as_str() {
         "GRENA3" => {
             let refraction = create_refraction_correction(
@@ -124,7 +143,7 @@ pub fn calculate_single_position(
                 params.temperature,
                 params.apply_refraction,
             );
-            grena3::solar_position(utc_datetime, lat, lon, params.delta_t, refraction)
+            grena3::solar_position(utc_datetime, lat, lon, delta_t, refraction)
         }
         "SPA" => {
             let refraction = create_refraction_correction(
@@ -137,7 +156,7 @@ pub fn calculate_single_position(
                 lat,
                 lon,
                 params.elevation,
-                params.delta_t,
+                delta_t,
                 refraction,
             )
         }
@@ -156,7 +175,7 @@ pub fn calculate_single_position(
         elevation: params.elevation,
         pressure: params.pressure,
         temperature: params.temperature,
-        delta_t: params.delta_t,
+        delta_t,
         apply_refraction: params.apply_refraction,
     }
 }
@@ -171,7 +190,7 @@ pub fn calculate_single_sunrise(
     use crate::sunrise_formatters::TwilightResults;
     use solar_positioning::types::Horizon;
 
-    let delta_t = params.delta_t;
+    let delta_t = params.delta_t.resolve(datetime);
     let _elevation = params.elevation;
 
     // Use the input datetime directly for sunrise calculation
@@ -260,14 +279,10 @@ impl CoordinateSweepCalculator {
         if self.params.algorithm.to_uppercase() == "SPA" {
             // Get or compute time-dependent parts (cache grows as needed for large sweeps)
             let time_parts = self.time_cache.entry(utc_datetime).or_insert_with(|| {
-                // Fallback to simpler calculation if time-dependent parts fail
-                spa::spa_time_dependent_parts(utc_datetime, self.params.delta_t).unwrap_or_else(
-                    |_| {
-                        // This should never happen with valid inputs, but handle gracefully
-                        spa::spa_time_dependent_parts(utc_datetime, 69.0)
-                            .expect("Fallback time-dependent parts should work")
-                    },
-                )
+                // Calculate time-dependent parts with proper delta-T
+                let delta_t = self.params.delta_t.resolve(utc_datetime.into());
+                spa::spa_time_dependent_parts(utc_datetime, delta_t)
+                    .expect("SPA time-dependent calculation should not fail with valid inputs")
             });
 
             // Calculate position using cached time parts
@@ -294,7 +309,7 @@ impl CoordinateSweepCalculator {
                 elevation: self.params.elevation,
                 pressure: self.params.pressure,
                 temperature: self.params.temperature,
-                delta_t: self.params.delta_t,
+                delta_t: self.params.delta_t.resolve(datetime),
                 apply_refraction: self.params.apply_refraction,
             }
         } else {

@@ -1,5 +1,4 @@
-// Re-export types for backward compatibility
-pub use crate::types::{
+use crate::types::{
     Coordinate, DateTimeInput, GlobalOptions, InputType, ParseError, ParsedInput, PositionOptions,
     SunriseOptions,
 };
@@ -49,19 +48,7 @@ fn parse_coordinate_range(input: &str, coord_type: &str) -> Result<Coordinate, P
         ParseError::InvalidRange(format!("Invalid step value in range: {}", step_str))
     })?;
 
-    if step == 0.0 {
-        return Err(ParseError::ZeroStep);
-    }
-
-    validate_coordinate(start, coord_type)?;
-    validate_coordinate(end, coord_type)?;
-
-    if (step > 0.0 && start > end) || (step < 0.0 && start < end) {
-        return Err(ParseError::InvalidRange(format!(
-            "Step direction incompatible with range: start={}, end={}, step={}",
-            start, end, step
-        )));
-    }
+    validate_range_parameters(start, end, step, coord_type)?;
 
     Ok(Coordinate::Range { start, end, step })
 }
@@ -87,7 +74,7 @@ where
     }
 }
 
-fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
+pub fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
     match coord_type {
         "latitude" => validate_range(value, -90.0, 90.0, coord_type, "latitude range -90° to 90°"),
         "longitude" => validate_range(
@@ -99,6 +86,30 @@ fn validate_coordinate(value: f64, coord_type: &str) -> Result<(), ParseError> {
         ),
         _ => Ok(()),
     }
+}
+
+/// Validate range parameters for coordinate ranges
+fn validate_range_parameters(
+    start: f64,
+    end: f64,
+    step: f64,
+    coord_type: &str,
+) -> Result<(), ParseError> {
+    if step == 0.0 {
+        return Err(ParseError::ZeroStep);
+    }
+
+    validate_coordinate(start, coord_type)?;
+    validate_coordinate(end, coord_type)?;
+
+    if (step > 0.0 && start > end) || (step < 0.0 && start < end) {
+        return Err(ParseError::InvalidRange(format!(
+            "Step direction incompatible with range: start={}, end={}, step={}",
+            start, end, step
+        )));
+    }
+
+    Ok(())
 }
 
 use crate::timezone::{apply_timezone_to_datetime, get_system_timezone};
@@ -203,7 +214,7 @@ fn parse_full_datetime(
 
             // Check if time part has only hour:minute (one colon)
             if time_only.matches(':').count() == 1 {
-                // Add ":00" seconds
+                // Add ":00" seconds - creates temporary string but only for uncommon datetime formats
                 if input.ends_with('Z') {
                     input.replace('Z', ":00Z")
                 } else if let Some(offset_pos) = input
@@ -290,8 +301,8 @@ fn validate_month(month: u32) -> Result<(), ParseError> {
 fn validate_day(year: i32, month: u32, day: u32) -> Result<(), ParseError> {
     if NaiveDate::from_ymd_opt(year, month, day).is_none() {
         Err(ParseError::InvalidDateTime(format!(
-            "Invalid date: {}-{:02}-{:02}",
-            year, month, day
+            "Day {} out of valid range for {}-{:02}",
+            day, year, month
         )))
     } else {
         Ok(())
@@ -340,9 +351,18 @@ fn parse_unix_timestamp(
 
     // Convert to fixed offset - default to UTC unless timezone override provided
     let dt_with_tz = if let Some(tz_str) = timezone_override {
-        let naive = utc_dt.naive_utc();
-        apply_timezone_to_datetime(naive, Some(tz_str))
-            .map_err(|e| ParseError::InvalidTimezone(e.to_string()))?
+        // Parse the target timezone
+        let timezone_spec = crate::timezone::parse_timezone_spec(tz_str)
+            .map_err(|e| ParseError::InvalidTimezone(e.to_string()))?;
+
+        // Convert UTC datetime to target timezone (proper timezone conversion)
+        match timezone_spec {
+            crate::timezone::TimezoneSpec::Fixed(offset) => utc_dt.with_timezone(&offset),
+            crate::timezone::TimezoneSpec::Named(tz) => {
+                let target_dt = utc_dt.with_timezone(&tz);
+                target_dt.fixed_offset()
+            }
+        }
     } else {
         utc_dt.fixed_offset()
     };
@@ -666,7 +686,7 @@ mod tests {
             DateTimeInput::Single(dt) => {
                 assert_eq!(
                     dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    "2020-01-01 00:00:00"
+                    "2020-01-01 01:00:00"
                 );
                 assert_eq!(dt.offset().local_minus_utc(), 3600); // +1 hour in seconds
             }
@@ -889,5 +909,114 @@ mod tests {
             Some(true),
             "Partial year should auto-enable show-inputs even for sunrise command"
         );
+    }
+
+    #[test]
+    fn test_consistent_error_message_formats() {
+        // Test year validation error format
+        let year_error = validate_year(1799).unwrap_err();
+        let year_msg = year_error.to_string();
+        assert!(year_msg.contains("out of valid range"));
+        assert!(year_msg.contains("Year 1799"));
+
+        // Test month validation error format
+        let month_error = validate_month(13).unwrap_err();
+        let month_msg = month_error.to_string();
+        assert!(month_msg.contains("out of valid range"));
+        assert!(month_msg.contains("Month 13"));
+
+        // Test day validation error format
+        let day_error = validate_day(2024, 2, 30).unwrap_err(); // Feb 30 doesn't exist
+        let day_msg = day_error.to_string();
+        assert!(day_msg.contains("out of valid range"));
+        assert!(day_msg.contains("Day 30"));
+    }
+
+    #[test]
+    fn test_unix_timestamp_timezone_conversion_fixed_offset() {
+        use chrono::{Datelike, Timelike};
+
+        // Test unix timestamp with timezone override (fixed offset)
+        // Unix timestamp 1577836800 = 2020-01-01T00:00:00Z
+        let result = parse_unix_timestamp("1577836800", Some("+02:00")).unwrap();
+
+        if let DateTimeInput::Single(dt) = result {
+            // Should be 2020-01-01T02:00:00+02:00 (UTC time converted to +02:00)
+            assert_eq!(dt.year(), 2020);
+            assert_eq!(dt.month(), 1);
+            assert_eq!(dt.day(), 1);
+            assert_eq!(dt.hour(), 2); // UTC 00:00 becomes local 02:00
+            assert_eq!(dt.minute(), 0);
+            assert_eq!(dt.second(), 0);
+            assert_eq!(dt.offset().local_minus_utc(), 7200); // +02:00 in seconds
+        } else {
+            panic!("Expected DateTimeInput::Single");
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamp_timezone_conversion_named_timezone() {
+        use chrono::{Datelike, Timelike};
+
+        // Test unix timestamp with named timezone
+        // Unix timestamp 1577836800 = 2020-01-01T00:00:00Z
+        let result = parse_unix_timestamp("1577836800", Some("Europe/Berlin")).unwrap();
+
+        if let DateTimeInput::Single(dt) = result {
+            // Should be 2020-01-01T01:00:00+01:00 (UTC time converted to Europe/Berlin)
+            assert_eq!(dt.year(), 2020);
+            assert_eq!(dt.month(), 1);
+            assert_eq!(dt.day(), 1);
+            assert_eq!(dt.hour(), 1); // UTC 00:00 becomes Berlin 01:00 (winter time)
+            assert_eq!(dt.minute(), 0);
+            assert_eq!(dt.second(), 0);
+            assert_eq!(dt.offset().local_minus_utc(), 3600); // +01:00 in seconds (winter time)
+        } else {
+            panic!("Expected DateTimeInput::Single");
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamp_no_timezone_override() {
+        use chrono::{Datelike, Timelike};
+
+        // Test unix timestamp without timezone override (should remain UTC)
+        // Unix timestamp 1577836800 = 2020-01-01T00:00:00Z
+        let result = parse_unix_timestamp("1577836800", None).unwrap();
+
+        if let DateTimeInput::Single(dt) = result {
+            // Should be 2020-01-01T00:00:00+00:00 (UTC)
+            assert_eq!(dt.year(), 2020);
+            assert_eq!(dt.month(), 1);
+            assert_eq!(dt.day(), 1);
+            assert_eq!(dt.hour(), 0);
+            assert_eq!(dt.minute(), 0);
+            assert_eq!(dt.second(), 0);
+            assert_eq!(dt.offset().local_minus_utc(), 0); // UTC
+        } else {
+            panic!("Expected DateTimeInput::Single");
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamp_timezone_conversion_during_dst() {
+        use chrono::{Datelike, Timelike};
+
+        // Test unix timestamp during summer time (DST)
+        // Unix timestamp 1593561600 = 2020-07-01T00:00:00Z
+        let result = parse_unix_timestamp("1593561600", Some("Europe/Berlin")).unwrap();
+
+        if let DateTimeInput::Single(dt) = result {
+            // Should be 2020-07-01T02:00:00+02:00 (UTC time converted to Europe/Berlin summer time)
+            assert_eq!(dt.year(), 2020);
+            assert_eq!(dt.month(), 7);
+            assert_eq!(dt.day(), 1);
+            assert_eq!(dt.hour(), 2); // UTC 00:00 becomes Berlin 02:00 (summer time)
+            assert_eq!(dt.minute(), 0);
+            assert_eq!(dt.second(), 0);
+            assert_eq!(dt.offset().local_minus_utc(), 7200); // +02:00 in seconds (summer time)
+        } else {
+            panic!("Expected DateTimeInput::Single");
+        }
     }
 }

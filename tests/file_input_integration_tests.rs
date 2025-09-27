@@ -782,7 +782,7 @@ fn test_coordinate_file_time_file_sunrise() {
     assert_eq!(lines.len(), 5); // Header + 4 cartesian product results
 }
 
-/// Test stdin coordinates + time file (NEW! - Currently limited to first time due to stdin limitation)
+/// Test stdin coordinates + time file (FIXED! - Now properly handles cartesian product)
 #[test]
 fn test_stdin_coordinates_time_file() {
     let dir = tempdir().unwrap();
@@ -804,15 +804,14 @@ fn test_stdin_coordinates_time_file() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // CURRENT LIMITATION: stdin can only be read once, so only first time is processed
-    // This is a known architectural limitation - stdin + time file works but only for first time
+    // FIXED: coordinates are now read once and applied to all times (proper cartesian product)
     assert!(output_str.contains("52.00000,13.40000"));
     assert!(output_str.contains("53.00000,14.40000"));
     assert!(output_str.contains("2024-06-21"));
-    // assert!(output_str.contains("2024-12-21")); // FAILS - stdin can't be re-read
+    assert!(output_str.contains("2024-12-21")); // Now works - coordinates read once, applied to all times
 
     let lines: Vec<&str> = output_str.lines().collect();
-    assert_eq!(lines.len(), 3); // Header + 2 results (only first time)
+    assert_eq!(lines.len(), 5); // Header + 4 cartesian product results (2 coords × 2 times)
 }
 
 /// Test coordinate file + stdin times (NEW!)

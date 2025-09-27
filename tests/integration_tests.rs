@@ -270,6 +270,50 @@ fn test_now_datetime() {
     custom_position("52.0", "13.4", "now").assert_success();
 }
 
+/// Test now timestamp consistency with coordinate ranges
+/// Verifies that multiple calculations within one command use the same "now" timestamp
+/// This tests the OnceLock fix - without it, each calculation would get a different timestamp
+#[test]
+fn test_now_timestamp_consistency() {
+    let output = SunceTest::new()
+        .args([
+            "--format=CSV",
+            "--show-inputs",
+            "52:53:1", // Generate 2 coordinate values (52, 53)
+            "13.4",
+            "now",
+            "position",
+        ])
+        .get_output();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // Should have header + 2 data lines (one for each coordinate)
+    assert_eq!(lines.len(), 3, "Should have header + 2 data rows");
+
+    // Extract timestamps from both data lines
+    let mut timestamps = Vec::new();
+    for line in lines.iter().skip(1) {
+        // Skip header
+        if line.contains(',') {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 6 {
+                timestamps.push(parts[5]); // dateTime field
+            }
+        }
+    }
+
+    assert_eq!(timestamps.len(), 2, "Should have extracted 2 timestamps");
+
+    // Both timestamps should be identical because they use the same "now"
+    assert_eq!(
+        timestamps[0], timestamps[1],
+        "All calculations using 'now' should have identical timestamps. Found: {} and {}",
+        timestamps[0], timestamps[1]
+    );
+}
+
 /// Test headers in CSV output
 #[test]
 fn test_csv_headers() {
@@ -333,7 +377,7 @@ fn test_unix_timestamp_with_timezone() {
             "1577836800",
             "position",
         ])
-        .assert_success_contains("DateTime:    2020-01-01 00:00:00+01:00");
+        .assert_success_contains("DateTime:    2020-01-01 01:00:00+01:00");
 
     // Test with named timezone
     SunceTest::new()
@@ -345,7 +389,7 @@ fn test_unix_timestamp_with_timezone() {
             "1577836800",
             "position",
         ])
-        .assert_success_contains("DateTime:    2020-01-01 00:00:00+01:00");
+        .assert_success_contains("DateTime:    2020-01-01 01:00:00+01:00");
 }
 
 /// Test unix timestamp range validation
@@ -381,4 +425,52 @@ fn test_unix_timestamp_in_files() {
     SunceTest::new()
         .args([&format!("@{}", file.path().display()), "position"])
         .assert_success_contains_all(&["2020-01-01", "52.00000", "13.40000"]);
+}
+
+/// Test floating point precision in coordinate ranges
+/// Verifies that coordinate ranges with small steps don't miss endpoints due to floating point precision
+#[test]
+fn test_coordinate_range_floating_point_precision() {
+    // Test small decimal steps that are prone to floating point precision issues
+    let output = SunceTest::new()
+        .args([
+            "--format=CSV",
+            "50.0:50.2:0.1", // This should give exactly 3 values: 50.0, 50.1, 50.2
+            "10.0",
+            "2024-01-01T12:00:00",
+            "position",
+        ])
+        .get_output();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // Should have header + 3 data rows (50.0, 50.1, 50.2)
+    assert_eq!(lines.len(), 4, "Should have exactly 3 coordinate values");
+
+    // Verify all expected coordinates are present
+    assert!(stdout.contains("50.00000"), "Should contain 50.0");
+    assert!(stdout.contains("50.10000"), "Should contain 50.1");
+    assert!(stdout.contains("50.20000"), "Should contain 50.2");
+
+    // Test another problematic case with 0.3 step
+    let output2 = SunceTest::new()
+        .args([
+            "--format=CSV",
+            "0.0:0.9:0.3", // This should give exactly 4 values: 0.0, 0.3, 0.6, 0.9
+            "0.0",
+            "2024-01-01T12:00:00",
+            "position",
+        ])
+        .get_output();
+
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    let lines2: Vec<&str> = stdout2.lines().collect();
+
+    // Should have header + 4 data rows
+    assert_eq!(
+        lines2.len(),
+        5,
+        "Should have exactly 4 coordinate values for 0.3 step"
+    );
 }

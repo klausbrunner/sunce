@@ -1,4 +1,5 @@
-use crate::input_parsing::{DateTimeInput, ParseError, parse_datetime};
+use crate::input_parsing::parse_datetime;
+use crate::types::{DateTimeInput, ParseError};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
@@ -20,25 +21,22 @@ pub fn parse_coordinate_file_line(line: &str) -> Result<(f64, f64), ParseError> 
         ));
     }
 
-    let mut parts: Box<dyn Iterator<Item = &str>> = if line.contains(',') {
-        Box::new(line.split(','))
+    let parts: Vec<&str> = if line.contains(',') {
+        line.split(',').collect()
     } else {
-        Box::new(line.split_whitespace())
+        line.split_whitespace().collect()
     };
 
-    let lat_str = parts
-        .next()
-        .ok_or_else(|| ParseError::InvalidCoordinate("Missing latitude".to_string()))?;
-    let lon_str = parts
-        .next()
-        .ok_or_else(|| ParseError::InvalidCoordinate("Missing longitude".to_string()))?;
-
-    if parts.next().is_some() {
+    if parts.len() != 2 {
         return Err(ParseError::InvalidCoordinate(format!(
-            "Expected 2 fields, found more in: {}",
+            "Expected 2 fields, found {} in: {}",
+            parts.len(),
             line
         )));
     }
+
+    let lat_str = parts[0];
+    let lon_str = parts[1];
 
     let lat: f64 = lat_str
         .trim()
@@ -48,6 +46,10 @@ pub fn parse_coordinate_file_line(line: &str) -> Result<(f64, f64), ParseError> 
         .trim()
         .parse()
         .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
+
+    // Validate coordinate ranges
+    crate::input_parsing::validate_coordinate(lat, "latitude")?;
+    crate::input_parsing::validate_coordinate(lon, "longitude")?;
 
     Ok((lat, lon))
 }
@@ -77,28 +79,23 @@ pub fn parse_paired_file_line(
         ));
     }
 
-    let mut parts: Box<dyn Iterator<Item = &str>> = if line.contains(',') {
-        Box::new(line.split(','))
+    let parts: Vec<&str> = if line.contains(',') {
+        line.split(',').collect()
     } else {
-        Box::new(line.split_whitespace())
+        line.split_whitespace().collect()
     };
 
-    let lat_str = parts.next().ok_or_else(|| {
-        ParseError::InvalidDateTime("Missing latitude in paired data".to_string())
-    })?;
-    let lon_str = parts.next().ok_or_else(|| {
-        ParseError::InvalidDateTime("Missing longitude in paired data".to_string())
-    })?;
-    let dt_str = parts.next().ok_or_else(|| {
-        ParseError::InvalidDateTime("Missing datetime in paired data".to_string())
-    })?;
-
-    if parts.next().is_some() {
+    if parts.len() != 3 {
         return Err(ParseError::InvalidDateTime(format!(
-            "Expected 3 fields, found more in: {}",
+            "Expected 3 fields, found {} in: {}",
+            parts.len(),
             line
         )));
     }
+
+    let lat_str = parts[0];
+    let lon_str = parts[1];
+    let dt_str = parts[2];
 
     let lat: f64 = lat_str
         .trim()
@@ -109,6 +106,10 @@ pub fn parse_paired_file_line(
         .parse()
         .map_err(|_| ParseError::InvalidCoordinate(format!("Invalid longitude: {}", lon_str)))?;
     let datetime = parse_datetime(dt_str.trim(), timezone_override)?;
+
+    // Validate coordinate ranges
+    crate::input_parsing::validate_coordinate(lat, "latitude")?;
+    crate::input_parsing::validate_coordinate(lon, "longitude")?;
 
     Ok((lat, lon, datetime))
 }
@@ -259,6 +260,24 @@ mod tests {
         assert_eq!(iter.next().unwrap().unwrap(), (59.334, 18.063));
         assert_eq!(iter.next().unwrap().unwrap(), (40.42, -3.70));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_coordinate_file_validation() {
+        // Test invalid latitude
+        let result = parse_coordinate_file_line("95.0,13.4");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("latitude range"));
+
+        // Test invalid longitude
+        let result = parse_coordinate_file_line("52.0,200.0");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("longitude range"));
+
+        // Test valid coordinates
+        let result = parse_coordinate_file_line("52.0,13.4");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (52.0, 13.4));
     }
 
     #[test]

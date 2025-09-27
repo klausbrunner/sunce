@@ -18,7 +18,7 @@ Input handling is distributed across focused modules. The `cli.rs` module define
 
 ## Streaming Architecture
 
-The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results, including optimized coordinate range processing with split-mode calculations for geographic sweeps. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges. File input parsing uses direct iterator chains without intermediate Vec allocations, maintaining zero-allocation parsing for individual lines.
+The application implements true streaming throughout its processing pipeline. The `iterators.rs` module creates lazy calculation iterators that process data on-demand without materializing intermediate results, including optimized coordinate range processing with split-mode calculations for geographic sweeps. This design ensures constant memory usage whether processing a single coordinate pair or infinite coordinate streams. The `time_series.rs` module handles temporal sequences, supporting partial date specifications that expand into full datetime ranges. File input parsing uses direct iterator chains without intermediate Vec allocations (except for small, short-lived ones where it makes the code much more straightforward), aiming for low- to zero-allocation parsing for individual lines.
 
 ## Calculation Layer
 
