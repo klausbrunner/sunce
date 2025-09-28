@@ -97,9 +97,12 @@ fn test_parquet_sunrise_basic() {
         ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
     let schema = builder.schema();
 
-    // Verify expected schema fields (specific date for sunrise does NOT auto-enable show-inputs)
+    // Verify expected schema fields (single values = no auto show-inputs)
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-    assert_eq!(field_names, vec!["type", "sunrise", "transit", "sunset"]);
+    assert_eq!(
+        field_names,
+        vec!["dateTime", "type", "sunrise", "transit", "sunset"]
+    );
 
     // Verify timestamp fields are nullable where expected
     let sunrise_field = schema

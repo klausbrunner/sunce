@@ -1,159 +1,104 @@
-mod calculation;
-mod cli;
-mod file_input;
-mod input_parsing;
-mod iterators;
+//! Solar position calculator CLI - entry point and output handling.
+
+mod compute;
+mod data;
 mod output;
 #[cfg(feature = "parquet")]
-mod parquet_output;
-mod performance;
-mod sunrise_formatters;
-mod table_format;
-mod time_series;
-mod timezone;
-mod types;
+mod parquet;
 
-use input_parsing::{
-    parse_data_values, parse_input, parse_position_options, parse_sunrise_options,
-};
-use types::ParsedInput;
-
-use calculation::{get_calculation_parameters, get_sunrise_calculation_parameters};
-use iterators::{create_position_iterator, create_sunrise_iterator};
-use output::output_position_results;
-use performance::PerformanceTracker;
-use std::sync::Arc;
-use sunrise_formatters::output_sunrise_results;
-use types::{AppError, DateTimeInput, InputType, OutputFormat};
-
-/// Convert Result iterator to T iterator, exiting on errors
-fn exit_on_error<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
-    result.unwrap_or_else(|e| {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    })
-}
+use data::DataSource;
 
 fn main() {
-    let app = cli::build_cli();
-    let matches = app.get_matches();
+    let args: Vec<String> = std::env::args().collect();
 
-    if let Err(e) = run_app(&matches) {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
-}
-
-fn run_app(matches: &clap::ArgMatches) -> Result<(), AppError> {
-    let mut input = parse_input(matches)?;
-    let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-    parse_data_values(&mut input, Some(cmd_name))?;
-
-    // Validate that the input is internally consistent
-    input
-        .validate()
-        .map_err(|e| AppError::General(format!("Input validation error: {}", e)))?;
-
-    let format = match input.global_options.format.as_deref() {
-        Some(fmt) => OutputFormat::from_string(fmt)?,
-        None => OutputFormat::Human,
-    };
-    let show_inputs = input.global_options.show_inputs.unwrap_or(false);
-    let show_headers = input.global_options.headers.unwrap_or(true);
-
-    match cmd_name {
-        "position" => {
-            let elevation_angle = parse_position_options(cmd_matches).elevation_angle;
-
-            let params = Arc::new(get_calculation_parameters(&input, matches)?);
-            let show_perf = matches.get_flag("perf");
-            let tracker = PerformanceTracker::create(show_perf);
-            let position_iter = create_position_iterator(&input, matches, params)?;
-
-            let processed_iter = position_iter.map(exit_on_error);
-
-            // Check if stdin or watch mode is being used for adaptive buffering (low latency)
-            let watch_mode = cmd_matches.get_one::<String>("step").is_some()
-                && matches!(input.datetime_input, Some(DateTimeInput::Now));
-            let is_stdin = matches!(
-                input.input_type,
-                InputType::StdinCoords | InputType::StdinTimes | InputType::StdinPaired
-            ) || watch_mode;
-
-            // Track performance if enabled
-            if let Some(ref t) = tracker {
-                let tracked_iter = processed_iter.inspect(|_| {
-                    t.track_item();
-                });
-                output_position_results(
-                    tracked_iter,
-                    &format,
-                    show_inputs,
-                    show_headers,
-                    elevation_angle,
-                    is_stdin,
-                );
+    match data::parse_cli(args) {
+        Ok((source, command, params)) => {
+            // Performance monitoring setup
+            let start = if params.perf {
+                Some(std::time::Instant::now())
             } else {
-                output_position_results(
-                    processed_iter,
-                    &format,
-                    show_inputs,
-                    show_headers,
-                    elevation_angle,
-                    is_stdin,
+                None
+            };
+
+            // Expand data source to iterator
+            let data_iter = match &source {
+                DataSource::Separate(loc_source, time_source) => data::expand_cartesian_product(
+                    loc_source.clone(),
+                    time_source.clone(),
+                    params.step.clone(),
+                    params.timezone.clone(),
+                    command,
+                ),
+                DataSource::Paired(path) => {
+                    data::expand_paired_file(path.clone(), params.timezone.clone())
+                }
+            };
+
+            // Calculate results
+            let results = compute::calculate_stream(data_iter, command, params.clone());
+
+            // Write output in appropriate format
+            let record_count = if params.format.to_uppercase() == "PARQUET" {
+                #[cfg(feature = "parquet")]
+                {
+                    let stdout = std::io::stdout();
+                    match output::write_parquet_output(results, command, &params, stdout) {
+                        Ok(count) => count,
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "parquet"))]
+                {
+                    eprintln!(
+                        "Error: PARQUET format not available. Recompile with --features parquet"
+                    );
+                    std::process::exit(1);
+                }
+            } else {
+                // Text-based formats (CSV, JSON, text)
+                use std::io::{BufWriter, Write};
+                let stdout = std::io::stdout();
+                let mut writer = BufWriter::new(stdout.lock());
+                let flush_each_record = source.uses_stdin();
+
+                let formatted = output::format_stream(results, command, &params, source.clone());
+                let mut count = 0;
+                for line in formatted {
+                    if write!(writer, "{}", line).is_err() {
+                        break;
+                    }
+                    if flush_each_record {
+                        let _ = writer.flush();
+                    }
+                    count += 1;
+                }
+                let _ = writer.flush();
+                count
+            };
+
+            // Report performance if requested
+            if let Some(start_time) = start {
+                let elapsed = start_time.elapsed();
+                eprintln!(
+                    "Processed {} records in {:.3}s ({:.0} records/sec)",
+                    record_count,
+                    elapsed.as_secs_f64(),
+                    record_count as f64 / elapsed.as_secs_f64()
                 );
             }
-
-            PerformanceTracker::report_if_needed(&tracker);
-            Ok(())
         }
-        "sunrise" => {
-            let show_twilight = parse_sunrise_options(cmd_matches).twilight;
-
-            let params = Arc::new(get_sunrise_calculation_parameters(
-                &input,
-                matches,
-                show_twilight,
-            )?);
-            let show_perf = matches.get_flag("perf");
-            let tracker = PerformanceTracker::create(show_perf);
-            let sunrise_iter = create_sunrise_iterator(&input, matches, params)?;
-
-            let processed_iter = sunrise_iter.map(exit_on_error);
-
-            // Check if stdin is being used for adaptive buffering
-            let is_stdin = matches!(
-                input.input_type,
-                InputType::StdinCoords | InputType::StdinTimes | InputType::StdinPaired
-            );
-
-            // Track performance if enabled
-            if let Some(ref t) = tracker {
-                let tracked_iter = processed_iter.inspect(|_| {
-                    t.track_item();
-                });
-                output_sunrise_results(
-                    tracked_iter,
-                    &format,
-                    show_inputs,
-                    show_headers,
-                    show_twilight,
-                    is_stdin,
-                );
+        Err(e) => {
+            // Help and version output should not be prefixed with "Error:"
+            if e.starts_with("sunce ") || e.starts_with("Usage: ") {
+                println!("{}", e);
+                std::process::exit(0);
             } else {
-                output_sunrise_results(
-                    processed_iter,
-                    &format,
-                    show_inputs,
-                    show_headers,
-                    show_twilight,
-                    is_stdin,
-                );
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
-
-            PerformanceTracker::report_if_needed(&tracker);
-            Ok(())
         }
-        _ => Err(AppError::General(format!("Unknown command: {}", cmd_name))),
     }
 }

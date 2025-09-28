@@ -338,14 +338,14 @@ fn test_file_input_mixed_timezones() {
     // Time file with mixed timezone formats
     let times_file = dir.path().join("mixed_times.txt");
     let mut file = File::create(&times_file).unwrap();
-    writeln!(file, "2024-06-21T12:00:00+02:00").unwrap(); // Explicit timezone
-    writeln!(file, "2024-06-21T15:00:00").unwrap(); // Naive - should use --timezone
-    writeln!(file, "2024-06-21T18:00:00Z").unwrap(); // UTC
+    writeln!(file, "2024-06-21T12:00:00+02:00").unwrap(); // Explicit timezone - will be converted
+    writeln!(file, "2024-06-21T15:00:00").unwrap(); // Naive - will use --timezone
+    writeln!(file, "2024-06-21T18:00:00Z").unwrap(); // UTC - will be converted
 
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args([
         "--format=CSV",
-        "--timezone=+05:00", // Should only apply to naive datetime
+        "--timezone=+05:00", // OVERRIDES all timezones
         "52.0",
         "13.4",
         &format!("@{}", times_file.to_str().unwrap()),
@@ -355,20 +355,20 @@ fn test_file_input_mixed_timezones() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Verify all timezone formats preserved/applied correctly
+    // When --timezone is specified, ALL times are converted to that timezone
+    // Count how many times +05:00 appears (should be 3 times - one for each input time)
+    let timezone_count = output_str.matches("+05:00").count();
     assert!(
-        output_str.contains("+02:00"),
-        "Explicit timezone should be preserved: {}",
+        timezone_count >= 3,
+        "All times should be in +05:00 timezone when --timezone is specified, found {} occurrences: {}",
+        timezone_count,
         output_str
     );
+
+    // Should NOT contain original timezones when --timezone overrides
     assert!(
-        output_str.contains("+05:00"),
-        "Naive datetime should get --timezone: {}",
-        output_str
-    );
-    assert!(
-        output_str.contains("+00:00"),
-        "UTC should be preserved as +00:00: {}",
+        !output_str.contains("+02:00"),
+        "Original +02:00 should be converted to +05:00: {}",
         output_str
     );
 }
@@ -381,7 +381,7 @@ fn test_file_input_errors() {
     cmd.args(["@/non/existent/file.txt", "2024-06-21", "position"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Failed to open coordinate file"));
+        .stderr(predicate::str::contains("File not found"));
 
     // Test invalid coordinate format
     let dir = tempdir().unwrap();
@@ -398,7 +398,7 @@ fn test_file_input_errors() {
     ]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Error reading coordinate data"));
+        .stderr(predicate::str::contains("invalid latitude"));
 }
 
 /// Test show-inputs auto-enabling for file inputs

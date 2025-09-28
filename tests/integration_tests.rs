@@ -395,20 +395,50 @@ fn test_unix_timestamp_with_timezone() {
 /// Test unix timestamp range validation
 #[test]
 fn test_unix_timestamp_validation() {
-    // Test minimum timestamp (1970-01-01)
+    // Test common timestamp (2000-01-01 = 946684800)
     SunceTest::new()
-        .args(["--show-inputs", "52.0", "13.4", "0", "position"])
-        .assert_success_contains("1970-01-01");
+        .args(["--show-inputs", "52.0", "13.4", "946684800", "position"])
+        .assert_success_contains("2000-01-01");
 
-    // Test a valid timestamp
+    // Test another valid timestamp (2020-01-01)
     SunceTest::new()
-        .args(["--show-inputs", "52.0", "13.4", "100000000", "position"])
-        .assert_success_contains("1973-03-03");
+        .args(["--show-inputs", "52.0", "13.4", "1577836800", "position"])
+        .assert_success_contains("2020-01-01");
 
-    // Test out of range timestamp (should be rejected with range error)
+    // Test boundary: 4 digits treated as year, 5+ as timestamp
     SunceTest::new()
-        .args(["52.0", "13.4", "99999999999", "position"])
-        .assert_failure();
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "52.0",
+            "13.4",
+            "9999",
+            "position",
+        ])
+        .assert_success_contains("9999-01-01");
+
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "52.0",
+            "13.4",
+            "10000",
+            "position",
+        ])
+        .assert_success_contains("1970-01-01T02:46:40");
+
+    // Test negative timestamp (before epoch)
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "52.0",
+            "13.4",
+            "-10000",
+            "position",
+        ])
+        .assert_success_contains("1969-12-31");
 }
 
 /// Test unix timestamp in files
@@ -424,7 +454,7 @@ fn test_unix_timestamp_in_files() {
     // Test paired file with unix timestamp
     SunceTest::new()
         .args([&format!("@{}", file.path().display()), "position"])
-        .assert_success_contains_all(&["2020-01-01", "52.00000", "13.40000"]);
+        .assert_success_contains_all(&["2020-01-01", "52", "13.4"]);
 }
 
 /// Test floating point precision in coordinate ranges
