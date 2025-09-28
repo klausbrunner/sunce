@@ -97,7 +97,7 @@ pub enum DateTimeInput {
     PartialDate(i32, u32, u32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InputType {
     Standard,
     CoordinateFile,
@@ -112,13 +112,133 @@ pub enum InputType {
 #[derive(Debug, Clone)]
 pub struct ParsedInput {
     pub input_type: InputType,
-    pub latitude: String,
-    pub longitude: Option<String>,
-    pub datetime: Option<String>,
+
+    // Raw input strings from command line (may be values or file paths)
+    // For Standard input: these contain coordinate/datetime strings
+    // For File inputs: these contain file paths (latitude may contain "@file.txt")
+    pub latitude: String, // Either: "52.5" or "@file.txt" depending on input_type
+    pub longitude: Option<String>, // Either: "13.4" or "@file.txt" depending on input_type
+    pub datetime: Option<String>, // Either: "2024-01-01" or "@file.txt" depending on input_type
+
     pub global_options: GlobalOptions,
-    pub parsed_latitude: Option<Coordinate>,
-    pub parsed_longitude: Option<Coordinate>,
-    pub parsed_datetime: Option<DateTimeInput>,
+
+    // Parsed values (only populated for non-file inputs)
+    pub coord_lat: Option<Coordinate>, // Populated only when latitude is a coordinate value
+    pub coord_lon: Option<Coordinate>, // Populated only when longitude is a coordinate value
+    pub datetime_input: Option<DateTimeInput>, // Populated only when datetime is a datetime value
+}
+
+impl ParsedInput {
+    /// Returns the file path for coordinate file inputs, None otherwise.
+    /// Validates that the path looks reasonable (starts with @ or is stdin).
+    pub fn coord_file_path(&self) -> Option<&str> {
+        let path = match self.input_type {
+            InputType::CoordinateFile | InputType::StdinCoords => Some(&self.latitude),
+            InputType::CoordinateFileTimeFile => Some(&self.latitude), // coord file in latitude field
+            _ => None,
+        }?;
+
+        // Validate that this looks like a file path
+        if self.input_type == InputType::StdinCoords && path != "@-" && path != "-" {
+            return None; // Invalid stdin indicator
+        }
+
+        Some(path)
+    }
+
+    /// Returns the file path for time file inputs, None otherwise.
+    /// Validates that the path looks reasonable (starts with @ or is stdin).
+    pub fn time_file_path(&self) -> Option<&str> {
+        let path = match self.input_type {
+            InputType::TimeFile | InputType::StdinTimes => self.datetime.as_deref(),
+            InputType::CoordinateFileTimeFile => self.datetime.as_deref(), // time file in datetime field
+            _ => None,
+        }?;
+
+        // Validate that this looks like a file path
+        if self.input_type == InputType::StdinTimes && path != "@-" && path != "-" {
+            return None; // Invalid stdin indicator
+        }
+
+        Some(path)
+    }
+
+    /// Returns the file path for paired file inputs, None otherwise.
+    /// Validates that the path looks reasonable (starts with @ or is stdin).
+    pub fn paired_file_path(&self) -> Option<&str> {
+        let path = match self.input_type {
+            InputType::PairedDataFile | InputType::StdinPaired => Some(&self.latitude),
+            _ => None,
+        }?;
+
+        // Validate that this looks like a file path
+        if self.input_type == InputType::StdinPaired && path != "@-" && path != "-" {
+            return None; // Invalid stdin indicator
+        }
+
+        Some(path)
+    }
+
+    /// Returns true if this input uses files rather than direct values
+    #[allow(dead_code)]
+    pub fn uses_files(&self) -> bool {
+        !matches!(self.input_type, InputType::Standard)
+    }
+
+    /// Validates that the ParsedInput is internally consistent.
+    /// Returns Ok(()) if valid, Err with description if not.
+    pub fn validate(&self) -> Result<(), String> {
+        match self.input_type {
+            InputType::Standard => {
+                // For standard input, we should have parsed coordinates
+                if self.coord_lat.is_none() {
+                    return Err("Standard input missing parsed latitude".to_string());
+                }
+                if self.coord_lon.is_none() {
+                    return Err("Standard input missing parsed longitude".to_string());
+                }
+                if self.datetime_input.is_none() {
+                    return Err("Standard input missing parsed datetime".to_string());
+                }
+            }
+            InputType::CoordinateFile | InputType::StdinCoords => {
+                // Should have file path in latitude, parsed datetime
+                if self.coord_file_path().is_none() {
+                    return Err("Coordinate file input missing file path".to_string());
+                }
+                if self.datetime_input.is_none() {
+                    return Err("Coordinate file input missing parsed datetime".to_string());
+                }
+            }
+            InputType::TimeFile | InputType::StdinTimes => {
+                // Should have parsed coordinates, file path in datetime
+                if self.coord_lat.is_none() || self.coord_lon.is_none() {
+                    return Err("Time file input missing parsed coordinates".to_string());
+                }
+                if self.time_file_path().is_none() {
+                    return Err("Time file input missing file path".to_string());
+                }
+            }
+            InputType::PairedDataFile | InputType::StdinPaired => {
+                // Should have file path in latitude, no parsed values needed
+                if self.paired_file_path().is_none() {
+                    return Err("Paired file input missing file path".to_string());
+                }
+            }
+            InputType::CoordinateFileTimeFile => {
+                // Should have both file paths
+                if self.coord_file_path().is_none() {
+                    return Err(
+                        "Coordinate/time file input missing coordinate file path".to_string()
+                    );
+                }
+                if self.time_file_path().is_none() {
+                    return Err("Coordinate/time file input missing time file path".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

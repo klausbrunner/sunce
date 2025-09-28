@@ -22,6 +22,7 @@ use calculation::{get_calculation_parameters, get_sunrise_calculation_parameters
 use iterators::{create_position_iterator, create_sunrise_iterator};
 use output::output_position_results;
 use performance::PerformanceTracker;
+use std::sync::Arc;
 use sunrise_formatters::output_sunrise_results;
 use types::{AppError, DateTimeInput, InputType, OutputFormat};
 
@@ -48,6 +49,11 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), AppError> {
     let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
     parse_data_values(&mut input, Some(cmd_name))?;
 
+    // Validate that the input is internally consistent
+    input
+        .validate()
+        .map_err(|e| AppError::General(format!("Input validation error: {}", e)))?;
+
     let format = match input.global_options.format.as_deref() {
         Some(fmt) => OutputFormat::from_string(fmt)?,
         None => OutputFormat::Human,
@@ -59,16 +65,16 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), AppError> {
         "position" => {
             let elevation_angle = parse_position_options(cmd_matches).elevation_angle;
 
-            let params = get_calculation_parameters(&input, matches)?;
+            let params = Arc::new(get_calculation_parameters(&input, matches)?);
             let show_perf = matches.get_flag("perf");
             let tracker = PerformanceTracker::create(show_perf);
-            let position_iter = create_position_iterator(&input, matches, &params)?;
+            let position_iter = create_position_iterator(&input, matches, params)?;
 
             let processed_iter = position_iter.map(exit_on_error);
 
             // Check if stdin or watch mode is being used for adaptive buffering (low latency)
             let watch_mode = cmd_matches.get_one::<String>("step").is_some()
-                && matches!(input.parsed_datetime, Some(DateTimeInput::Now));
+                && matches!(input.datetime_input, Some(DateTimeInput::Now));
             let is_stdin = matches!(
                 input.input_type,
                 InputType::StdinCoords | InputType::StdinTimes | InputType::StdinPaired
@@ -104,10 +110,14 @@ fn run_app(matches: &clap::ArgMatches) -> Result<(), AppError> {
         "sunrise" => {
             let show_twilight = parse_sunrise_options(cmd_matches).twilight;
 
-            let params = get_sunrise_calculation_parameters(&input, matches, show_twilight)?;
+            let params = Arc::new(get_sunrise_calculation_parameters(
+                &input,
+                matches,
+                show_twilight,
+            )?);
             let show_perf = matches.get_flag("perf");
             let tracker = PerformanceTracker::create(show_perf);
-            let sunrise_iter = create_sunrise_iterator(&input, matches, &params)?;
+            let sunrise_iter = create_sunrise_iterator(&input, matches, params)?;
 
             let processed_iter = sunrise_iter.map(exit_on_error);
 

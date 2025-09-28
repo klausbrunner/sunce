@@ -401,12 +401,31 @@ pub fn parse_input(matches: &ArgMatches) -> Result<ParsedInput, String> {
         longitude: parsed_longitude,
         datetime: parsed_datetime,
         global_options,
-        parsed_latitude: None,
-        parsed_longitude: None,
-        parsed_datetime: None,
+        coord_lat: None,
+        coord_lon: None,
+        datetime_input: None,
     })
 }
 
+/// Determines the input mode based on argument count and @ prefix patterns.
+///
+/// # Input Modes
+///
+/// ## 1 Argument
+/// - `@file.txt` or `@-` → Paired data file (lat,lon,datetime per line)
+///
+/// ## 2 Arguments
+/// - `@coords.txt datetime` → Coordinate file + single datetime
+/// - `lat @times.txt` → Single coordinate + time file
+/// - `@coords.txt @times.txt` → Both from files (special case)
+///
+/// ## 3 Arguments
+/// - `lat lon datetime` → Standard single calculation
+/// - `lat lon @times.txt` → Fixed location, multiple times from file
+/// - `@coords.txt something datetime` → Multiple locations from file, single time
+///
+/// The logic is complex but consistent: @ prefix means "read from file"
+/// and argument position determines what type of data is expected.
 fn determine_input_type(
     latitude: &str,
     longitude: Option<&String>,
@@ -565,29 +584,43 @@ pub fn parse_data_values(
     match &input.input_type {
         InputType::Standard => {
             // Parse all three parameters
-            input.parsed_latitude = Some(parse_coordinate(&input.latitude, "latitude")?);
+            input.coord_lat = Some(parse_coordinate(&input.latitude, "latitude").map_err(|e| {
+                ParseError::InvalidCoordinate(format!(
+                    "Error parsing latitude from command line: {}",
+                    e
+                ))
+            })?);
             if let Some(ref lon) = input.longitude {
-                input.parsed_longitude = Some(parse_coordinate(lon, "longitude")?);
+                input.coord_lon = Some(parse_coordinate(lon, "longitude").map_err(|e| {
+                    ParseError::InvalidCoordinate(format!(
+                        "Error parsing longitude from command line: {}",
+                        e
+                    ))
+                })?);
             }
             if let Some(ref dt) = input.datetime {
-                input.parsed_datetime = Some(parse_datetime(
-                    dt,
-                    input.global_options.timezone.as_deref(),
-                )?);
+                input.datetime_input = Some(
+                    parse_datetime(dt, input.global_options.timezone.as_deref()).map_err(|e| {
+                        ParseError::InvalidDateTime(format!(
+                            "Error parsing datetime from command line: {}",
+                            e
+                        ))
+                    })?,
+                );
             }
         }
         InputType::TimeFile | InputType::StdinTimes => {
             // Parse lat/lon, but not the time file (@times.txt)
-            input.parsed_latitude = Some(parse_coordinate(&input.latitude, "latitude")?);
+            input.coord_lat = Some(parse_coordinate(&input.latitude, "latitude")?);
             if let Some(ref lon) = input.longitude {
-                input.parsed_longitude = Some(parse_coordinate(lon, "longitude")?);
+                input.coord_lon = Some(parse_coordinate(lon, "longitude")?);
             }
             // datetime is a file reference (@times.txt) - don't parse it here
         }
         InputType::CoordinateFile | InputType::StdinCoords => {
             // Don't parse the coordinate file (@coords.txt), but parse the datetime
             if let Some(ref dt) = input.datetime {
-                input.parsed_datetime = Some(parse_datetime(
+                input.datetime_input = Some(parse_datetime(
                     dt,
                     input.global_options.timezone.as_deref(),
                 )?);
@@ -614,14 +647,14 @@ pub fn apply_show_inputs_auto_logic(input: &mut ParsedInput, command_name: Optio
 
     let should_auto_enable =
         // Coordinate ranges auto-enable show-inputs
-        matches!(input.parsed_latitude, Some(crate::types::Coordinate::Range { .. })) ||
-        matches!(input.parsed_longitude, Some(crate::types::Coordinate::Range { .. })) ||
+        matches!(input.coord_lat, Some(crate::types::Coordinate::Range { .. })) ||
+        matches!(input.coord_lon, Some(crate::types::Coordinate::Range { .. })) ||
 
         // Partial dates (time series) auto-enable show-inputs for position command
         // For sunrise command, specific dates should NOT auto-enable show-inputs
-        (matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialYear(_)) |
+        (matches!(input.datetime_input, Some(crate::types::DateTimeInput::PartialYear(_)) |
                                          Some(crate::types::DateTimeInput::PartialYearMonth(_, _))) ||
-         (matches!(input.parsed_datetime, Some(crate::types::DateTimeInput::PartialDate(_, _, _))) &&
+         (matches!(input.datetime_input, Some(crate::types::DateTimeInput::PartialDate(_, _, _))) &&
           command_name != Some("sunrise"))) ||
 
         // File inputs auto-enable show-inputs
@@ -856,9 +889,9 @@ mod tests {
                 show_inputs: None, // Not explicitly set
                 timezone: None,
             },
-            parsed_latitude: Some(Coordinate::Single(52.0)),
-            parsed_longitude: Some(Coordinate::Single(13.4)),
-            parsed_datetime: Some(DateTimeInput::PartialDate(2024, 1, 1)),
+            coord_lat: Some(Coordinate::Single(52.0)),
+            coord_lon: Some(Coordinate::Single(13.4)),
+            datetime_input: Some(DateTimeInput::PartialDate(2024, 1, 1)),
         };
 
         // For sunrise command, specific date should NOT auto-enable show-inputs
@@ -897,9 +930,9 @@ mod tests {
                 show_inputs: None,
                 timezone: None,
             },
-            parsed_latitude: Some(Coordinate::Single(52.0)),
-            parsed_longitude: Some(Coordinate::Single(13.4)),
-            parsed_datetime: Some(DateTimeInput::PartialYear(2024)),
+            coord_lat: Some(Coordinate::Single(52.0)),
+            coord_lon: Some(Coordinate::Single(13.4)),
+            datetime_input: Some(DateTimeInput::PartialYear(2024)),
         };
 
         // For sunrise command, partial year should still auto-enable show-inputs

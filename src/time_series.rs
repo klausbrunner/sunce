@@ -2,6 +2,129 @@ use crate::timezone::{TimezoneSpec, apply_timezone_to_datetime, get_system_timez
 use crate::types::{DateTimeInput, ParseError};
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime};
 
+/// Parse a duration string into a chrono Duration.
+///
+/// Supported formats:
+/// - Plain number: interpreted as seconds (e.g., "300" = 5 minutes)
+/// - Number with unit: e.g., "30s", "15m", "2h", "1d"
+///
+/// Supported units:
+/// - s, sec, second, seconds
+/// - m, min, minute, minutes
+/// - h, hr, hour, hours
+/// - d, day, days
+pub fn parse_duration(input: &str) -> Result<Duration, ParseError> {
+    if input.is_empty() {
+        return Err(ParseError::InvalidDateTime(
+            "Empty duration string. Expected formats: '30s', '15m', '2h', '1d', or plain number (seconds)".to_string(),
+        ));
+    }
+
+    // Try parsing as plain number (seconds)
+    if let Ok(seconds) = input.parse::<i64>() {
+        if seconds <= 0 {
+            return Err(ParseError::InvalidDateTime(format!(
+                "Duration must be positive, got {} seconds. Use values like '30s', '15m', '2h'",
+                seconds
+            )));
+        }
+        if seconds > 315_576_000_000 {
+            // 10,000 years in seconds
+            return Err(ParseError::InvalidDateTime(format!(
+                "Duration {} seconds is too large (exceeds 10,000 years)",
+                seconds
+            )));
+        }
+        return Duration::try_seconds(seconds).ok_or_else(|| {
+            ParseError::InvalidDateTime(format!("Duration overflow for {} seconds", seconds))
+        });
+    }
+
+    // Parse as number with unit
+    let unit_start = input.find(|c: char| c.is_alphabetic()).ok_or_else(|| {
+        ParseError::InvalidDateTime(format!(
+            "Invalid duration format '{}'. Expected formats: '30s', '15m', '2h', '1d', or plain number (seconds)",
+            input
+        ))
+    })?;
+
+    let (num_str, unit) = input.split_at(unit_start);
+
+    // Handle empty number part
+    if num_str.is_empty() {
+        return Err(ParseError::InvalidDateTime(format!(
+            "Missing number before unit '{}'. Expected formats like '30s', '15m', '2h'",
+            unit
+        )));
+    }
+
+    let num: i64 = num_str.trim().parse().map_err(|_| {
+        ParseError::InvalidDateTime(format!(
+            "Invalid number '{}' in duration. Expected integer like '30s', '15m', '2h'",
+            num_str
+        ))
+    })?;
+
+    if num <= 0 {
+        return Err(ParseError::InvalidDateTime(format!(
+            "Duration must be positive, got {}{}. Use values like '30s', '15m', '2h'",
+            num, unit
+        )));
+    }
+
+    let duration = match unit.trim().to_lowercase().as_str() {
+        "s" | "sec" | "second" | "seconds" => {
+            if num > 315_576_000_000 {
+                return Err(ParseError::InvalidDateTime(format!(
+                    "Duration {}s exceeds maximum (10,000 years)",
+                    num
+                )));
+            }
+            Duration::try_seconds(num)
+        }
+        "m" | "min" | "minute" | "minutes" => {
+            if num > 5_259_600_000 {
+                // 10,000 years in minutes
+                return Err(ParseError::InvalidDateTime(format!(
+                    "Duration {}m exceeds maximum (10,000 years)",
+                    num
+                )));
+            }
+            Duration::try_minutes(num)
+        }
+        "h" | "hr" | "hour" | "hours" => {
+            if num > 87_660_000 {
+                // 10,000 years in hours
+                return Err(ParseError::InvalidDateTime(format!(
+                    "Duration {}h exceeds maximum (10,000 years)",
+                    num
+                )));
+            }
+            Duration::try_hours(num)
+        }
+        "d" | "day" | "days" => {
+            if num > 3_652_500 {
+                // 10,000 years in days
+                return Err(ParseError::InvalidDateTime(format!(
+                    "Duration {}d exceeds maximum (10,000 years)",
+                    num
+                )));
+            }
+            Duration::try_days(num)
+        }
+        _ => {
+            return Err(ParseError::InvalidDateTime(format!(
+                "Unknown time unit '{}'. Supported units: s/sec/second, m/min/minute, h/hr/hour, d/day",
+                unit
+            )));
+        }
+    };
+
+    duration.ok_or_else(|| {
+        ParseError::InvalidDateTime(format!("Duration overflow for {}{}", num, unit))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeStep {
     pub duration: Duration,
@@ -9,56 +132,7 @@ pub struct TimeStep {
 
 impl TimeStep {
     pub fn parse(input: &str) -> Result<Self, ParseError> {
-        if input.is_empty() {
-            return Err(ParseError::InvalidDateTime(
-                "Empty step interval".to_string(),
-            ));
-        }
-
-        if let Ok(seconds) = input.parse::<i64>() {
-            if seconds <= 0 {
-                return Err(ParseError::InvalidDateTime(
-                    "Step interval must be positive".to_string(),
-                ));
-            }
-            return Duration::try_seconds(seconds)
-                .map(|d| TimeStep { duration: d })
-                .ok_or_else(|| {
-                    ParseError::InvalidDateTime(format!("Duration overflow: {}", input))
-                });
-        }
-
-        let (num_str, unit) =
-            input.split_at(input.find(|c: char| c.is_alphabetic()).ok_or_else(|| {
-                ParseError::InvalidDateTime(format!("Invalid step format: {}", input))
-            })?);
-
-        let num: i64 = num_str
-            .parse()
-            .map_err(|_| ParseError::InvalidDateTime(format!("Invalid number: {}", num_str)))?;
-
-        if num <= 0 {
-            return Err(ParseError::InvalidDateTime(
-                "Step interval must be positive".to_string(),
-            ));
-        }
-
-        let duration = match unit.to_lowercase().as_str() {
-            "s" | "sec" | "second" | "seconds" => Duration::try_seconds(num),
-            "m" | "min" | "minute" | "minutes" => Duration::try_minutes(num),
-            "h" | "hr" | "hour" | "hours" => Duration::try_hours(num),
-            "d" | "day" | "days" => Duration::try_days(num),
-            _ => {
-                return Err(ParseError::InvalidDateTime(format!(
-                    "Unknown time unit: {}",
-                    unit
-                )));
-            }
-        };
-
-        duration
-            .map(|d| TimeStep { duration: d })
-            .ok_or_else(|| ParseError::InvalidDateTime(format!("Duration overflow: {}", input)))
+        parse_duration(input).map(|duration| TimeStep { duration })
     }
 
     pub fn default() -> Self {
@@ -346,6 +420,111 @@ mod tests {
         assert!(TimeStep::parse("").is_err());
         assert!(TimeStep::parse("30x").is_err());
         assert!(TimeStep::parse("-5m").is_err());
+    }
+
+    #[test]
+    fn test_duration_parsing_comprehensive() {
+        // Valid durations with all unit variations
+        assert!(parse_duration("30s").is_ok());
+        assert!(parse_duration("30sec").is_ok());
+        assert!(parse_duration("30second").is_ok());
+        assert!(parse_duration("30seconds").is_ok());
+        assert!(parse_duration("15m").is_ok());
+        assert!(parse_duration("15min").is_ok());
+        assert!(parse_duration("15minute").is_ok());
+        assert!(parse_duration("15minutes").is_ok());
+        assert!(parse_duration("2h").is_ok());
+        assert!(parse_duration("2hr").is_ok());
+        assert!(parse_duration("2hour").is_ok());
+        assert!(parse_duration("2hours").is_ok());
+        assert!(parse_duration("1d").is_ok());
+        assert!(parse_duration("1day").is_ok());
+        assert!(parse_duration("7days").is_ok());
+
+        // Case insensitive
+        assert!(parse_duration("30S").is_ok());
+        assert!(parse_duration("15MIN").is_ok());
+        assert!(parse_duration("2Hours").is_ok());
+
+        // Plain numbers (seconds)
+        assert!(parse_duration("300").is_ok());
+        assert!(parse_duration("3600").is_ok());
+
+        // Whitespace handling
+        assert!(parse_duration("30 s").is_ok());
+        assert!(parse_duration(" 30s").is_ok());
+        assert!(parse_duration("30s ").is_ok());
+    }
+
+    #[test]
+    fn test_duration_parsing_error_messages() {
+        // Empty input
+        let err = parse_duration("").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Empty duration string"));
+            assert!(msg.contains("Expected formats"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Invalid unit
+        let err = parse_duration("30x").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Unknown time unit 'x'"));
+            assert!(msg.contains("Supported units"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Negative duration
+        let err = parse_duration("-5m").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Duration must be positive"));
+            assert!(msg.contains("-5m"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Zero duration
+        let err = parse_duration("0s").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Duration must be positive"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Missing number
+        let err = parse_duration("m").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Missing number before unit"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Invalid number
+        let err = parse_duration("1.5h").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Invalid number '1.5'"));
+            assert!(msg.contains("Expected integer"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Overflow duration
+        let err = parse_duration("9999999999999d").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("exceeds maximum"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
+
+        // Invalid format (no unit indicator)
+        let err = parse_duration("30.5").unwrap_err();
+        if let ParseError::InvalidDateTime(msg) = err {
+            assert!(msg.contains("Invalid duration format"));
+        } else {
+            panic!("Expected InvalidDateTime error");
+        }
     }
 
     #[test]

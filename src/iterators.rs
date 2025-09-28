@@ -17,6 +17,7 @@ use clap::ArgMatches;
 use solar_positioning::RefractionCorrection;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Parse timezone from ParsedInput global options with consistent error handling
 fn parse_input_timezone(input: &ParsedInput) -> Result<Option<TimezoneSpec>, String> {
@@ -123,25 +124,44 @@ pub fn create_coordinate_iterator(coord: &Coordinate) -> CoordinateIterator {
     }
 }
 
+/// Main factory for creating position iterators based on input type
 pub fn create_position_iterator<'a>(
     input: &'a ParsedInput,
     matches: &'a ArgMatches,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
 ) -> Result<Box<dyn Iterator<Item = Result<PositionResult, String>> + 'a>, String> {
+    let (step, watch_mode) = extract_position_options(input, matches)?;
+
+    create_position_iterator_for_type(input, params, step, watch_mode)
+}
+
+/// Extract step and watch mode options for position command
+fn extract_position_options(
+    input: &ParsedInput,
+    matches: &ArgMatches,
+) -> Result<(TimeStep, bool), String> {
     let (cmd_name, cmd_matches) = matches.subcommand().unwrap_or(("position", matches));
-    let (step, watch_mode) = if cmd_name == "position" {
+    if cmd_name == "position" {
         if let Some(step_str) = cmd_matches.get_one::<String>("step") {
             let step =
                 TimeStep::parse(step_str).map_err(|e| format!("Invalid step parameter: {}", e))?;
-            let watch = matches!(input.parsed_datetime, Some(DateTimeInput::Now));
-            (step, watch)
+            let watch = matches!(input.datetime_input, Some(DateTimeInput::Now));
+            Ok((step, watch))
         } else {
-            (TimeStep::default(), false)
+            Ok((TimeStep::default(), false))
         }
     } else {
-        (TimeStep::default(), false)
-    };
+        Ok((TimeStep::default(), false))
+    }
+}
 
+/// Create the appropriate position iterator based on input type
+fn create_position_iterator_for_type<'a>(
+    input: &'a ParsedInput,
+    params: Arc<CalculationParameters>,
+    step: TimeStep,
+    watch_mode: bool,
+) -> Result<Box<dyn Iterator<Item = Result<PositionResult, String>> + 'a>, String> {
     match input.input_type {
         InputType::PairedDataFile | InputType::StdinPaired => Ok(Box::new(
             create_paired_file_position_iterator(input, params)?,
@@ -161,14 +181,29 @@ pub fn create_position_iterator<'a>(
     }
 }
 
+/// Main factory for creating sunrise iterators based on input type
 pub fn create_sunrise_iterator<'a>(
     input: &'a ParsedInput,
     matches: &'a ArgMatches,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
 ) -> Result<Box<dyn Iterator<Item = Result<SunriseResultData, String>> + 'a>, String> {
-    let (_cmd_name, _cmd_matches) = matches.subcommand().unwrap_or(("sunrise", matches));
-    let step = TimeStep::default();
+    let step = extract_sunrise_options(matches)?;
 
+    create_sunrise_iterator_for_type(input, params, step)
+}
+
+/// Extract step option for sunrise command (currently sunrise doesn't support step)
+fn extract_sunrise_options(_matches: &ArgMatches) -> Result<TimeStep, String> {
+    // Sunrise command doesn't currently support step parameter
+    Ok(TimeStep::default())
+}
+
+/// Create the appropriate sunrise iterator based on input type
+fn create_sunrise_iterator_for_type<'a>(
+    input: &'a ParsedInput,
+    params: Arc<SunriseCalculationParameters>,
+    step: TimeStep,
+) -> Result<Box<dyn Iterator<Item = Result<SunriseResultData, String>> + 'a>, String> {
     match input.input_type {
         InputType::PairedDataFile | InputType::StdinPaired => Ok(Box::new(
             create_paired_file_sunrise_iterator(input, params)?,
@@ -190,19 +225,25 @@ pub fn create_sunrise_iterator<'a>(
 
 fn create_paired_file_position_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
-    let file_path = &input.latitude;
+    let file_path = input
+        .paired_file_path()
+        .ok_or_else(|| "Internal error: expected paired file input".to_string())?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
-    let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+    let paired_iter = PairedFileIterator::with_path(
+        reader,
+        input.global_options.timezone.clone(),
+        file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Ok(calculate_single_position(datetime, lat, lon, params))
+            Ok(calculate_single_position(datetime, lat, lon, &params))
         }
         Err(e) => Err(format!("Error reading paired data: {}", e)),
     }))
@@ -210,19 +251,25 @@ fn create_paired_file_position_iterator<'a>(
 
 fn create_paired_file_sunrise_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
-    let file_path = &input.latitude;
+    let file_path = input
+        .paired_file_path()
+        .ok_or_else(|| "Internal error: expected paired file input".to_string())?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open paired data file {}: {}", file_path, e))?;
-    let paired_iter = PairedFileIterator::new(reader, input.global_options.timezone.clone());
+    let paired_iter = PairedFileIterator::with_path(
+        reader,
+        input.global_options.timezone.clone(),
+        file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
     Ok(paired_iter.map(move |paired_result| match paired_result {
         Ok((lat, lon, datetime_input)) => {
             let datetime =
                 datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Ok(calculate_single_sunrise(datetime, lat, lon, params))
+            Ok(calculate_single_sunrise(datetime, lat, lon, &params))
         }
         Err(e) => Err(format!("Error reading paired data: {}", e)),
     }))
@@ -230,12 +277,14 @@ fn create_paired_file_sunrise_iterator<'a>(
 
 fn create_coordinate_file_position_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
-    let file_path = &input.latitude;
+    let file_path = input
+        .coord_file_path()
+        .ok_or_else(|| "Internal error: expected coordinate file input".to_string())?;
 
     let datetime = input
-        .parsed_datetime
+        .datetime_input
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
@@ -244,10 +293,10 @@ fn create_coordinate_file_position_iterator<'a>(
 
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
-    let coord_iter = CoordinateFileIterator::new(reader);
+    let coord_iter = CoordinateFileIterator::with_path(reader, file_path.to_string());
 
     // Use optimized calculator for coordinate sweeps
-    let calculator = Rc::new(RefCell::new(CoordinateSweepCalculator::new(params.clone())));
+    let calculator = Rc::new(RefCell::new(CoordinateSweepCalculator::new(params)));
 
     Ok(coord_iter.map(move |coord_result| match coord_result {
         Ok((lat, lon)) => Ok(calculator
@@ -259,12 +308,14 @@ fn create_coordinate_file_position_iterator<'a>(
 
 fn create_coordinate_file_sunrise_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
-    let file_path = &input.latitude;
+    let file_path = input
+        .coord_file_path()
+        .ok_or_else(|| "Internal error: expected coordinate file input".to_string())?;
 
     let datetime = input
-        .parsed_datetime
+        .datetime_input
         .as_ref()
         .ok_or("Parsed datetime not available")?
         .clone();
@@ -273,195 +324,233 @@ fn create_coordinate_file_sunrise_iterator<'a>(
 
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", file_path, e))?;
-    let coord_iter = CoordinateFileIterator::new(reader);
+    let coord_iter = CoordinateFileIterator::with_path(reader, file_path.to_string());
 
     Ok(coord_iter.map(move |coord_result| match coord_result {
-        Ok((lat, lon)) => Ok(calculate_single_sunrise(datetime, lat, lon, params)),
+        Ok((lat, lon)) => Ok(calculate_single_sunrise(datetime, lat, lon, &params)),
         Err(e) => Err(format!("Error reading coordinate data: {}", e)),
     }))
 }
 
 fn create_time_file_position_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
     let lat = input
-        .parsed_latitude
+        .coord_lat
         .as_ref()
         .ok_or("Parsed latitude not available")?;
     let lon = input
-        .parsed_longitude
+        .coord_lon
         .as_ref()
         .ok_or("Parsed longitude not available")?;
 
     let file_path = input
-        .datetime
-        .as_ref()
+        .time_file_path()
         .ok_or("Time file path not available")?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
-    let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+    let time_iter = TimeFileIterator::with_path(
+        reader,
+        input.global_options.timezone.clone(),
+        file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
-    Ok(time_iter.flat_map(move |time_result| match time_result {
-        Ok(datetime_input) => {
-            let datetime =
-                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            let lat_iter = create_coordinate_iterator(lat);
-            // Use streaming approach - no collect()!
-            Box::new(lat_iter.flat_map(move |lat_val| {
-                let lon_iter = create_coordinate_iterator(lon);
-                lon_iter.map(move |lon_val| {
-                    Ok(calculate_single_position(
-                        datetime, lat_val, lon_val, params,
-                    ))
-                })
-            })) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
+    Ok(time_iter.flat_map(move |time_result| {
+        let params = params.clone();
+        match time_result {
+            Ok(datetime_input) => {
+                let datetime =
+                    datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+                let lat_iter = create_coordinate_iterator(lat);
+                // Use streaming approach - no collect()!
+                Box::new(lat_iter.flat_map(move |lat_val| {
+                    let params = params.clone();
+                    let lon_iter = create_coordinate_iterator(lon);
+                    lon_iter.map(move |lon_val| {
+                        Ok(calculate_single_position(
+                            datetime, lat_val, lon_val, &params,
+                        ))
+                    })
+                })) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
+            }
+            Err(e) => Box::new(std::iter::once(Err(format!(
+                "Error reading time data: {}",
+                e
+            )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
         }
-        Err(e) => Box::new(std::iter::once(Err(format!(
-            "Error reading time data: {}",
-            e
-        )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
     }))
 }
 
 fn create_time_file_sunrise_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
     let lat = input
-        .parsed_latitude
+        .coord_lat
         .as_ref()
         .ok_or("Parsed latitude not available")?;
     let lon = input
-        .parsed_longitude
+        .coord_lon
         .as_ref()
         .ok_or("Parsed longitude not available")?;
 
     let file_path = input
-        .datetime
-        .as_ref()
+        .time_file_path()
         .ok_or("Time file path not available")?;
     let reader = create_file_reader(file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", file_path, e))?;
-    let time_iter = TimeFileIterator::new(reader, input.global_options.timezone.clone());
+    let time_iter = TimeFileIterator::with_path(
+        reader,
+        input.global_options.timezone.clone(),
+        file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
-    Ok(time_iter.flat_map(move |time_result| match time_result {
-        Ok(datetime_input) => {
-            let datetime =
-                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            let lat_iter = create_coordinate_iterator(lat);
-            // Use streaming approach - no collect()!
-            Box::new(lat_iter.flat_map(move |lat_val| {
-                let lon_iter = create_coordinate_iterator(lon);
-                lon_iter.map(move |lon_val| {
-                    Ok(calculate_single_sunrise(datetime, lat_val, lon_val, params))
-                })
-            })) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+    Ok(time_iter.flat_map(move |time_result| {
+        let params = params.clone();
+        match time_result {
+            Ok(datetime_input) => {
+                let datetime =
+                    datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+                let lat_iter = create_coordinate_iterator(lat);
+                // Use streaming approach - no collect()!
+                Box::new(lat_iter.flat_map(move |lat_val| {
+                    let params = params.clone();
+                    let lon_iter = create_coordinate_iterator(lon);
+                    lon_iter.map(move |lon_val| {
+                        Ok(calculate_single_sunrise(
+                            datetime, lat_val, lon_val, &params,
+                        ))
+                    })
+                })) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+            }
+            Err(e) => Box::new(std::iter::once(Err(format!(
+                "Error reading time data: {}",
+                e
+            ))))
+                as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
         }
-        Err(e) => Box::new(std::iter::once(Err(format!(
-            "Error reading time data: {}",
-            e
-        )))) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
     }))
 }
 
 fn create_coordinate_file_time_file_position_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<PositionResult, String>> + 'a, String> {
-    // Coordinate file path is in latitude, time file path is in datetime
-    let coord_file_path = &input.latitude;
-    let time_file_path = input.datetime.as_ref().unwrap();
+    // For CoordinateFileTimeFile input type, coordinate file is in latitude field
+    let coord_file_path = input
+        .coord_file_path()
+        .ok_or_else(|| "Internal error: expected coordinate file path".to_string())?;
+    let time_file_path = input
+        .time_file_path()
+        .ok_or_else(|| "Internal error: expected time file path".to_string())?;
 
     // Read coordinates once and collect them (necessary for cartesian product)
     let coord_reader = create_file_reader(coord_file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", coord_file_path, e))?;
-    let coordinates: Vec<(f64, f64)> = CoordinateFileIterator::new(coord_reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Error reading coordinate data: {}", e))?;
+    let coordinates: Vec<(f64, f64)> =
+        CoordinateFileIterator::with_path(coord_reader, coord_file_path.to_string())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Error reading coordinate data: {}", e))?;
 
     let time_reader = create_file_reader(time_file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
 
-    let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
+    let time_iter = TimeFileIterator::with_path(
+        time_reader,
+        input.global_options.timezone.clone(),
+        time_file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
     // Cartesian product: for each time, iterate through all coordinates
-    Ok(time_iter.flat_map(move |time_result| match time_result {
-        Ok(datetime_input) => {
-            let datetime =
-                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Box::new(
-                coordinates.clone().into_iter().map(move |(lat, lon)| {
-                    Ok(calculate_single_position(datetime, lat, lon, params))
-                }),
-            ) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
+    Ok(time_iter.flat_map(move |time_result| {
+        let params = params.clone();
+        match time_result {
+            Ok(datetime_input) => {
+                let datetime =
+                    datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+                Box::new(coordinates.clone().into_iter().map(move |(lat, lon)| {
+                    Ok(calculate_single_position(datetime, lat, lon, &params))
+                })) as Box<dyn Iterator<Item = Result<PositionResult, String>>>
+            }
+            Err(e) => Box::new(std::iter::once(Err(format!(
+                "Error reading time data: {}",
+                e
+            )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
         }
-        Err(e) => Box::new(std::iter::once(Err(format!(
-            "Error reading time data: {}",
-            e
-        )))) as Box<dyn Iterator<Item = Result<PositionResult, String>>>,
     }))
 }
 
 fn create_coordinate_file_time_file_sunrise_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
 ) -> Result<impl Iterator<Item = Result<SunriseResultData, String>> + 'a, String> {
-    // Coordinate file path is in latitude, time file path is in datetime
-    let coord_file_path = &input.latitude;
-    let time_file_path = input.datetime.as_ref().unwrap();
+    // For CoordinateFileTimeFile input type
+    let coord_file_path = input
+        .coord_file_path()
+        .ok_or_else(|| "Internal error: expected coordinate file path".to_string())?;
+    let time_file_path = input
+        .time_file_path()
+        .ok_or_else(|| "Internal error: expected time file path".to_string())?;
 
     // Read coordinates once and collect them (necessary for cartesian product)
     let coord_reader = create_file_reader(coord_file_path)
         .map_err(|e| format!("Failed to open coordinate file {}: {}", coord_file_path, e))?;
-    let coordinates: Vec<(f64, f64)> = CoordinateFileIterator::new(coord_reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Error reading coordinate data: {}", e))?;
+    let coordinates: Vec<(f64, f64)> =
+        CoordinateFileIterator::with_path(coord_reader, coord_file_path.to_string())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Error reading coordinate data: {}", e))?;
 
     let time_reader = create_file_reader(time_file_path)
         .map_err(|e| format!("Failed to open time file {}: {}", time_file_path, e))?;
 
-    let time_iter = TimeFileIterator::new(time_reader, input.global_options.timezone.clone());
+    let time_iter = TimeFileIterator::with_path(
+        time_reader,
+        input.global_options.timezone.clone(),
+        time_file_path.to_string(),
+    );
     let timezone_spec = parse_input_timezone(input)?;
 
     // Cartesian product: for each time, iterate through all coordinates
-    Ok(time_iter.flat_map(move |time_result| match time_result {
-        Ok(datetime_input) => {
-            let datetime =
-                datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
-            Box::new(
-                coordinates.clone().into_iter().map(move |(lat, lon)| {
-                    Ok(calculate_single_sunrise(datetime, lat, lon, params))
-                }),
-            ) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+    Ok(time_iter.flat_map(move |time_result| {
+        let params = params.clone();
+        match time_result {
+            Ok(datetime_input) => {
+                let datetime =
+                    datetime_input_to_single_with_timezone(datetime_input, timezone_spec.clone());
+                Box::new(coordinates.clone().into_iter().map(move |(lat, lon)| {
+                    Ok(calculate_single_sunrise(datetime, lat, lon, &params))
+                })) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>
+            }
+            Err(e) => Box::new(std::iter::once(Err(format!(
+                "Error reading time data: {}",
+                e
+            ))))
+                as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
         }
-        Err(e) => Box::new(std::iter::once(Err(format!(
-            "Error reading time data: {}",
-            e
-        )))) as Box<dyn Iterator<Item = Result<SunriseResultData, String>>>,
     }))
 }
 
 fn create_standard_position_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a CalculationParameters,
+    params: Arc<CalculationParameters>,
     step: TimeStep,
     is_sunrise_command: bool,
     watch_mode: bool,
 ) -> Result<impl Iterator<Item = PositionResult> + 'a, String> {
     let lat = input
-        .parsed_latitude
+        .coord_lat
         .as_ref()
         .ok_or("Parsed latitude not available")?;
     let lon = input
-        .parsed_longitude
+        .coord_lon
         .as_ref()
         .ok_or("Parsed longitude not available")?;
     let datetime = input
-        .parsed_datetime
+        .datetime_input
         .as_ref()
         .ok_or("Parsed datetime not available")?;
 
@@ -494,7 +583,7 @@ fn create_standard_position_iterator<'a>(
 
     match (lat, lon) {
         (Coordinate::Single(lat_val), Coordinate::Single(lon_val)) => Ok(Box::new(
-            datetime_iter.map(move |dt| calculate_single_position(dt, *lat_val, *lon_val, params)),
+            datetime_iter.map(move |dt| calculate_single_position(dt, *lat_val, *lon_val, &params)),
         )
             as Box<dyn Iterator<Item = PositionResult> + 'a>),
         _ => {
@@ -511,13 +600,12 @@ fn create_standard_position_iterator<'a>(
                         lat,
                         lon,
                         single_datetime,
-                        params.clone(),
+                        params,
                     ))
                         as Box<dyn Iterator<Item = PositionResult> + 'a>)
                 } else {
                     // General case with time-based caching
-                    let calculator =
-                        Rc::new(RefCell::new(CoordinateSweepCalculator::new(params.clone())));
+                    let calculator = Rc::new(RefCell::new(CoordinateSweepCalculator::new(params)));
 
                     // Reconstruct datetime iterator from consumed elements
                     let datetime_iter = std::iter::once(single_datetime).chain(datetime_iter);
@@ -547,20 +635,20 @@ fn create_standard_position_iterator<'a>(
 
 fn create_standard_sunrise_iterator<'a>(
     input: &'a ParsedInput,
-    params: &'a SunriseCalculationParameters,
+    params: Arc<SunriseCalculationParameters>,
     step: TimeStep,
     is_sunrise_command: bool,
 ) -> Result<impl Iterator<Item = SunriseResultData> + 'a, String> {
     let lat = input
-        .parsed_latitude
+        .coord_lat
         .as_ref()
         .ok_or("Parsed latitude not available")?;
     let lon = input
-        .parsed_longitude
+        .coord_lon
         .as_ref()
         .ok_or("Parsed longitude not available")?;
     let datetime = input
-        .parsed_datetime
+        .datetime_input
         .as_ref()
         .ok_or("Parsed datetime not available")?;
 
@@ -588,14 +676,16 @@ fn create_standard_sunrise_iterator<'a>(
 
     match (lat, lon) {
         (Coordinate::Single(lat_val), Coordinate::Single(lon_val)) => Ok(Box::new(
-            datetime_iter.map(move |dt| calculate_single_sunrise(dt, *lat_val, *lon_val, params)),
+            datetime_iter.map(move |dt| calculate_single_sunrise(dt, *lat_val, *lon_val, &params)),
         )
             as Box<dyn Iterator<Item = SunriseResultData> + 'a>),
         _ => Ok(Box::new(datetime_iter.flat_map(move |dt| {
             let lat_iter = create_coordinate_iterator(lat);
+            let params = params.clone();
             lat_iter.flat_map(move |lat_val| {
+                let params = params.clone();
                 let lon_iter = create_coordinate_iterator(lon);
-                lon_iter.map(move |lon_val| calculate_single_sunrise(dt, lat_val, lon_val, params))
+                lon_iter.map(move |lon_val| calculate_single_sunrise(dt, lat_val, lon_val, &params))
             })
         }))
             as Box<dyn Iterator<Item = SunriseResultData> + 'a>),
@@ -628,7 +718,7 @@ impl CoordinateSweepOptimizedIterator {
         lat: &Coordinate,
         lon: &Coordinate,
         datetime: DateTime<FixedOffset>,
-        params: CalculationParameters,
+        params: Arc<CalculationParameters>,
     ) -> Self {
         // Pre-compute time-dependent parts once for coordinate sweep optimization
         let time_parts = solar_positioning::spa::spa_time_dependent_parts(

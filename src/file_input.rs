@@ -2,6 +2,7 @@ use crate::input_parsing::parse_datetime;
 use crate::types::{DateTimeInput, ParseError};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::marker::PhantomData;
 
 pub fn create_file_reader(file_path: &str) -> Result<Box<dyn BufRead>, io::Error> {
     if file_path == "@-" {
@@ -114,19 +115,40 @@ pub fn parse_paired_file_line(
     Ok((lat, lon, datetime))
 }
 
-// Iterator for streaming coordinate files
-pub struct CoordinateFileIterator {
+// Type aliases to simplify complex types
+type CoordinateParseFn = fn(&str) -> Result<(f64, f64), ParseError>;
+type DateTimeParseFn = Box<dyn FnMut(&str) -> Result<DateTimeInput, ParseError>>;
+type PairedParseFn = Box<dyn FnMut(&str) -> Result<(f64, f64, DateTimeInput), ParseError>>;
+
+// Generic file iterator that handles line-by-line parsing with error context
+pub struct FileIterator<T, F> {
     reader: Box<dyn BufRead>,
+    line_number: usize,
+    file_path: Option<String>,
+    parse_fn: F,
+    _phantom: PhantomData<T>,
 }
 
-impl CoordinateFileIterator {
-    pub fn new(reader: Box<dyn BufRead>) -> Self {
-        Self { reader }
+impl<T, F> FileIterator<T, F>
+where
+    F: FnMut(&str) -> Result<T, ParseError>,
+{
+    pub fn with_path(reader: Box<dyn BufRead>, parse_fn: F, path: String) -> Self {
+        Self {
+            reader,
+            line_number: 0,
+            file_path: Some(path),
+            parse_fn,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl Iterator for CoordinateFileIterator {
-    type Item = Result<(f64, f64), ParseError>;
+impl<T, F> Iterator for FileIterator<T, F>
+where
+    F: FnMut(&str) -> Result<T, ParseError>,
+{
+    type Item = Result<T, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut line = String::new();
@@ -135,39 +157,105 @@ impl Iterator for CoordinateFileIterator {
             match self.reader.read_line(&mut line) {
                 Ok(0) => return None, // EOF
                 Ok(_) => {
-                    match parse_coordinate_file_line(&line) {
-                        Ok(coords) => return Some(Ok(coords)),
-                        Err(ParseError::InvalidCoordinate(msg))
-                            if msg.contains("Empty or comment") =>
-                        {
+                    self.line_number += 1;
+                    match (self.parse_fn)(&line) {
+                        Ok(value) => return Some(Ok(value)),
+                        Err(e) if self.should_skip_error(&e) => {
                             // Skip empty lines and comments
                             continue;
                         }
-                        Err(e) => return Some(Err(e)),
+                        Err(e) => {
+                            let context = if let Some(ref path) = self.file_path {
+                                format!("{}:{}", path, self.line_number)
+                            } else {
+                                format!("line {}", self.line_number)
+                            };
+                            return Some(Err(self.add_context_to_error(e, &context)));
+                        }
                     }
                 }
-                Err(e) => {
-                    return Some(Err(ParseError::InvalidCoordinate(format!(
-                        "IO error: {}",
-                        e
-                    ))));
+                Err(io_err) => {
+                    let context = if let Some(ref path) = self.file_path {
+                        format!("{}:{}", path, self.line_number + 1)
+                    } else {
+                        format!("line {}", self.line_number + 1)
+                    };
+                    return Some(Err(self.io_error_to_parse_error(io_err, &context)));
                 }
             }
         }
     }
 }
 
-// Iterator for streaming time files
+impl<T, F> FileIterator<T, F> {
+    fn should_skip_error(&self, error: &ParseError) -> bool {
+        match error {
+            ParseError::InvalidCoordinate(msg) | ParseError::InvalidDateTime(msg) => {
+                msg.contains("Empty or comment")
+            }
+            _ => false,
+        }
+    }
+
+    fn add_context_to_error(&self, error: ParseError, context: &str) -> ParseError {
+        match error {
+            ParseError::InvalidCoordinate(msg) => {
+                ParseError::InvalidCoordinate(format!("Error at {}: {}", context, msg))
+            }
+            ParseError::InvalidDateTime(msg) => {
+                ParseError::InvalidDateTime(format!("Error at {}: {}", context, msg))
+            }
+            other => other,
+        }
+    }
+
+    fn io_error_to_parse_error(&self, io_err: io::Error, context: &str) -> ParseError {
+        // Determine error type based on what we're parsing
+        // This is a bit of a hack but maintains backward compatibility
+        ParseError::InvalidCoordinate(format!("IO error at {}: {}", context, io_err))
+    }
+}
+
+// Wrapper for coordinate file iterator to provide compatible API
+pub struct CoordinateFileIterator {
+    inner: FileIterator<(f64, f64), CoordinateParseFn>,
+}
+
+impl CoordinateFileIterator {
+    pub fn with_path(reader: Box<dyn BufRead>, path: String) -> Self {
+        Self {
+            inner: FileIterator::with_path(
+                reader,
+                parse_coordinate_file_line as CoordinateParseFn,
+                path,
+            ),
+        }
+    }
+}
+
+impl Iterator for CoordinateFileIterator {
+    type Item = Result<(f64, f64), ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+// Time file iterator needs to capture timezone_override in closure
 pub struct TimeFileIterator {
-    reader: Box<dyn BufRead>,
-    timezone_override: Option<String>,
+    inner: FileIterator<DateTimeInput, DateTimeParseFn>,
 }
 
 impl TimeFileIterator {
-    pub fn new(reader: Box<dyn BufRead>, timezone_override: Option<String>) -> Self {
+    pub fn with_path(
+        reader: Box<dyn BufRead>,
+        timezone_override: Option<String>,
+        path: String,
+    ) -> Self {
+        let parse_fn =
+            Box::new(move |line: &str| parse_time_file_line(line, timezone_override.as_deref()));
         Self {
-            reader,
-            timezone_override,
+            inner: FileIterator::with_path(reader, parse_fn, path),
         }
     }
 }
@@ -176,42 +264,25 @@ impl Iterator for TimeFileIterator {
     type Item = Result<DateTimeInput, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match self.reader.read_line(&mut line) {
-                Ok(0) => return None, // EOF
-                Ok(_) => {
-                    match parse_time_file_line(&line, self.timezone_override.as_deref()) {
-                        Ok(datetime) => return Some(Ok(datetime)),
-                        Err(ParseError::InvalidDateTime(msg))
-                            if msg.contains("Empty or comment") =>
-                        {
-                            // Skip empty lines and comments
-                            continue;
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Err(e) => {
-                    return Some(Err(ParseError::InvalidDateTime(format!("IO error: {}", e))));
-                }
-            }
-        }
+        self.inner.next()
     }
 }
 
-// Iterator for streaming paired files
+// Paired file iterator needs to capture timezone_override in closure
 pub struct PairedFileIterator {
-    reader: Box<dyn BufRead>,
-    timezone_override: Option<String>,
+    inner: FileIterator<(f64, f64, DateTimeInput), PairedParseFn>,
 }
 
 impl PairedFileIterator {
-    pub fn new(reader: Box<dyn BufRead>, timezone_override: Option<String>) -> Self {
+    pub fn with_path(
+        reader: Box<dyn BufRead>,
+        timezone_override: Option<String>,
+        path: String,
+    ) -> Self {
+        let parse_fn =
+            Box::new(move |line: &str| parse_paired_file_line(line, timezone_override.as_deref()));
         Self {
-            reader,
-            timezone_override,
+            inner: FileIterator::with_path(reader, parse_fn, path),
         }
     }
 }
@@ -220,28 +291,7 @@ impl Iterator for PairedFileIterator {
     type Item = Result<(f64, f64, DateTimeInput), ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match self.reader.read_line(&mut line) {
-                Ok(0) => return None, // EOF
-                Ok(_) => {
-                    match parse_paired_file_line(&line, self.timezone_override.as_deref()) {
-                        Ok(record) => return Some(Ok(record)),
-                        Err(ParseError::InvalidDateTime(msg))
-                            if msg.contains("Empty or comment") =>
-                        {
-                            // Skip empty lines and comments
-                            continue;
-                        }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-                Err(e) => {
-                    return Some(Err(ParseError::InvalidDateTime(format!("IO error: {}", e))));
-                }
-            }
-        }
+        self.inner.next()
     }
 }
 
@@ -254,7 +304,7 @@ mod tests {
         let data = "52.0,13.4\n59.334 18.063\n# comment\n\n40.42,-3.70\n";
         let reader: Box<dyn BufRead> =
             Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
-        let mut iter = CoordinateFileIterator::new(reader);
+        let mut iter = CoordinateFileIterator::with_path(reader, "test.txt".to_string());
 
         assert_eq!(iter.next().unwrap().unwrap(), (52.0, 13.4));
         assert_eq!(iter.next().unwrap().unwrap(), (59.334, 18.063));
@@ -285,7 +335,7 @@ mod tests {
         let data = "2024-06-21T12:00:00\n2024-06-22T12:00:00\n# comment\n\nnow\n";
         let reader: Box<dyn BufRead> =
             Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
-        let mut iter = TimeFileIterator::new(reader, None);
+        let mut iter = TimeFileIterator::with_path(reader, None, "test.txt".to_string());
 
         match iter.next().unwrap().unwrap() {
             DateTimeInput::Single(_) => {}
@@ -307,7 +357,7 @@ mod tests {
         let data = "52.0,13.4,2024-06-21T12:00:00\n59.334 18.063 2024-06-22T12:00:00\n";
         let reader: Box<dyn BufRead> =
             Box::new(BufReader::new(io::Cursor::new(data.as_bytes().to_vec())));
-        let mut iter = PairedFileIterator::new(reader, None);
+        let mut iter = PairedFileIterator::with_path(reader, None, "test.txt".to_string());
 
         let (lat, lon, _) = iter.next().unwrap().unwrap();
         assert_eq!((lat, lon), (52.0, 13.4));

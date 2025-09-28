@@ -4,6 +4,7 @@ use chrono::Utc;
 use clap::ArgMatches;
 use solar_positioning::{RefractionCorrection, grena3, spa};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum DeltaTMode {
@@ -254,12 +255,12 @@ pub fn calculate_single_sunrise(
 
 /// Optimized calculation for coordinate sweeps with time-based caching
 pub struct CoordinateSweepCalculator {
-    params: CalculationParameters,
+    params: Arc<CalculationParameters>,
     time_cache: HashMap<chrono::DateTime<chrono::Utc>, spa::SpaTimeDependent>,
 }
 
 impl CoordinateSweepCalculator {
-    pub fn new(params: CalculationParameters) -> Self {
+    pub fn new(params: Arc<CalculationParameters>) -> Self {
         Self {
             params,
             time_cache: HashMap::new(),
