@@ -192,7 +192,7 @@ fn test_parquet_sunrise_with_twilight() {
     ] {
         let field = schema
             .field_with_name(twilight_field)
-            .expect(&format!("{} field should exist", twilight_field));
+            .unwrap_or_else(|_| panic!("{} field should exist", twilight_field));
         assert!(field.is_nullable(), "{} should be nullable", twilight_field);
     }
 }
@@ -263,7 +263,7 @@ fn test_parquet_streaming_behavior() {
     // Verify we get the actual coordinate grid size (may be affected by floating point precision)
     // Expected: 21 latitudes × 21 longitudes = 441, but actual may vary due to float precision
     assert!(
-        total_rows >= 400 && total_rows <= 450,
+        (400..=450).contains(&total_rows),
         "Should have approximately 21x21=441 rows for coordinate grid, got {}",
         total_rows
     );

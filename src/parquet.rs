@@ -34,7 +34,7 @@ fn finish_and_reset_string(
 }
 
 pub fn write_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = CalculationResult>>,
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
     params: &Parameters,
     writer: W,
@@ -46,7 +46,7 @@ pub fn write_parquet<W: Write + Send>(
 }
 
 fn write_position_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = CalculationResult>>,
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
@@ -98,7 +98,9 @@ fn write_position_parquet<W: Write + Send>(
     let mut batch_count = 0;
     let mut total_count = 0;
 
-    for result in results {
+    for result_or_err in results {
+        let result = result_or_err.map_err(std::io::Error::other)?;
+
         if let CalculationResult::Position {
             lat,
             lon,
@@ -264,7 +266,7 @@ fn build_position_schema(
 }
 
 fn write_sunrise_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = CalculationResult>>,
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
@@ -334,7 +336,8 @@ fn write_sunrise_parquet<W: Write + Send>(
     let mut batch_count = 0;
     let mut total_count = 0;
 
-    for result in results {
+    for result_or_err in results {
+        let result = result_or_err.map_err(std::io::Error::other)?;
         use solar_positioning::SunriseResult;
 
         match result {

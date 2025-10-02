@@ -40,7 +40,7 @@ pub fn calculate_position(
     lon: f64,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
-) -> CalculationResult {
+) -> Result<CalculationResult, String> {
     use solar_positioning::RefractionCorrection;
     use solar_positioning::time::DeltaT;
 
@@ -57,19 +57,19 @@ pub fn calculate_position(
 
     let position = if params.algorithm == "grena3" {
         solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
-            .expect("Failed to calculate solar position")
+            .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     } else {
         solar_positioning::spa::solar_position(dt, lat, lon, params.elevation, deltat, refraction)
-            .expect("Failed to calculate solar position")
+            .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     };
 
-    CalculationResult::Position {
+    Ok(CalculationResult::Position {
         lat,
         lon,
         datetime: dt,
         position,
         deltat,
-    }
+    })
 }
 
 // Calculate sunrise/sunset for a single point
@@ -78,7 +78,7 @@ pub fn calculate_sunrise(
     lon: f64,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
-) -> CalculationResult {
+) -> Result<CalculationResult, String> {
     use solar_positioning::Horizon;
     use solar_positioning::time::DeltaT;
 
@@ -96,15 +96,15 @@ pub fn calculate_sunrise(
 
         let mut results: Vec<_> =
             solar_positioning::spa::sunrise_sunset_multiple(dt, lat, lon, deltat, horizons)
-                .map(|r| r.expect("Failed to calculate twilight"))
-                .collect();
+                .map(|r| r.map_err(|e| format!("Failed to calculate twilight: {}", e)))
+                .collect::<Result<Vec<_>, _>>()?;
 
         let astronomical = results.pop().expect("Missing astronomical twilight").1;
         let nautical = results.pop().expect("Missing nautical twilight").1;
         let civil = results.pop().expect("Missing civil twilight").1;
         let sunrise_sunset = results.pop().expect("Missing sunrise/sunset").1;
 
-        CalculationResult::SunriseWithTwilight {
+        Ok(CalculationResult::SunriseWithTwilight {
             lat,
             lon,
             date: dt,
@@ -113,7 +113,7 @@ pub fn calculate_sunrise(
             nautical,
             astronomical,
             deltat,
-        }
+        })
     } else {
         let horizon = if let Some(h) = params.horizon {
             Horizon::Custom(h)
@@ -123,15 +123,15 @@ pub fn calculate_sunrise(
 
         let result =
             solar_positioning::spa::sunrise_sunset_for_horizon(dt, lat, lon, deltat, horizon)
-                .expect("Failed to calculate sunrise/sunset");
+                .map_err(|e| format!("Failed to calculate sunrise/sunset: {}", e))?;
 
-        CalculationResult::Sunrise {
+        Ok(CalculationResult::Sunrise {
             lat,
             lon,
             date: dt,
             result,
             deltat,
-        }
+        })
     }
 }
 
@@ -140,7 +140,7 @@ pub fn calculate_stream(
     data: Box<dyn Iterator<Item = (f64, f64, DateTime<FixedOffset>)>>,
     command: Command,
     params: Parameters,
-) -> Box<dyn Iterator<Item = CalculationResult>> {
+) -> Box<dyn Iterator<Item = Result<CalculationResult, String>>> {
     match command {
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
@@ -174,22 +174,24 @@ pub fn calculate_stream(
                         None
                     };
 
-                    let position = spa::spa_with_time_dependent_parts(
+                    let position = match spa::spa_with_time_dependent_parts(
                         lat,
                         lon,
                         params.elevation,
                         refraction,
                         time_parts,
-                    )
-                    .expect("Failed to calculate solar position");
+                    ) {
+                        Ok(pos) => pos,
+                        Err(e) => return Err(format!("Failed to calculate solar position: {}", e)),
+                    };
 
-                    CalculationResult::Position {
+                    Ok(CalculationResult::Position {
                         lat,
                         lon,
                         datetime: dt,
                         position,
                         deltat: *deltat, // Use the stored deltaT
-                    }
+                    })
                 }))
             } else {
                 // Regular calculation for non-SPA or when optimization isn't beneficial

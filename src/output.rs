@@ -54,7 +54,7 @@ fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>, is_json: bool) -
 
 #[cfg(feature = "parquet")]
 pub fn write_parquet_output<W: std::io::Write + Send>(
-    results: Box<dyn Iterator<Item = CalculationResult>>,
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
     params: &Parameters,
     writer: W,
@@ -579,11 +579,11 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
 }
 
 pub fn format_stream(
-    results: Box<dyn Iterator<Item = CalculationResult>>,
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
     params: &Parameters,
     source: crate::data::DataSource,
-) -> Box<dyn Iterator<Item = String>> {
+) -> Box<dyn Iterator<Item = Result<String, String>>> {
     let format = params.format.clone();
 
     if format == "text" && matches!(command, Command::Position) {
@@ -596,10 +596,11 @@ pub fn format_stream(
     let headers = params.headers;
     let params_clone = params.clone();
 
-    Box::new(results.enumerate().map(move |(index, result)| {
+    Box::new(results.enumerate().map(move |(index, result_or_err)| {
+        let result = result_or_err?;
         let first = index == 0;
 
-        match format.as_str() {
+        Ok(match format.as_str() {
             "csv" => match command {
                 Command::Position => {
                     format_csv_position(&result, show_inputs, headers, first, &params_clone)
@@ -619,20 +620,21 @@ pub fn format_stream(
                 }
                 Command::Sunrise => format_text_sunrise(&result, show_inputs),
             },
-        }
+        })
     }))
 }
 
 fn format_streaming_text_table(
-    mut results: Box<dyn Iterator<Item = CalculationResult>>,
+    mut results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     source: crate::data::DataSource,
-) -> Box<dyn Iterator<Item = String>> {
+) -> Box<dyn Iterator<Item = Result<String, String>>> {
     use crate::data::{DataSource, LocationSource, TimeSource};
 
     // Peek at first result to get invariant values and determine table structure
     let first = match results.next() {
-        Some(r) => r,
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return Box::new(std::iter::once(Err(e))),
         None => return Box::new(std::iter::empty()),
     };
 
@@ -825,12 +827,15 @@ fn format_streaming_text_table(
 
     // Create streaming iterator: header + first_row + remaining_rows + footer
     let first_row = format_row(&first);
-    let remaining_rows = results.map(move |r| format_row(&r));
+    let remaining_rows = results.map(move |r_or_err| match r_or_err {
+        Ok(r) => Ok(format_row(&r)),
+        Err(e) => Err(e),
+    });
 
     Box::new(
-        std::iter::once(header)
-            .chain(std::iter::once(first_row))
+        std::iter::once(Ok(header))
+            .chain(std::iter::once(Ok(first_row)))
             .chain(remaining_rows)
-            .chain(std::iter::once(footer)),
+            .chain(std::iter::once(Ok(footer))),
     )
 }

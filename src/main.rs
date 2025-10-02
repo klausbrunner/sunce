@@ -66,14 +66,23 @@ fn main() {
 
                 let formatted = output::format_stream(results, command, &params, source.clone());
                 let mut count = 0;
-                for line in formatted {
-                    if write!(writer, "{}", line).is_err() {
-                        break;
+                for line_result in formatted {
+                    match line_result {
+                        Ok(line) => {
+                            if write!(writer, "{}", line).is_err() {
+                                break;
+                            }
+                            if flush_each_record {
+                                let _ = writer.flush();
+                            }
+                            count += 1;
+                        }
+                        Err(e) => {
+                            let _ = writer.flush();
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
                     }
-                    if flush_each_record {
-                        let _ = writer.flush();
-                    }
-                    count += 1;
                 }
                 let _ = writer.flush();
                 count

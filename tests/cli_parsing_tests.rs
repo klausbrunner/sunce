@@ -5,7 +5,7 @@ use predicates::prelude::*;
 fn test_options_before_positionals() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--format=csv",
             "52.0",
             "13.4",
@@ -20,7 +20,7 @@ fn test_options_before_positionals() {
 fn test_options_after_positionals() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
@@ -35,7 +35,7 @@ fn test_options_after_positionals() {
 fn test_options_mixed_positions() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--format=csv",
             "52.0",
             "13.4",
@@ -52,7 +52,7 @@ fn test_options_mixed_positions() {
 fn test_command_specific_option_before_command() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
@@ -67,7 +67,7 @@ fn test_command_specific_option_before_command() {
 fn test_command_specific_option_after_command() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
@@ -82,7 +82,7 @@ fn test_command_specific_option_after_command() {
 fn test_global_and_command_options_mixed() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--format=csv",
             "52.0",
             "13.4",
@@ -99,7 +99,7 @@ fn test_global_and_command_options_mixed() {
 fn test_invalid_option_for_position_command() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&["52.0", "13.4", "2024-01-01", "--twilight", "position"])
+        .args(["52.0", "13.4", "2024-01-01", "--twilight", "position"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -111,7 +111,7 @@ fn test_invalid_option_for_position_command() {
 fn test_invalid_option_for_sunrise_command() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"])
+        .args(["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--step not valid for sunrise"));
@@ -121,7 +121,7 @@ fn test_invalid_option_for_sunrise_command() {
 fn test_horizon_invalid_for_position() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"])
+        .args(["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--horizon not valid for position"));
@@ -131,7 +131,7 @@ fn test_horizon_invalid_for_position() {
 fn test_algorithm_invalid_for_sunrise() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "52.0",
             "13.4",
             "2024-01-01",
@@ -149,7 +149,7 @@ fn test_algorithm_invalid_for_sunrise() {
 fn test_options_anywhere_with_file_input() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&["--format=json", "@-", "position", "--no-headers"])
+        .args(["--format=json", "@-", "position", "--no-headers"])
         .write_stdin("52.0 13.4 2024-01-01T12:00:00\n")
         .assert()
         .success();
@@ -159,7 +159,7 @@ fn test_options_anywhere_with_file_input() {
 fn test_deltat_before_and_after_positionals() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
@@ -171,7 +171,7 @@ fn test_deltat_before_and_after_positionals() {
 
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--deltat=69.2",
             "52.0",
             "13.4",
@@ -186,7 +186,7 @@ fn test_deltat_before_and_after_positionals() {
 fn test_multiple_deltat_still_errors() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--deltat=69.2",
             "52.0",
             "13.4",
@@ -203,7 +203,7 @@ fn test_multiple_deltat_still_errors() {
 fn test_all_position_options_anywhere() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--format=csv",
             "52.0",
             "--algorithm=grena3",
@@ -223,7 +223,7 @@ fn test_all_position_options_anywhere() {
 fn test_sunrise_with_options_anywhere() {
     Command::cargo_bin("sunce")
         .unwrap()
-        .args(&[
+        .args([
             "--format=csv",
             "52.0",
             "13.4",
