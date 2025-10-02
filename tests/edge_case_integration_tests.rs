@@ -4,7 +4,7 @@ use common::SunceTest;
 use predicates::prelude::*;
 use std::io::Write;
 use std::process::{Command as StdCommand, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[test]
 fn test_large_coordinate_range_memory_usage() {
@@ -360,39 +360,6 @@ fn test_extreme_latitude_values() {
     SunceTest::new()
         .args(["89.9", "0", "2024-06-21", "sunrise"])
         .assert_success();
-}
-
-#[test]
-fn test_performance_with_parallel_flag() {
-    // Test that parallel processing works (if available)
-    let start = Instant::now();
-
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "--parallel",
-        "50:60:1",
-        "10:20:1",
-        "2024",
-        "position",
-    ])
-    .timeout(Duration::from_secs(30));
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    // Parallel may not be implemented yet, so we accept both success and failure
-    if output.status.success() {
-        let elapsed = start.elapsed();
-        println!("Parallel execution took: {:?}", elapsed);
-    } else {
-        // If --parallel is not recognized, that's okay for this test
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("parallel") || stderr.contains("unexpected argument"),
-            "Should fail with unrecognized option if not implemented"
-        );
-    }
 }
 
 #[test]

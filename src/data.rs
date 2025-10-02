@@ -59,7 +59,6 @@ pub struct Parameters {
     pub format: String,
     pub headers: bool,
     pub show_inputs: Option<bool>, // None means auto-decide
-    pub parallel: bool,
     pub perf: bool,
     pub algorithm: String,
     pub refraction: bool,
@@ -80,7 +79,6 @@ impl Default for Parameters {
             format: "text".to_string(),
             headers: true,
             show_inputs: None,
-            parallel: false,
             perf: false,
             algorithm: "spa".to_string(),
             refraction: true,
@@ -208,7 +206,6 @@ pub fn parse_cli(args: Vec<String>) -> Result<(DataSource, Command, Parameters),
                     "no-headers" => params.headers = false,
                     "show-inputs" => params.show_inputs = Some(true),
                     "no-show-inputs" => params.show_inputs = Some(false),
-                    "parallel" => params.parallel = true,
                     "perf" => params.perf = true,
                     "deltat" => {
                         if deltat_seen {
@@ -1144,7 +1141,6 @@ Options:
   --help                Show this help message and exit.
   --version             Print version information and exit.
   --[no-]headers        Show headers in output (CSV only). Default: true
-  --[no-]parallel       Enable parallel processing (experimental). Default: false
   --[no-]show-inputs    Show all inputs in output. Auto-enabled for ranges/files
                         unless --no-show-inputs is used.
   --perf                Show performance statistics.

@@ -4,7 +4,7 @@
 
 ## Status
 
-This project *aims* to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos), but it's not quite there yet. While the core functionality is stable and decently tested with compatibility validation against solarpos, the tool hasn't seen much user testing (see [Contributing](#contributing) for how to help). 
+This project *aims* to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos), but it's not quite there yet. While the core functionality is stable and decently tested with compatibility validation against solarpos, the tool hasn't seen much user testing (see [Contributing](#contributing) for how to help).
 
 ## Use cases
 
