@@ -381,7 +381,7 @@ fn test_file_input_errors() {
     cmd.args(["@/non/existent/file.txt", "2024-06-21", "position"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("File not found"));
+        .stderr(predicate::str::contains("Error opening"));
 
     // Test invalid coordinate format
     let dir = tempdir().unwrap();

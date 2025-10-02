@@ -3,11 +3,17 @@
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc};
 use chrono_tz::Tz;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
 const DELTAT_MULTIPLE_ERROR: &str =
     "error: the argument '--deltat <DELTAT>' cannot be used multiple times";
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum InputPath {
+    Stdin,
+    File(PathBuf),
+}
 
 #[derive(Debug, Clone)]
 pub enum LocationSource {
@@ -16,32 +22,33 @@ pub enum LocationSource {
         lat: (f64, f64, f64),
         lon: Option<(f64, f64, f64)>,
     },
-    File(PathBuf),
+    File(InputPath),
 }
 
 #[derive(Debug, Clone)]
 pub enum TimeSource {
     Single(String),
     Range(String, Option<String>), // partial date + optional step
-    File(PathBuf),
+    File(InputPath),
     Now,
 }
 
 #[derive(Debug, Clone)]
 pub enum DataSource {
     Separate(LocationSource, TimeSource),
-    Paired(PathBuf),
+    Paired(InputPath),
 }
 
 impl DataSource {
     pub fn uses_stdin(&self) -> bool {
         match self {
             DataSource::Separate(loc, time) => {
-                let loc_stdin = matches!(loc, LocationSource::File(p) if p.to_str() == Some("-"));
-                let time_stdin = matches!(time, TimeSource::File(p) if p.to_str() == Some("-"));
+                let loc_stdin = matches!(loc, LocationSource::File(InputPath::Stdin));
+                let time_stdin = matches!(time, TimeSource::File(InputPath::Stdin));
                 loc_stdin || time_stdin
             }
-            DataSource::Paired(path) => path.to_str() == Some("-"),
+            DataSource::Paired(InputPath::Stdin) => true,
+            DataSource::Paired(InputPath::File(_)) => false,
         }
     }
 
@@ -61,7 +68,10 @@ impl DataSource {
                             format!("Range({}, {}, {}) x Single", lat.0, lat.1, lat.2)
                         }
                     }
-                    LocationSource::File(path) => format!("File({})", path.display()),
+                    LocationSource::File(InputPath::Stdin) => "File(stdin)".to_string(),
+                    LocationSource::File(InputPath::File(path)) => {
+                        format!("File({})", path.display())
+                    }
                 };
 
                 let time_str = match time {
@@ -73,7 +83,8 @@ impl DataSource {
                             format!("Range({})", date)
                         }
                     }
-                    TimeSource::File(path) => format!("File({})", path.display()),
+                    TimeSource::File(InputPath::Stdin) => "File(stdin)".to_string(),
+                    TimeSource::File(InputPath::File(path)) => format!("File({})", path.display()),
                     TimeSource::Now => "Now".to_string(),
                 };
 
@@ -82,7 +93,8 @@ impl DataSource {
                     loc_str, time_str
                 )
             }
-            DataSource::Paired(path) => {
+            DataSource::Paired(InputPath::Stdin) => "SOURCE: Paired\nFILE: stdin".to_string(),
+            DataSource::Paired(InputPath::File(path)) => {
                 format!("SOURCE: Paired\nFILE: {}", path.display())
             }
         }
@@ -351,23 +363,6 @@ pub fn parse_cli(args: Vec<String>) -> Result<(DataSource, Command, Parameters),
                 let coord_path = parse_file_arg(arg1)?;
                 let time_path = parse_file_arg(arg2)?;
 
-                // Validate that the first file is NOT a paired file (doesn't have 3 columns)
-                if coord_path != PathBuf::from("/dev/stdin")
-                    && let Ok(file) = File::open(&coord_path)
-                {
-                    let reader = BufReader::new(file);
-                    for line in reader.lines().take(1).flatten() {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                            let parts = parse_delimited_line(&line);
-                            if parts.len() >= 3 {
-                                return Err("Cannot use paired data file with separate time file"
-                                    .to_string());
-                            }
-                        }
-                    }
-                }
-
                 let location_source = LocationSource::File(coord_path);
                 let time_source = TimeSource::File(time_path);
                 DataSource::Separate(location_source, time_source)
@@ -402,23 +397,26 @@ pub fn parse_cli(args: Vec<String>) -> Result<(DataSource, Command, Parameters),
     Ok((data_source, command, params))
 }
 
-fn parse_file_arg(arg: &str) -> Result<PathBuf, String> {
+fn parse_file_arg(arg: &str) -> Result<InputPath, String> {
     let stripped = arg
         .strip_prefix('@')
         .ok_or_else(|| "Not a file argument".to_string())?;
 
-    let path = if stripped == "-" {
-        PathBuf::from("/dev/stdin")
-    } else {
-        PathBuf::from(stripped)
-    };
-
-    // Validate file exists (except for stdin)
-    if path != PathBuf::from("/dev/stdin") && !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+    if stripped == "-" {
+        return Ok(InputPath::Stdin);
     }
 
-    Ok(path)
+    Ok(InputPath::File(PathBuf::from(stripped)))
+}
+
+fn open_input(input_path: &InputPath) -> io::Result<Box<dyn BufRead>> {
+    match input_path {
+        InputPath::Stdin => Ok(Box::new(BufReader::new(io::stdin()))),
+        InputPath::File(path) => {
+            let file = File::open(path)?;
+            Ok(Box::new(BufReader::new(file)))
+        }
+    }
 }
 
 fn parse_location_args(lat_str: &str, lon_str: &str) -> Result<LocationSource, String> {
@@ -614,16 +612,20 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                 )
             }
         }
-        LocationSource::File(path) => {
-            let file = match File::open(&path) {
-                Ok(f) => f,
+        LocationSource::File(input_path) => {
+            let path_display = match &input_path {
+                InputPath::Stdin => "stdin".to_string(),
+                InputPath::File(p) => p.display().to_string(),
+            };
+
+            let reader = match open_input(&input_path) {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("Error opening {}: {}", path.display(), e);
+                    eprintln!("Error opening {}: {}", path_display, e);
                     std::process::exit(1);
                 }
             };
 
-            let reader = BufReader::new(file);
             let mut line_num = 0;
 
             Box::new(reader.lines().filter_map(move |line_result| {
@@ -632,7 +634,7 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                 let line = match line_result {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("Error reading {}:{}: {}", path.display(), line_num, e);
+                        eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
                         std::process::exit(1);
                     }
                 };
@@ -646,7 +648,16 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                 if parts.len() < 2 {
                     eprintln!(
                         "Error: {}:{}: expected 2 fields (lat lon), found {}",
-                        path.display(),
+                        path_display,
+                        line_num,
+                        parts.len()
+                    );
+                    std::process::exit(1);
+                }
+                if parts.len() > 2 {
+                    eprintln!(
+                        "Error: {}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
+                        path_display,
                         line_num,
                         parts.len()
                     );
@@ -658,7 +669,7 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                     Err(_) => {
                         eprintln!(
                             "Error: {}:{}: invalid latitude '{}'",
-                            path.display(),
+                            path_display,
                             line_num,
                             parts[0]
                         );
@@ -671,7 +682,7 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                     Err(_) => {
                         eprintln!(
                             "Error: {}:{}: invalid longitude '{}'",
-                            path.display(),
+                            path_display,
                             line_num,
                             parts[1]
                         );
@@ -996,21 +1007,17 @@ fn parse_duration(s: &str) -> Option<Duration> {
 }
 
 fn read_times_file(
-    path: PathBuf,
+    input_path: InputPath,
     override_tz: Option<String>,
 ) -> impl Iterator<Item = DateTime<FixedOffset>> {
-    let file = File::open(&path);
-    match file {
-        Ok(f) => {
-            let reader = BufReader::new(f);
-            Box::new(reader.lines().filter_map(move |line| {
-                if let Ok(line) = line {
-                    parse_datetime_string(line.trim(), override_tz.as_deref()).ok()
-                } else {
-                    None
-                }
-            })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>
-        }
+    match open_input(&input_path) {
+        Ok(reader) => Box::new(reader.lines().filter_map(move |line| {
+            if let Ok(line) = line {
+                parse_datetime_string(line.trim(), override_tz.as_deref()).ok()
+            } else {
+                None
+            }
+        })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>,
         Err(_) => Box::new(std::iter::empty()) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>,
     }
 }
@@ -1063,18 +1070,22 @@ pub fn expand_cartesian_product(
 }
 
 pub fn expand_paired_file(
-    path: PathBuf,
+    input_path: InputPath,
     override_tz: Option<String>,
 ) -> Box<dyn Iterator<Item = (f64, f64, DateTime<FixedOffset>)>> {
-    let file = match File::open(&path) {
-        Ok(f) => f,
+    let path_display = match &input_path {
+        InputPath::Stdin => "stdin".to_string(),
+        InputPath::File(p) => p.display().to_string(),
+    };
+
+    let reader = match open_input(&input_path) {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("Error opening file {}: {}", path.display(), e);
+            eprintln!("Error opening {}: {}", path_display, e);
             std::process::exit(1);
         }
     };
 
-    let reader = BufReader::new(file);
     let mut line_num = 0;
 
     Box::new(reader.lines().filter_map(move |line_result| {
@@ -1083,7 +1094,7 @@ pub fn expand_paired_file(
         let line = match line_result {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("Error reading line {}: {}", line_num, e);
+                eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
                 std::process::exit(1);
             }
         };
