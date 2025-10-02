@@ -2,6 +2,55 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
+use chrono::{DateTime, FixedOffset};
+use solar_positioning::SunriseResult;
+
+// Helper functions for time formatting
+fn format_datetime(dt: &DateTime<FixedOffset>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
+fn format_datetime_opt(dt: Option<&DateTime<FixedOffset>>) -> String {
+    dt.map(format_datetime).unwrap_or_default()
+}
+
+fn format_datetime_json_null(dt: Option<&DateTime<FixedOffset>>) -> String {
+    dt.map(|t| format!(r#""{}""#, format_datetime(t)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn format_datetime_text(dt: &DateTime<FixedOffset>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S%:z").to_string()
+}
+
+// Helper function to extract times from SunriseResult
+fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Option<&T>) {
+    match result {
+        SunriseResult::RegularDay {
+            sunrise,
+            transit,
+            sunset,
+        } => (Some(sunrise), transit, Some(sunset)),
+        SunriseResult::AllDay { transit } | SunriseResult::AllNight { transit } => {
+            (None, transit, None)
+        }
+    }
+}
+
+// Helper function to get type string from SunriseResult
+fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>, is_json: bool) -> &'static str {
+    match result {
+        SunriseResult::RegularDay { .. } => "NORMAL",
+        SunriseResult::AllDay { .. } => "ALL_DAY",
+        SunriseResult::AllNight { .. } => {
+            if is_json {
+                "NO_DAY"
+            } else {
+                "ALL_NIGHT"
+            }
+        }
+    }
+}
 
 #[cfg(feature = "parquet")]
 pub fn write_parquet_output<W: std::io::Write + Send>(
@@ -85,33 +134,6 @@ fn format_csv_sunrise(
     headers: bool,
     first: bool,
 ) -> String {
-    // Format times without milliseconds to match solarpos
-    let format_time = |dt: Option<&chrono::DateTime<chrono::FixedOffset>>| -> String {
-        dt.map(|d| d.format("%Y-%m-%dT%H:%M:%S%:z").to_string())
-            .unwrap_or_default()
-    };
-
-    let extract_times = |result: &solar_positioning::SunriseResult<_>| -> (String, String, String) {
-        use solar_positioning::SunriseResult;
-        match result {
-            SunriseResult::RegularDay {
-                sunrise,
-                transit,
-                sunset,
-            } => (
-                format_time(Some(sunrise)),
-                format_time(Some(transit)),
-                format_time(Some(sunset)),
-            ),
-            SunriseResult::AllDay { transit } => {
-                (String::new(), format_time(Some(transit)), String::new())
-            }
-            SunriseResult::AllNight { transit } => {
-                (String::new(), format_time(Some(transit)), String::new())
-            }
-        }
-    };
-
     match result {
         CalculationResult::Sunrise {
             lat,
@@ -132,14 +154,13 @@ fn format_csv_sunrise(
                 }
             }
 
-            use solar_positioning::SunriseResult;
-            let type_str = match sunrise_result {
-                SunriseResult::RegularDay { .. } => "NORMAL",
-                SunriseResult::AllDay { .. } => "ALL_DAY",
-                SunriseResult::AllNight { .. } => "ALL_NIGHT",
-            };
-
-            let (sunrise_str, transit_str, sunset_str) = extract_times(sunrise_result);
+            let type_str = sunrise_type_str(sunrise_result, false);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
+            let (sunrise_str, transit_str, sunset_str) = (
+                format_datetime_opt(sunrise_opt),
+                format_datetime(transit),
+                format_datetime_opt(sunset_opt),
+            );
 
             if show_inputs {
                 output.push_str(&format!(
@@ -185,17 +206,32 @@ fn format_csv_sunrise(
                 }
             }
 
-            use solar_positioning::SunriseResult;
-            let type_str = match sunrise_sunset {
-                SunriseResult::RegularDay { .. } => "NORMAL",
-                SunriseResult::AllDay { .. } => "ALL_DAY",
-                SunriseResult::AllNight { .. } => "ALL_NIGHT",
-            };
+            let type_str = sunrise_type_str(sunrise_sunset, false);
 
-            let (sunrise_str, transit_str, sunset_str) = extract_times(sunrise_sunset);
-            let (civil_start, _, civil_end) = extract_times(civil);
-            let (nautical_start, _, nautical_end) = extract_times(nautical);
-            let (astro_start, _, astro_end) = extract_times(astronomical);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
+            let (sunrise_str, transit_str, sunset_str) = (
+                format_datetime_opt(sunrise_opt),
+                format_datetime(transit),
+                format_datetime_opt(sunset_opt),
+            );
+
+            let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
+            let (civil_start, civil_end) = (
+                format_datetime_opt(civil_start_opt),
+                format_datetime_opt(civil_end_opt),
+            );
+
+            let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
+            let (nautical_start, nautical_end) = (
+                format_datetime_opt(nautical_start_opt),
+                format_datetime_opt(nautical_end_opt),
+            );
+
+            let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
+            let (astro_start, astro_end) = (
+                format_datetime_opt(astro_start_opt),
+                format_datetime_opt(astro_end_opt),
+            );
 
             if show_inputs {
                 output.push_str(&format!(
@@ -279,14 +315,6 @@ fn format_json_position(
 }
 
 fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String {
-    let format_time = |dt: &chrono::DateTime<chrono::FixedOffset>| -> String {
-        dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-    };
-
-    let format_time_opt = |dt: Option<&chrono::DateTime<chrono::FixedOffset>>| -> String {
-        dt.map(format_time).unwrap_or_default()
-    };
-
     match result {
         CalculationResult::Sunrise {
             lat,
@@ -295,23 +323,8 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
             result: sunrise_result,
             deltat,
         } => {
-            use solar_positioning::SunriseResult;
-            let type_str = match sunrise_result {
-                SunriseResult::RegularDay { .. } => "NORMAL",
-                SunriseResult::AllDay { .. } => "ALL_DAY",
-                SunriseResult::AllNight { .. } => "NO_DAY",
-            };
-
-            let (sunrise_opt, transit, sunset_opt) = match sunrise_result {
-                SunriseResult::RegularDay {
-                    sunrise,
-                    transit,
-                    sunset,
-                } => (Some(sunrise), transit, Some(sunset)),
-                SunriseResult::AllDay { transit } | SunriseResult::AllNight { transit } => {
-                    (None, transit, None)
-                }
-            };
+            let type_str = sunrise_type_str(sunrise_result, true);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
 
             if show_inputs {
                 format!(
@@ -321,17 +334,17 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
                     date.to_rfc3339(),
                     deltat,
                     type_str,
-                    format_time_opt(sunrise_opt),
-                    format_time(transit),
-                    format_time_opt(sunset_opt)
+                    format_datetime_opt(sunrise_opt),
+                    format_datetime(transit),
+                    format_datetime_opt(sunset_opt)
                 )
             } else {
                 format!(
                     r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}"}}"#,
                     type_str,
-                    format_time_opt(sunrise_opt),
-                    format_time(transit),
-                    format_time_opt(sunset_opt)
+                    format_datetime_opt(sunrise_opt),
+                    format_datetime(transit),
+                    format_datetime_opt(sunset_opt)
                 )
             }
         }
@@ -345,44 +358,11 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
             astronomical,
             deltat,
         } => {
-            use solar_positioning::SunriseResult;
-            let type_str = match sunrise_sunset {
-                SunriseResult::RegularDay { .. } => "NORMAL",
-                SunriseResult::AllDay { .. } => "ALL_DAY",
-                SunriseResult::AllNight { .. } => "NO_DAY",
-            };
-
-            let (sunrise_opt, transit, sunset_opt) = match sunrise_sunset {
-                SunriseResult::RegularDay {
-                    sunrise,
-                    transit,
-                    sunset,
-                } => (Some(sunrise), transit, Some(sunset)),
-                SunriseResult::AllDay { transit } | SunriseResult::AllNight { transit } => {
-                    (None, transit, None)
-                }
-            };
-
-            let (civil_start_opt, civil_end_opt) = match civil {
-                SunriseResult::RegularDay {
-                    sunrise, sunset, ..
-                } => (Some(sunrise), Some(sunset)),
-                _ => (None, None),
-            };
-
-            let (nautical_start_opt, nautical_end_opt) = match nautical {
-                SunriseResult::RegularDay {
-                    sunrise, sunset, ..
-                } => (Some(sunrise), Some(sunset)),
-                _ => (None, None),
-            };
-
-            let (astro_start_opt, astro_end_opt) = match astronomical {
-                SunriseResult::RegularDay {
-                    sunrise, sunset, ..
-                } => (Some(sunrise), Some(sunset)),
-                _ => (None, None),
-            };
+            let type_str = sunrise_type_str(sunrise_sunset, true);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
+            let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
+            let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
+            let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
 
             if show_inputs {
                 format!(
@@ -392,53 +372,29 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
                     date.to_rfc3339(),
                     deltat,
                     type_str,
-                    format_time_opt(sunrise_opt),
-                    format_time(transit),
-                    format_time_opt(sunset_opt),
-                    civil_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    civil_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    nautical_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    nautical_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    astro_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    astro_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string())
+                    format_datetime_opt(sunrise_opt),
+                    format_datetime(transit),
+                    format_datetime_opt(sunset_opt),
+                    format_datetime_json_null(civil_start_opt),
+                    format_datetime_json_null(civil_end_opt),
+                    format_datetime_json_null(nautical_start_opt),
+                    format_datetime_json_null(nautical_end_opt),
+                    format_datetime_json_null(astro_start_opt),
+                    format_datetime_json_null(astro_end_opt)
                 )
             } else {
                 format!(
                     r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}","civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
                     type_str,
-                    format_time_opt(sunrise_opt),
-                    format_time(transit),
-                    format_time_opt(sunset_opt),
-                    civil_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    civil_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    nautical_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    nautical_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    astro_start_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    astro_end_opt
-                        .map(|t| format!(r#""{}""#, format_time(t)))
-                        .unwrap_or_else(|| "null".to_string())
+                    format_datetime_opt(sunrise_opt),
+                    format_datetime(transit),
+                    format_datetime_opt(sunset_opt),
+                    format_datetime_json_null(civil_start_opt),
+                    format_datetime_json_null(civil_end_opt),
+                    format_datetime_json_null(nautical_start_opt),
+                    format_datetime_json_null(nautical_end_opt),
+                    format_datetime_json_null(astro_start_opt),
+                    format_datetime_json_null(astro_end_opt)
                 )
             }
         }
@@ -497,10 +453,6 @@ fn format_text_position(
 }
 
 fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String {
-    let format_time = |dt: &chrono::DateTime<chrono::FixedOffset>| -> String {
-        dt.format("%Y-%m-%d %H:%M:%S%:z").to_string()
-    };
-
     match result {
         CalculationResult::Sunrise {
             result: sunrise_result,
@@ -516,20 +468,20 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                     transit,
                 } => {
                     output.push_str("type   : normal\n");
-                    output.push_str(&format!("sunrise: {}\n", format_time(sunrise)));
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
-                    output.push_str(&format!("sunset : {}\n", format_time(sunset)));
+                    output.push_str(&format!("sunrise: {}\n", format_datetime_text(sunrise)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
+                    output.push_str(&format!("sunset : {}\n", format_datetime_text(sunset)));
                 }
                 SunriseResult::AllDay { transit } => {
                     output.push_str("type   : all day\n");
                     output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
                     output.push_str("sunset : \n");
                 }
                 SunriseResult::AllNight { transit } => {
                     output.push_str("type   : all night\n");
                     output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
                     output.push_str("sunset : \n");
                 }
             }
@@ -553,20 +505,20 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                     transit,
                 } => {
                     output.push_str("type   : normal\n");
-                    output.push_str(&format!("sunrise: {}\n", format_time(sunrise)));
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
-                    output.push_str(&format!("sunset : {}\n", format_time(sunset)));
+                    output.push_str(&format!("sunrise: {}\n", format_datetime_text(sunrise)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
+                    output.push_str(&format!("sunset : {}\n", format_datetime_text(sunset)));
                 }
                 SunriseResult::AllDay { transit } => {
                     output.push_str("type   : all day\n");
                     output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
                     output.push_str("sunset : \n");
                 }
                 SunriseResult::AllNight { transit } => {
                     output.push_str("type   : all night\n");
                     output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_time(transit)));
+                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
                     output.push_str("sunset : \n");
                 }
             }
@@ -580,11 +532,11 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
             {
                 output.push_str(&format!(
                     "civil twilight start: {}\n",
-                    format_time(civil_start)
+                    format_datetime_text(civil_start)
                 ));
                 output.push_str(&format!(
                     "civil twilight end  : {}\n",
-                    format_time(civil_end)
+                    format_datetime_text(civil_end)
                 ));
             }
 
@@ -596,11 +548,11 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
             {
                 output.push_str(&format!(
                     "nautical twilight start: {}\n",
-                    format_time(naut_start)
+                    format_datetime_text(naut_start)
                 ));
                 output.push_str(&format!(
                     "nautical twilight end  : {}\n",
-                    format_time(naut_end)
+                    format_datetime_text(naut_end)
                 ));
             }
 
@@ -612,11 +564,11 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
             {
                 output.push_str(&format!(
                     "astronomical twilight start: {}\n",
-                    format_time(astro_start)
+                    format_datetime_text(astro_start)
                 ));
                 output.push_str(&format!(
                     "astronomical twilight end  : {}\n",
-                    format_time(astro_end)
+                    format_datetime_text(astro_end)
                 ));
             }
 

@@ -13,6 +13,26 @@ use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
 
+// Helper to finish and reset Float64Builder
+fn finish_and_reset_f64(builder: &mut Option<Float64Builder>, arrays: &mut Vec<ArrayRef>) {
+    if let Some(b) = builder {
+        arrays.push(Arc::new(b.finish()) as ArrayRef);
+        *b = Float64Builder::with_capacity(BATCH_SIZE);
+    }
+}
+
+// Helper to finish and reset StringBuilder
+fn finish_and_reset_string(
+    builder: &mut Option<StringBuilder>,
+    arrays: &mut Vec<ArrayRef>,
+    capacity: usize,
+) {
+    if let Some(b) = builder {
+        arrays.push(Arc::new(b.finish()) as ArrayRef);
+        *b = StringBuilder::with_capacity(BATCH_SIZE, capacity);
+    }
+}
+
 pub fn write_parquet<W: Write + Send>(
     results: Box<dyn Iterator<Item = CalculationResult>>,
     command: Command,
@@ -177,34 +197,16 @@ fn flush_position_batch<W: Write + Send>(
 ) -> std::io::Result<()> {
     let mut arrays: Vec<ArrayRef> = Vec::new();
 
-    if let Some(b) = lat_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
-    if let Some(b) = lon_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
-    if let Some(b) = elev_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
-    if let Some(b) = press_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
-    if let Some(b) = temp_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
+    finish_and_reset_f64(lat_builder, &mut arrays);
+    finish_and_reset_f64(lon_builder, &mut arrays);
+    finish_and_reset_f64(elev_builder, &mut arrays);
+    finish_and_reset_f64(press_builder, &mut arrays);
+    finish_and_reset_f64(temp_builder, &mut arrays);
 
     arrays.push(Arc::new(dt_builder.finish()) as ArrayRef);
     *dt_builder = TimestampMillisecondBuilder::with_capacity(BATCH_SIZE);
 
-    if let Some(b) = deltat_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
+    finish_and_reset_f64(deltat_builder, &mut arrays);
 
     arrays.push(Arc::new(az_builder.finish()) as ArrayRef);
     *az_builder = Float64Builder::with_capacity(BATCH_SIZE);
@@ -549,22 +551,13 @@ fn flush_sunrise_batch<W: Write + Send>(
 ) -> std::io::Result<()> {
     let mut arrays: Vec<ArrayRef> = Vec::new();
 
-    if let Some(b) = lat_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
-    if let Some(b) = lon_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
+    finish_and_reset_f64(lat_builder, &mut arrays);
+    finish_and_reset_f64(lon_builder, &mut arrays);
 
     arrays.push(Arc::new(date_builder.finish()) as ArrayRef);
     *date_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
 
-    if let Some(b) = deltat_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
-    }
+    finish_and_reset_f64(deltat_builder, &mut arrays);
 
     arrays.push(Arc::new(type_builder.finish()) as ArrayRef);
     *type_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
@@ -578,30 +571,12 @@ fn flush_sunrise_batch<W: Write + Send>(
     arrays.push(Arc::new(sunset_builder.finish()) as ArrayRef);
     *sunset_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
 
-    if let Some(b) = civil_start_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
-    if let Some(b) = civil_end_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
-    if let Some(b) = nautical_start_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
-    if let Some(b) = nautical_end_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
-    if let Some(b) = astro_start_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
-    if let Some(b) = astro_end_builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    }
+    finish_and_reset_string(civil_start_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string(civil_end_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string(nautical_start_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string(nautical_end_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string(astro_start_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string(astro_end_builder, &mut arrays, BATCH_SIZE * 25);
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)
         .map_err(|e| std::io::Error::other(format!("Failed to create batch: {}", e)))?;

@@ -51,54 +51,6 @@ impl DataSource {
             DataSource::Paired(InputPath::File(_)) => false,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn debug_repr(&self) -> String {
-        match self {
-            DataSource::Separate(loc, time) => {
-                let loc_str = match loc {
-                    LocationSource::Single(lat, lon) => format!("Single({}, {})", lat, lon),
-                    LocationSource::Range { lat, lon } => {
-                        if let Some((lon_start, lon_end, lon_step)) = lon {
-                            format!(
-                                "Range({}, {}, {}) x Range({}, {}, {})",
-                                lat.0, lat.1, lat.2, lon_start, lon_end, lon_step
-                            )
-                        } else {
-                            format!("Range({}, {}, {}) x Single", lat.0, lat.1, lat.2)
-                        }
-                    }
-                    LocationSource::File(InputPath::Stdin) => "File(stdin)".to_string(),
-                    LocationSource::File(InputPath::File(path)) => {
-                        format!("File({})", path.display())
-                    }
-                };
-
-                let time_str = match time {
-                    TimeSource::Single(s) => format!("Single({})", s),
-                    TimeSource::Range(date, step) => {
-                        if let Some(s) = step {
-                            format!("Range({}, step={})", date, s)
-                        } else {
-                            format!("Range({})", date)
-                        }
-                    }
-                    TimeSource::File(InputPath::Stdin) => "File(stdin)".to_string(),
-                    TimeSource::File(InputPath::File(path)) => format!("File({})", path.display()),
-                    TimeSource::Now => "Now".to_string(),
-                };
-
-                format!(
-                    "SOURCE: Separate\nLOCATION: {}\nTIME: {}",
-                    loc_str, time_str
-                )
-            }
-            DataSource::Paired(InputPath::Stdin) => "SOURCE: Paired\nFILE: stdin".to_string(),
-            DataSource::Paired(InputPath::File(path)) => {
-                format!("SOURCE: Paired\nFILE: {}", path.display())
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
