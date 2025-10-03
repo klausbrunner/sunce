@@ -504,3 +504,56 @@ fn test_coordinate_range_floating_point_precision() {
         "Should have exactly 4 coordinate values for 0.3 step"
     );
 }
+
+/// Test watch mode with 'now' and --step
+/// Verifies that watch mode generates multiple timestamped results at regular intervals
+#[test]
+fn test_watch_mode() {
+    use assert_cmd::cargo::CommandCargoExt;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Duration;
+
+    let mut child = Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "--format=csv",
+            "52.5",
+            "13.4",
+            "now",
+            "position",
+            "--step=1s",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn watch mode process");
+
+    thread::sleep(Duration::from_secs(3));
+
+    child.kill().expect("Failed to kill watch mode process");
+    let output = child.wait_with_output().expect("Failed to get output");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // Should have header + at least 2 data rows (we slept for 3 seconds with 1s step)
+    assert!(
+        lines.len() >= 3,
+        "Watch mode should produce at least 2 results in 3 seconds, got {} lines",
+        lines.len()
+    );
+
+    assert_eq!(
+        lines[0], "dateTime,azimuth,zenith",
+        "Should have CSV header"
+    );
+
+    for (i, line) in lines.iter().skip(1).enumerate() {
+        assert!(
+            line.contains(','),
+            "Data row {} should be CSV format: {}",
+            i + 1,
+            line
+        );
+    }
+}

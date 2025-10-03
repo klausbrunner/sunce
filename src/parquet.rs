@@ -13,6 +13,16 @@ use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
 
+// Helper to create optional Float64Builder
+fn opt_f64_builder(condition: bool) -> Option<Float64Builder> {
+    condition.then(|| Float64Builder::with_capacity(BATCH_SIZE))
+}
+
+// Helper to create optional StringBuilder
+fn opt_string_builder(condition: bool, capacity: usize) -> Option<StringBuilder> {
+    condition.then(|| StringBuilder::with_capacity(BATCH_SIZE, capacity))
+}
+
 // Helper to finish and reset Float64Builder
 fn finish_and_reset_f64(builder: &mut Option<Float64Builder>, arrays: &mut Vec<ArrayRef>) {
     if let Some(b) = builder {
@@ -61,37 +71,13 @@ fn write_position_parquet<W: Write + Send>(
     let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
 
-    let mut lat_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
-    let mut lon_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
-    let mut elev_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
-    let mut press_builder = if show_inputs && params.refraction {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
-    let mut temp_builder = if show_inputs && params.refraction {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
+    let mut lat_builder = opt_f64_builder(show_inputs);
+    let mut lon_builder = opt_f64_builder(show_inputs);
+    let mut elev_builder = opt_f64_builder(show_inputs);
+    let mut press_builder = opt_f64_builder(show_inputs && params.refraction);
+    let mut temp_builder = opt_f64_builder(show_inputs && params.refraction);
     let mut dt_builder = TimestampMillisecondBuilder::with_capacity(BATCH_SIZE);
-    let mut deltat_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
+    let mut deltat_builder = opt_f64_builder(show_inputs);
     let mut az_builder = Float64Builder::with_capacity(BATCH_SIZE);
     let mut angle_builder = Float64Builder::with_capacity(BATCH_SIZE);
 
@@ -281,57 +267,21 @@ fn write_sunrise_parquet<W: Write + Send>(
     let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
 
-    let mut lat_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
-    let mut lon_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
+    let mut lat_builder = opt_f64_builder(show_inputs);
+    let mut lon_builder = opt_f64_builder(show_inputs);
     let mut date_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-    let mut deltat_builder = if show_inputs {
-        Some(Float64Builder::with_capacity(BATCH_SIZE))
-    } else {
-        None
-    };
+    let mut deltat_builder = opt_f64_builder(show_inputs);
     let mut type_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
     let mut sunrise_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
     let mut transit_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
     let mut sunset_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
 
-    let mut civil_start_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
-    let mut civil_end_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
-    let mut nautical_start_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
-    let mut nautical_end_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
-    let mut astro_start_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
-    let mut astro_end_builder = if show_twilight {
-        Some(StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25))
-    } else {
-        None
-    };
+    let mut civil_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut civil_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut nautical_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut nautical_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut astro_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut astro_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
 
     let mut batch_count = 0;
     let mut total_count = 0;

@@ -51,6 +51,10 @@ impl DataSource {
             DataSource::Paired(InputPath::File(_)) => false,
         }
     }
+
+    pub fn is_watch_mode(&self, step: &Option<String>) -> bool {
+        matches!(self, DataSource::Separate(_, TimeSource::Now)) && step.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -347,9 +351,9 @@ pub fn parse_cli(args: Vec<String>) -> Result<(DataSource, Command, Parameters),
 }
 
 fn parse_file_arg(arg: &str) -> Result<InputPath, String> {
-    let stripped = arg
-        .strip_prefix('@')
-        .ok_or_else(|| "Not a file argument".to_string())?;
+    let Some(stripped) = arg.strip_prefix('@') else {
+        return Err("Not a file argument".to_string());
+    };
 
     if stripped == "-" {
         return Ok(InputPath::Stdin);
@@ -448,15 +452,17 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, String> {
         return Err(format!("Range must be start:end:step, got: {}", s));
     };
 
-    let start = start_str
-        .parse()
-        .map_err(|_| format!("Invalid range start: {}", start_str))?;
-    let end = end_str
-        .parse()
-        .map_err(|_| format!("Invalid range end: {}", end_str))?;
-    let step = step_str
-        .parse()
-        .map_err(|_| format!("Invalid range step: {}", step_str))?;
+    let (start, end, step) = (
+        start_str
+            .parse()
+            .map_err(|_| format!("Invalid range start: {}", start_str))?,
+        end_str
+            .parse()
+            .map_err(|_| format!("Invalid range end: {}", end_str))?,
+        step_str
+            .parse()
+            .map_err(|_| format!("Invalid range step: {}", step_str))?,
+    );
 
     if step <= 0.0 {
         return Err("Range step must be positive".to_string());
@@ -652,8 +658,7 @@ enum TimezoneInfo {
 }
 
 impl TimezoneInfo {
-    #[allow(clippy::wrong_self_convention)]
-    fn from_utc_datetime(&self, dt: &NaiveDateTime) -> DateTime<FixedOffset> {
+    fn to_datetime_from_utc(&self, dt: &NaiveDateTime) -> DateTime<FixedOffset> {
         match self {
             TimezoneInfo::Fixed(offset) => offset.from_utc_datetime(dt),
             TimezoneInfo::Named(tz) => {
@@ -663,8 +668,7 @@ impl TimezoneInfo {
         }
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    fn from_local_datetime(&self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
+    fn to_datetime_from_local(&self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
         match self {
             TimezoneInfo::Fixed(offset) => match offset.from_local_datetime(dt) {
                 chrono::LocalResult::Single(dt) => Some(dt),
@@ -691,8 +695,11 @@ fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
     let tz_str = override_tz.or(tz_env.as_deref());
 
     tz_str
-        .and_then(|s| parse_tz_offset(s).map(TimezoneInfo::Fixed))
-        .or_else(|| tz_str.and_then(|s| s.parse::<Tz>().ok().map(TimezoneInfo::Named)))
+        .and_then(|s| {
+            parse_tz_offset(s)
+                .map(TimezoneInfo::Fixed)
+                .or_else(|| s.parse::<Tz>().ok().map(TimezoneInfo::Named))
+        })
         .unwrap_or_else(|| {
             TimezoneInfo::Fixed(FixedOffset::east_opt(0).expect("UTC offset creation cannot fail"))
         })
@@ -715,10 +722,10 @@ fn parse_tz_offset(tz: &str) -> Option<FixedOffset> {
         _ => return None,
     };
 
-    let (hours, minutes): (i32, i32) = if let Some((h, m)) = rest.split_once(':') {
-        (h.parse().ok()?, m.parse().ok()?)
+    let (hours, minutes) = if let Some((h, m)) = rest.split_once(':') {
+        (h.parse::<i32>().ok()?, m.parse::<i32>().ok()?)
     } else {
-        (rest.parse().ok()?, 0)
+        (rest.parse::<i32>().ok()?, 0)
     };
 
     FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))
@@ -766,7 +773,7 @@ fn parse_datetime_string(
                 .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
 
             let tz_info = get_timezone_info(override_tz);
-            return tz_info.from_local_datetime(&naive_dt).ok_or_else(|| {
+            return tz_info.to_datetime_from_local(&naive_dt).ok_or_else(|| {
                 format!(
                     "Datetime does not exist in timezone (likely DST gap): {}",
                     dt_str
@@ -786,7 +793,7 @@ fn parse_datetime_string(
         if override_tz.is_some() {
             let tz_info = get_timezone_info(override_tz);
             let naive_utc = utc_dt.naive_utc();
-            return Ok(tz_info.from_utc_datetime(&naive_utc));
+            return Ok(tz_info.to_datetime_from_utc(&naive_utc));
         }
 
         return Ok(utc_dt.fixed_offset());
@@ -799,7 +806,7 @@ fn parse_datetime_string(
         .and_hms_opt(0, 0, 0)
         .expect("Midnight time creation cannot fail");
     let tz_info = get_timezone_info(override_tz);
-    tz_info.from_local_datetime(&naive_dt).ok_or_else(|| {
+    tz_info.to_datetime_from_local(&naive_dt).ok_or_else(|| {
         format!(
             "Datetime does not exist in timezone (likely DST gap): {}",
             dt_str
@@ -834,10 +841,12 @@ pub fn expand_time_source(
         TimeSource::Range(partial_date, step_opt) => {
             // Expand into time series with appropriate step
             let step = step_override.or(step_opt).unwrap_or_else(|| {
-                if partial_date.len() == 4 {
-                    "1d".to_string() // Year -> daily
+                // Sunrise always daily (sunrise times don't change hourly)
+                // Position with year is also daily, but year-month defaults to hourly
+                if command == Command::Sunrise || partial_date.len() == 4 {
+                    "1d".to_string()
                 } else {
-                    "1h".to_string() // Month/Day -> hourly
+                    "1h".to_string()
                 }
             });
 
@@ -846,7 +855,30 @@ pub fn expand_time_source(
         TimeSource::File(path) => Box::new(read_times_file(path, override_tz.clone())),
         TimeSource::Now => {
             let local_tz = get_local_timezone(override_tz.as_deref());
-            Box::new(std::iter::once(Utc::now().with_timezone(&local_tz)))
+
+            if let Some(step_str) = step_override {
+                let step_duration = parse_duration(&step_str).unwrap_or_else(|| {
+                    eprintln!(
+                        "Error: Invalid step format: '{}'. Expected format: <number><unit> where unit is s, m, h, or d (e.g., 1h, 30m, 1d)",
+                        step_str
+                    );
+                    std::process::exit(1);
+                });
+
+                let mut first = true;
+                Box::new(std::iter::from_fn(move || {
+                    if !std::mem::take(&mut first) {
+                        std::thread::sleep(
+                            step_duration
+                                .to_std()
+                                .unwrap_or(std::time::Duration::from_secs(1)),
+                        );
+                    }
+                    Some(Utc::now().with_timezone(&local_tz))
+                }))
+            } else {
+                Box::new(std::iter::once(Utc::now().with_timezone(&local_tz)))
+            }
         }
     }
 }
@@ -925,7 +957,7 @@ fn expand_partial_date(
     };
 
     let to_local_or_exit = |naive: NaiveDateTime, desc: &str| {
-        tz_info.from_local_datetime(&naive).unwrap_or_else(|| {
+        tz_info.to_datetime_from_local(&naive).unwrap_or_else(|| {
             eprintln!(
                 "Error: {} time does not exist in timezone (likely DST gap): {}",
                 desc, date_str
@@ -938,7 +970,7 @@ fn expand_partial_date(
     let end_dt = to_local_or_exit(end_naive, "End");
 
     Box::new(std::iter::successors(Some(start_dt), move |current_dt| {
-        let next_dt = tz_info.from_utc_datetime(&(current_dt.naive_utc() + step_duration));
+        let next_dt = tz_info.to_datetime_from_utc(&(current_dt.naive_utc() + step_duration));
         (next_dt <= end_dt).then_some(next_dt)
     })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>
 }
@@ -946,13 +978,13 @@ fn expand_partial_date(
 fn parse_duration(s: &str) -> Option<Duration> {
     let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
     let num = num_str.parse::<i64>().ok()?;
-    Some(match unit {
-        "s" => Duration::seconds(num),
-        "m" => Duration::minutes(num),
-        "h" => Duration::hours(num),
-        "d" => Duration::days(num),
-        _ => return None,
-    })
+    match unit {
+        "s" => Some(Duration::seconds(num)),
+        "m" => Some(Duration::minutes(num)),
+        "h" => Some(Duration::hours(num)),
+        "d" => Some(Duration::days(num)),
+        _ => None,
+    }
 }
 
 fn read_times_file(
@@ -983,7 +1015,8 @@ pub fn expand_cartesian_product(
     // For both ranges: estimate sizes and materialize the smaller one
 
     let is_loc_single = matches!(loc_source, LocationSource::Single(_, _));
-    let is_time_single = matches!(time_source, TimeSource::Single(_) | TimeSource::Now);
+    let is_time_single = matches!(time_source, TimeSource::Single(_))
+        || (matches!(time_source, TimeSource::Now) && step.is_none());
 
     if is_loc_single && !is_time_single {
         // Single location, multiple times - stream times

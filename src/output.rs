@@ -11,12 +11,13 @@ fn format_datetime(dt: &DateTime<FixedOffset>) -> String {
 }
 
 fn format_datetime_opt(dt: Option<&DateTime<FixedOffset>>) -> String {
-    dt.map(format_datetime).unwrap_or_default()
+    dt.map_or(String::new(), format_datetime)
 }
 
 fn format_datetime_json_null(dt: Option<&DateTime<FixedOffset>>) -> String {
-    dt.map(|t| format!(r#""{}""#, format_datetime(t)))
-        .unwrap_or_else(|| "null".to_string())
+    dt.map_or("null".to_string(), |t| {
+        format!(r#""{}""#, format_datetime(t))
+    })
 }
 
 fn format_datetime_text(dt: &DateTime<FixedOffset>) -> String {

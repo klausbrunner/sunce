@@ -268,10 +268,11 @@ fn test_sunrise_specific_date_single_result() {
     assert!(lines[1].contains("NORMAL"));
 }
 
-/// Test that partial dates still generate time series for sunrise (expected behavior)
+/// Test that partial dates generate daily time series for sunrise
+/// Regression test: Sunrise times don't change hourly, must be daily
 #[test]
 fn test_sunrise_partial_date_time_series() {
-    // "2024-01" should still generate a time series with show-inputs auto-enabled
+    // "2024-01" should generate a DAILY time series (31 days in January)
     let mut cmd = Command::cargo_bin("sunce").unwrap();
     cmd.args(["--format=CSV", "52.0", "13.4", "2024-01", "sunrise"]);
 
@@ -279,10 +280,11 @@ fn test_sunrise_partial_date_time_series() {
     let output_str = String::from_utf8(output).unwrap();
     let lines: Vec<&str> = output_str.trim().split('\n').collect();
 
-    // Should be many lines (time series for January)
-    assert!(
-        lines.len() > 100,
-        "Expected many lines for time series, got {}",
+    // Should be exactly 32 lines: header + 31 daily data rows (not hourly!)
+    assert_eq!(
+        lines.len(),
+        32,
+        "Expected header + 31 daily rows for January, got {}",
         lines.len()
     );
 
@@ -291,9 +293,11 @@ fn test_sunrise_partial_date_time_series() {
     assert!(lines[0].contains("longitude"));
     assert!(lines[0].contains("dateTime"));
 
-    // Verify first data row
+    // Verify first and last days
     assert!(lines[1].contains("52.00000"));
     assert!(lines[1].contains("13.40000"));
+    assert!(lines[1].contains("2024-01-01"));
+    assert!(lines[31].contains("2024-01-31"));
 }
 
 /// Test position command still generates time series for specific dates (expected behavior)

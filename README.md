@@ -90,7 +90,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 ## Output formats
 
-- `human` (default) – readable text for quick checks.
+- `text` (default) – readable text for quick checks.
 - `csv` – comma-separated values with headers by default; use `--no-headers` to omit them.
 - `json` – JSON Lines (one JSON object per line), great for post-processing with `jq` or similar tools.
 - `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics (opt-out feature).
@@ -99,7 +99,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 - `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or a TZ database name (e.g., `Europe/Berlin`).
 - `--deltat[=<seconds>]` – specify delta-T explicitly, or provide the option without value to request an automatic estimate. For background on delta-T see [solar-positioning](https://crates.io/crates/solar-positioning).
-- `--format=<format>` – output format: `human`, `csv`, or `json`.
+- `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
 - `--[no-]headers` – include/omit header row for CSV output (default: headers on).
 - `--[no-]show-inputs` – include input parameters in the output.
 - `--step=<seconds>` – time step for `position` time series sampling.

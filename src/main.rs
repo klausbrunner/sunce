@@ -62,7 +62,7 @@ fn main() {
                 use std::io::{BufWriter, Write};
                 let stdout = std::io::stdout();
                 let mut writer = BufWriter::new(stdout.lock());
-                let flush_each_record = source.uses_stdin();
+                let flush_each_record = source.uses_stdin() || source.is_watch_mode(&params.step);
 
                 let formatted = output::format_stream(results, command, &params, source.clone());
                 let mut count = 0;

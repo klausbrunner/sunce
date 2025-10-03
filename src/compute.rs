@@ -115,11 +115,10 @@ pub fn calculate_sunrise(
             deltat,
         })
     } else {
-        let horizon = if let Some(h) = params.horizon {
-            Horizon::Custom(h)
-        } else {
-            Horizon::SunriseSunset
-        };
+        let horizon = params
+            .horizon
+            .map(Horizon::Custom)
+            .unwrap_or(Horizon::SunriseSunset);
 
         let result =
             solar_positioning::spa::sunrise_sunset_for_horizon(dt, lat, lon, deltat, horizon)
