@@ -392,3 +392,80 @@ fn test_system_timezone_detection() {
         println!("Windows system timezone detection result: {}", output_str);
     }
 }
+
+#[test]
+fn test_now_respects_tz_env() {
+    // CRITICAL: Test that 'now' uses TZ environment variable, not UTC default
+    // This catches the bug where get_timezone_info() defaulted to UTC instead of detecting local timezone
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.env("TZ", "America/New_York"); // Set TZ to non-UTC timezone
+    cmd.args(["--format=CSV", "40.7", "-74.0", "now", "position"]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should use America/New_York timezone (either -05:00 or -04:00 depending on DST)
+    // NOT +00:00 (UTC)
+    let has_ny_tz = output_str.contains("-05:00") || output_str.contains("-04:00");
+    assert!(
+        has_ny_tz,
+        "Should use America/New_York timezone (-05:00 or -04:00), not UTC. Output:\n{}",
+        output_str
+    );
+
+    // Must NOT contain UTC offset
+    assert!(
+        !output_str.contains("+00:00"),
+        "Should not default to UTC when TZ=America/New_York is set. Output:\n{}",
+        output_str
+    );
+}
+
+#[test]
+fn test_now_respects_tz_env_fixed_offset() {
+    // Test that 'now' uses fixed offset TZ environment variable
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.env("TZ", "+05:30"); // Set TZ to India Standard Time
+    cmd.args(["--format=CSV", "28.6", "77.2", "now", "position"]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should use +05:30 timezone, NOT +00:00 (UTC)
+    assert!(
+        output_str.contains("+05:30"),
+        "Should use TZ=+05:30, not UTC. Output:\n{}",
+        output_str
+    );
+
+    assert!(
+        !output_str.contains("+00:00"),
+        "Should not default to UTC when TZ=+05:30 is set. Output:\n{}",
+        output_str
+    );
+}
+
+#[test]
+fn test_now_table_format_shows_timezone() {
+    // Test that text table format shows timezone in DateTime column
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.env("TZ", "Europe/Paris");
+    cmd.args(["48.8", "2.3", "now", "position"]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Should contain timezone offset in the table (either +01:00 or +02:00)
+    let has_paris_tz = output_str.contains("+01:00") || output_str.contains("+02:00");
+    assert!(
+        has_paris_tz,
+        "Text table should show Europe/Paris timezone offset. Output:\n{}",
+        output_str
+    );
+
+    // DateTime column should have proper width (22 chars for datetime with timezone)
+    assert!(
+        output_str.contains("DateTime"),
+        "Should have DateTime column header"
+    );
+}

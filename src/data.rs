@@ -1,10 +1,15 @@
 //! CLI parsing, data source expansion, and timezone handling.
 
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static SYSTEM_TIMEZONE: OnceLock<FixedOffset> = OnceLock::new();
 
 const DELTAT_MULTIPLE_ERROR: &str =
     "error: the argument '--deltat <DELTAT>' cannot be used multiple times";
@@ -701,7 +706,8 @@ fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
                 .or_else(|| s.parse::<Tz>().ok().map(TimezoneInfo::Named))
         })
         .unwrap_or_else(|| {
-            TimezoneInfo::Fixed(FixedOffset::east_opt(0).expect("UTC offset creation cannot fail"))
+            let offset = SYSTEM_TIMEZONE.get_or_init(|| Local::now().offset().fix());
+            TimezoneInfo::Fixed(*offset)
         })
 }
 

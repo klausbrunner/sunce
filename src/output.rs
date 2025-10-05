@@ -718,7 +718,16 @@ fn format_streaming_text_table(
         headers_vec.push("Zenith");
     }
 
-    let col_widths: Vec<usize> = headers_vec.iter().map(|h| h.len().max(14)).collect();
+    let col_widths: Vec<usize> = headers_vec
+        .iter()
+        .map(|h| {
+            if time_varies && *h == "DateTime" {
+                22 // "YYYY-MM-DD HH:MM±HH:MM"
+            } else {
+                h.len().max(14)
+            }
+        })
+        .collect();
 
     // Top border
     header.push('┌');
@@ -782,7 +791,7 @@ fn format_streaming_text_table(
                 col_idx += 1;
             }
             if time_varies {
-                let dt_str = datetime.format("%Y-%m-%d %H:%M").to_string();
+                let dt_str = datetime.format("%Y-%m-%d %H:%M%:z").to_string();
                 output.push_str(&format!(
                     " {:<width$} ",
                     dt_str,
