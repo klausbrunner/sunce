@@ -63,13 +63,14 @@ pub fn write_parquet_output<W: std::io::Write + Send>(
     crate::parquet::write_parquet(results, command, params, writer)
 }
 
-fn format_csv_position(
+fn write_csv_position<W: std::io::Write>(
     result: &CalculationResult,
     show_inputs: bool,
     headers: bool,
     first: bool,
     params: &Parameters,
-) -> String {
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Position {
             lat,
@@ -78,24 +79,26 @@ fn format_csv_position(
             position,
             deltat,
         } => {
-            let mut output = String::new();
-
-            // Headers on first row if requested - match original exactly
             if first && headers {
                 if show_inputs {
                     if params.elevation_angle {
-                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle\r\n");
+                        write!(
+                            writer,
+                            "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle\r\n"
+                        )?;
                     } else {
-                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith\r\n");
+                        write!(
+                            writer,
+                            "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith\r\n"
+                        )?;
                     }
                 } else if params.elevation_angle {
-                    output.push_str("dateTime,azimuth,elevation-angle\r\n");
+                    write!(writer, "dateTime,azimuth,elevation-angle\r\n")?;
                 } else {
-                    output.push_str("dateTime,azimuth,zenith\r\n");
+                    write!(writer, "dateTime,azimuth,zenith\r\n")?;
                 }
             }
 
-            // Data row - match original precision exactly
             let angle_value = if params.elevation_angle {
                 90.0 - position.zenith_angle()
             } else {
@@ -103,7 +106,8 @@ fn format_csv_position(
             };
 
             if show_inputs {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}\r\n",
                     lat,
                     lon,
@@ -114,27 +118,29 @@ fn format_csv_position(
                     deltat,
                     position.azimuth(),
                     angle_value
-                ));
+                )?;
             } else {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{},{:.5},{:.5}\r\n",
                     datetime.to_rfc3339(),
                     position.azimuth(),
                     angle_value
-                ));
+                )?;
             }
-            output
+            Ok(())
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-fn format_csv_sunrise(
+fn write_csv_sunrise<W: std::io::Write>(
     result: &CalculationResult,
     show_inputs: bool,
     headers: bool,
     first: bool,
-) -> String {
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Sunrise {
             lat,
@@ -143,15 +149,14 @@ fn format_csv_sunrise(
             result: sunrise_result,
             deltat,
         } => {
-            let mut output = String::new();
-
             if first && headers {
                 if show_inputs {
-                    output.push_str(
-                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\r\n",
-                    );
+                    write!(
+                        writer,
+                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\r\n"
+                    )?;
                 } else {
-                    output.push_str("dateTime,type,sunrise,transit,sunset\r\n");
+                    write!(writer, "dateTime,type,sunrise,transit,sunset\r\n")?;
                 }
             }
 
@@ -164,7 +169,8 @@ fn format_csv_sunrise(
             );
 
             if show_inputs {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{:.5},{:.5},{},{:.3},{},{},{},{}\r\n",
                     lat,
                     lon,
@@ -174,18 +180,19 @@ fn format_csv_sunrise(
                     sunrise_str,
                     transit_str,
                     sunset_str
-                ));
+                )?;
             } else {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{},{},{},{},{}\r\n",
                     date.format("%Y-%m-%d"),
                     type_str,
                     sunrise_str,
                     transit_str,
                     sunset_str
-                ));
+                )?;
             }
-            output
+            Ok(())
         }
         CalculationResult::SunriseWithTwilight {
             lat,
@@ -197,13 +204,17 @@ fn format_csv_sunrise(
             astronomical,
             deltat,
         } => {
-            let mut output = String::new();
-
             if first && headers {
                 if show_inputs {
-                    output.push_str("latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n");
+                    write!(
+                        writer,
+                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
+                    )?;
                 } else {
-                    output.push_str("dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n");
+                    write!(
+                        writer,
+                        "dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
+                    )?;
                 }
             }
 
@@ -235,7 +246,8 @@ fn format_csv_sunrise(
             );
 
             if show_inputs {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{:.5},{:.5},{},{:.3},{},{},{},{},{},{},{},{},{},{}\r\n",
                     lat,
                     lon,
@@ -251,9 +263,10 @@ fn format_csv_sunrise(
                     nautical_end,
                     astro_start,
                     astro_end
-                ));
+                )?;
             } else {
-                output.push_str(&format!(
+                write!(
+                    writer,
                     "{},{},{},{},{},{},{},{},{},{},{}\r\n",
                     date.format("%Y-%m-%d"),
                     type_str,
@@ -266,19 +279,20 @@ fn format_csv_sunrise(
                     nautical_end,
                     astro_start,
                     astro_end
-                ));
+                )?;
             }
-            output
+            Ok(())
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-fn format_json_position(
+fn write_json_position<W: std::io::Write>(
     result: &CalculationResult,
     show_inputs: bool,
     params: &Parameters,
-) -> String {
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Position {
             lat,
@@ -288,8 +302,8 @@ fn format_json_position(
             deltat,
         } => {
             if show_inputs {
-                // Include all input parameters when show_inputs is true
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"latitude":{},"longitude":{},"elevation":{},"pressure":{},"temperature":{},"dateTime":"{}","deltaT":{},"azimuth":{},"zenith":{}}}"#,
                     lat,
                     lon,
@@ -302,8 +316,8 @@ fn format_json_position(
                     position.zenith_angle()
                 )
             } else {
-                // Default: just dateTime, azimuth, zenith
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"dateTime":"{}","azimuth":{},"zenith":{}}}"#,
                     datetime.to_rfc3339(),
                     position.azimuth(),
@@ -311,11 +325,15 @@ fn format_json_position(
                 )
             }
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String {
+fn write_json_sunrise<W: std::io::Write>(
+    result: &CalculationResult,
+    show_inputs: bool,
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Sunrise {
             lat,
@@ -328,7 +346,8 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
             let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
 
             if show_inputs {
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"latitude":{},"longitude":{},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}"}}"#,
                     lat,
                     lon,
@@ -340,7 +359,8 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
                     format_datetime_opt(sunset_opt)
                 )
             } else {
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}"}}"#,
                     type_str,
                     format_datetime_opt(sunrise_opt),
@@ -366,7 +386,8 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
             let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
 
             if show_inputs {
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"latitude":{:.5},"longitude":{:.5},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}","civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
                     lat,
                     lon,
@@ -384,7 +405,8 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
                     format_datetime_json_null(astro_end_opt)
                 )
             } else {
-                format!(
+                writeln!(
+                    writer,
                     r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}","civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
                     type_str,
                     format_datetime_opt(sunrise_opt),
@@ -399,15 +421,16 @@ fn format_json_sunrise(result: &CalculationResult, show_inputs: bool) -> String 
                 )
             }
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-fn format_text_position(
+fn write_text_position<W: std::io::Write>(
     result: &CalculationResult,
     show_inputs: bool,
     elevation_angle: bool,
-) -> String {
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Position {
             lat,
@@ -436,31 +459,30 @@ fn format_text_position(
                 lines.push(format!("│ Zenith     {:.5}°", position.zenith_angle()));
             }
 
-            // Calculate the width of the box
             let max_width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
-            let box_width = max_width + 2; // Add padding
+            let box_width = max_width + 2;
 
-            let mut output = String::new();
-            output.push_str(&format!("┌{}\n", "─".repeat(box_width - 2)));
+            writeln!(writer, "┌{}┐", "─".repeat(box_width - 2))?;
             for line in lines {
-                output.push_str(&format!("{}\n", line));
+                writeln!(writer, "{}", line)?;
             }
-            output.push_str(&format!("└{}\n", "─".repeat(box_width - 2)));
-
-            output
+            writeln!(writer, "└{}┘", "─".repeat(box_width - 2))?;
+            Ok(())
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String {
+fn write_text_sunrise<W: std::io::Write>(
+    result: &CalculationResult,
+    _show_inputs: bool,
+    writer: &mut W,
+) -> std::io::Result<()> {
     match result {
         CalculationResult::Sunrise {
             result: sunrise_result,
             ..
         } => {
-            let mut output = String::new();
-
             use solar_positioning::SunriseResult;
             match sunrise_result {
                 SunriseResult::RegularDay {
@@ -468,26 +490,25 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                     sunset,
                     transit,
                 } => {
-                    output.push_str("type   : normal\n");
-                    output.push_str(&format!("sunrise: {}\n", format_datetime_text(sunrise)));
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str(&format!("sunset : {}\n", format_datetime_text(sunset)));
+                    writeln!(writer, "type   : normal")?;
+                    writeln!(writer, "sunrise: {}", format_datetime_text(sunrise))?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : {}", format_datetime_text(sunset))?;
                 }
                 SunriseResult::AllDay { transit } => {
-                    output.push_str("type   : all day\n");
-                    output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str("sunset : \n");
+                    writeln!(writer, "type   : all day")?;
+                    writeln!(writer, "sunrise: ")?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : ")?;
                 }
                 SunriseResult::AllNight { transit } => {
-                    output.push_str("type   : all night\n");
-                    output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str("sunset : \n");
+                    writeln!(writer, "type   : all night")?;
+                    writeln!(writer, "sunrise: ")?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : ")?;
                 }
             }
-
-            output
+            Ok(())
         }
         CalculationResult::SunriseWithTwilight {
             sunrise_sunset,
@@ -496,8 +517,6 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
             astronomical,
             ..
         } => {
-            let mut output = String::new();
-
             use solar_positioning::SunriseResult;
             match sunrise_sunset {
                 SunriseResult::RegularDay {
@@ -505,40 +524,41 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                     sunset,
                     transit,
                 } => {
-                    output.push_str("type   : normal\n");
-                    output.push_str(&format!("sunrise: {}\n", format_datetime_text(sunrise)));
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str(&format!("sunset : {}\n", format_datetime_text(sunset)));
+                    writeln!(writer, "type   : normal")?;
+                    writeln!(writer, "sunrise: {}", format_datetime_text(sunrise))?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : {}", format_datetime_text(sunset))?;
                 }
                 SunriseResult::AllDay { transit } => {
-                    output.push_str("type   : all day\n");
-                    output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str("sunset : \n");
+                    writeln!(writer, "type   : all day")?;
+                    writeln!(writer, "sunrise: ")?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : ")?;
                 }
                 SunriseResult::AllNight { transit } => {
-                    output.push_str("type   : all night\n");
-                    output.push_str("sunrise: \n");
-                    output.push_str(&format!("transit: {}\n", format_datetime_text(transit)));
-                    output.push_str("sunset : \n");
+                    writeln!(writer, "type   : all night")?;
+                    writeln!(writer, "sunrise: ")?;
+                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
+                    writeln!(writer, "sunset : ")?;
                 }
             }
 
-            // Add twilight times
             if let SunriseResult::RegularDay {
                 sunrise: civil_start,
                 sunset: civil_end,
                 ..
             } = civil
             {
-                output.push_str(&format!(
-                    "civil twilight start: {}\n",
+                writeln!(
+                    writer,
+                    "civil twilight start: {}",
                     format_datetime_text(civil_start)
-                ));
-                output.push_str(&format!(
-                    "civil twilight end  : {}\n",
+                )?;
+                writeln!(
+                    writer,
+                    "civil twilight end  : {}",
                     format_datetime_text(civil_end)
-                ));
+                )?;
             }
 
             if let SunriseResult::RegularDay {
@@ -547,14 +567,16 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                 ..
             } = nautical
             {
-                output.push_str(&format!(
-                    "nautical twilight start: {}\n",
+                writeln!(
+                    writer,
+                    "nautical twilight start: {}",
                     format_datetime_text(naut_start)
-                ));
-                output.push_str(&format!(
-                    "nautical twilight end  : {}\n",
+                )?;
+                writeln!(
+                    writer,
+                    "nautical twilight end  : {}",
                     format_datetime_text(naut_end)
-                ));
+                )?;
             }
 
             if let SunriseResult::RegularDay {
@@ -563,66 +585,96 @@ fn format_text_sunrise(result: &CalculationResult, _show_inputs: bool) -> String
                 ..
             } = astronomical
             {
-                output.push_str(&format!(
-                    "astronomical twilight start: {}\n",
+                writeln!(
+                    writer,
+                    "astronomical twilight start: {}",
                     format_datetime_text(astro_start)
-                ));
-                output.push_str(&format!(
-                    "astronomical twilight end  : {}\n",
+                )?;
+                writeln!(
+                    writer,
+                    "astronomical twilight end  : {}",
                     format_datetime_text(astro_end)
-                ));
+                )?;
             }
 
-            output
+            Ok(())
         }
-        _ => String::new(),
+        _ => Ok(()),
     }
 }
 
-pub fn format_stream(
+fn write_streaming_text_table<W: std::io::Write>(
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
+    params: &Parameters,
+    source: crate::data::DataSource,
+    writer: &mut W,
+) -> std::io::Result<usize> {
+    let formatted = format_streaming_text_table(results, params, source);
+    let mut count = 0;
+    for line_result in formatted {
+        match line_result {
+            Ok(line) => {
+                write!(writer, "{}", line)?;
+                count += 1;
+            }
+            Err(e) => return Err(std::io::Error::other(e)),
+        }
+    }
+    Ok(count)
+}
+
+pub fn write_formatted_output<W: std::io::Write>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
     params: &Parameters,
     source: crate::data::DataSource,
-) -> Box<dyn Iterator<Item = Result<String, String>>> {
+    writer: &mut W,
+    flush_each: bool,
+) -> std::io::Result<usize> {
     let format = params.format.clone();
 
     if format == "text" && matches!(command, Command::Position) {
-        // Position tables use streaming with header/footer
-        return format_streaming_text_table(results, params, source);
+        return write_streaming_text_table(results, params, source, writer);
     }
 
-    // Stream everything else
     let show_inputs = params.show_inputs.unwrap_or(false);
     let headers = params.headers;
-    let params_clone = params.clone();
 
-    Box::new(results.enumerate().map(move |(index, result_or_err)| {
-        let result = result_or_err?;
+    let mut count = 0;
+    for (index, result_or_err) in results.enumerate() {
+        let result = match result_or_err {
+            Ok(r) => r,
+            Err(e) => return Err(std::io::Error::other(e)),
+        };
         let first = index == 0;
 
-        Ok(match format.as_str() {
+        match format.as_str() {
             "csv" => match command {
                 Command::Position => {
-                    format_csv_position(&result, show_inputs, headers, first, &params_clone)
+                    write_csv_position(&result, show_inputs, headers, first, params, writer)?
                 }
-                Command::Sunrise => format_csv_sunrise(&result, show_inputs, headers, first),
+                Command::Sunrise => {
+                    write_csv_sunrise(&result, show_inputs, headers, first, writer)?
+                }
             },
-            "json" => {
-                let json = match command {
-                    Command::Position => format_json_position(&result, show_inputs, &params_clone),
-                    Command::Sunrise => format_json_sunrise(&result, show_inputs),
-                };
-                format!("{}\n", json)
-            }
+            "json" => match command {
+                Command::Position => write_json_position(&result, show_inputs, params, writer)?,
+                Command::Sunrise => write_json_sunrise(&result, show_inputs, writer)?,
+            },
             _ => match command {
                 Command::Position => {
-                    format_text_position(&result, show_inputs, params_clone.elevation_angle)
+                    write_text_position(&result, show_inputs, params.elevation_angle, writer)?
                 }
-                Command::Sunrise => format_text_sunrise(&result, show_inputs),
+                Command::Sunrise => write_text_sunrise(&result, show_inputs, writer)?,
             },
-        })
-    }))
+        }
+
+        if flush_each {
+            writer.flush()?;
+        }
+        count += 1;
+    }
+    Ok(count)
 }
 
 fn format_streaming_text_table(

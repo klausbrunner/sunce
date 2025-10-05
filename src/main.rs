@@ -64,28 +64,24 @@ fn main() {
                 let mut writer = BufWriter::new(stdout.lock());
                 let flush_each_record = source.uses_stdin() || source.is_watch_mode(&params.step);
 
-                let formatted = output::format_stream(results, command, &params, source.clone());
-                let mut count = 0;
-                for line_result in formatted {
-                    match line_result {
-                        Ok(line) => {
-                            if write!(writer, "{}", line).is_err() {
-                                break;
-                            }
-                            if flush_each_record {
-                                let _ = writer.flush();
-                            }
-                            count += 1;
-                        }
-                        Err(e) => {
-                            let _ = writer.flush();
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
+                match output::write_formatted_output(
+                    results,
+                    command,
+                    &params,
+                    source.clone(),
+                    &mut writer,
+                    flush_each_record,
+                ) {
+                    Ok(count) => {
+                        let _ = writer.flush();
+                        count
+                    }
+                    Err(e) => {
+                        let _ = writer.flush();
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
                     }
                 }
-                let _ = writer.flush();
-                count
             };
 
             // Report performance if requested
