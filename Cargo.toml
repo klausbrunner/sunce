@@ -54,9 +54,9 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# Optimize most dependencies for size
+# Optimize most dependencies for size with some speed consideration
 [profile.release.package."*"]
-opt-level = "z"
+opt-level = "s"
 strip = true
 
 # Keep performance-critical crates optimized for speed

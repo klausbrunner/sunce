@@ -2,8 +2,8 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
-use arrow::array::{ArrayRef, Float64Builder, StringBuilder, TimestampMillisecondBuilder};
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -76,7 +76,7 @@ fn write_position_parquet<W: Write + Send>(
     let mut elev_builder = opt_f64_builder(show_inputs);
     let mut press_builder = opt_f64_builder(show_inputs && params.refraction);
     let mut temp_builder = opt_f64_builder(show_inputs && params.refraction);
-    let mut dt_builder = TimestampMillisecondBuilder::with_capacity(BATCH_SIZE);
+    let mut dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
     let mut deltat_builder = opt_f64_builder(show_inputs);
     let mut az_builder = Float64Builder::with_capacity(BATCH_SIZE);
     let mut angle_builder = Float64Builder::with_capacity(BATCH_SIZE);
@@ -115,7 +115,7 @@ fn write_position_parquet<W: Write + Send>(
                 deltat_builder.as_mut().unwrap().append_value(deltat);
             }
 
-            dt_builder.append_value(datetime.timestamp_millis());
+            dt_builder.append_value(datetime.to_rfc3339());
             az_builder.append_value(position.azimuth());
             let angle = if elevation_angle {
                 90.0 - position.zenith_angle()
@@ -178,7 +178,7 @@ fn flush_position_batch<W: Write + Send>(
     elev_builder: &mut Option<Float64Builder>,
     press_builder: &mut Option<Float64Builder>,
     temp_builder: &mut Option<Float64Builder>,
-    dt_builder: &mut TimestampMillisecondBuilder,
+    dt_builder: &mut StringBuilder,
     deltat_builder: &mut Option<Float64Builder>,
     az_builder: &mut Float64Builder,
     angle_builder: &mut Float64Builder,
@@ -192,7 +192,7 @@ fn flush_position_batch<W: Write + Send>(
     finish_and_reset_f64(temp_builder, &mut arrays);
 
     arrays.push(Arc::new(dt_builder.finish()) as ArrayRef);
-    *dt_builder = TimestampMillisecondBuilder::with_capacity(BATCH_SIZE);
+    *dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
 
     finish_and_reset_f64(deltat_builder, &mut arrays);
 
@@ -229,11 +229,7 @@ fn build_position_schema(
         }
     }
 
-    fields.push(Field::new(
-        "dateTime",
-        DataType::Timestamp(TimeUnit::Millisecond, None),
-        false,
-    ));
+    fields.push(Field::new("dateTime", DataType::Utf8, false));
 
     if show_inputs {
         fields.push(Field::new("deltaT", DataType::Float64, false));
@@ -315,22 +311,22 @@ fn write_sunrise_parquet<W: Write + Send>(
                         transit,
                         sunset,
                     } => {
-                        type_builder.append_value("RegularDay");
+                        type_builder.append_value("NORMAL");
                         append_time(&mut sunrise_builder, sunrise);
                         append_time(&mut transit_builder, transit);
                         append_time(&mut sunset_builder, sunset);
                     }
                     SunriseResult::AllDay { transit } => {
                         type_builder.append_value("AllDay");
-                        sunrise_builder.append_value("");
+                        sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
-                        sunset_builder.append_value("");
+                        sunset_builder.append_null();
                     }
                     SunriseResult::AllNight { transit } => {
                         type_builder.append_value("AllNight");
-                        sunrise_builder.append_value("");
+                        sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
-                        sunset_builder.append_value("");
+                        sunset_builder.append_null();
                     }
                 }
 
@@ -364,22 +360,22 @@ fn write_sunrise_parquet<W: Write + Send>(
                         transit,
                         sunset,
                     } => {
-                        type_builder.append_value("RegularDay");
+                        type_builder.append_value("NORMAL");
                         append_time(&mut sunrise_builder, sunrise);
                         append_time(&mut transit_builder, transit);
                         append_time(&mut sunset_builder, sunset);
                     }
                     SunriseResult::AllDay { transit } => {
                         type_builder.append_value("AllDay");
-                        sunrise_builder.append_value("");
+                        sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
-                        sunset_builder.append_value("");
+                        sunset_builder.append_null();
                     }
                     SunriseResult::AllNight { transit } => {
                         type_builder.append_value("AllNight");
-                        sunrise_builder.append_value("");
+                        sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
-                        sunset_builder.append_value("");
+                        sunset_builder.append_null();
                     }
                 }
 
@@ -391,8 +387,8 @@ fn write_sunrise_parquet<W: Write + Send>(
                         append_time(civil_end_builder.as_mut().unwrap(), sunset);
                     }
                     _ => {
-                        civil_start_builder.as_mut().unwrap().append_value("");
-                        civil_end_builder.as_mut().unwrap().append_value("");
+                        civil_start_builder.as_mut().unwrap().append_null();
+                        civil_end_builder.as_mut().unwrap().append_null();
                     }
                 }
 
@@ -404,8 +400,8 @@ fn write_sunrise_parquet<W: Write + Send>(
                         append_time(nautical_end_builder.as_mut().unwrap(), sunset);
                     }
                     _ => {
-                        nautical_start_builder.as_mut().unwrap().append_value("");
-                        nautical_end_builder.as_mut().unwrap().append_value("");
+                        nautical_start_builder.as_mut().unwrap().append_null();
+                        nautical_end_builder.as_mut().unwrap().append_null();
                     }
                 }
 
@@ -417,8 +413,8 @@ fn write_sunrise_parquet<W: Write + Send>(
                         append_time(astro_end_builder.as_mut().unwrap(), sunset);
                     }
                     _ => {
-                        astro_start_builder.as_mut().unwrap().append_value("");
-                        astro_end_builder.as_mut().unwrap().append_value("");
+                        astro_start_builder.as_mut().unwrap().append_null();
+                        astro_end_builder.as_mut().unwrap().append_null();
                     }
                 }
 

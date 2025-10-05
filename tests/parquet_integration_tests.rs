@@ -1,6 +1,7 @@
 #![cfg(feature = "parquet")]
 
 mod common;
+use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use common::*;
@@ -336,4 +337,222 @@ fn test_parquet_consistency_with_csv() {
 
     // Both formats should represent the same calculation results
     // (We can't easily compare exact values due to format differences, but structure should match)
+}
+
+#[test]
+fn test_parquet_timezone_preservation() {
+    // CRITICAL: Test that timezone information is preserved in parquet output
+    // This catches the bug where dateTime was stored as timestamp (UTC) instead of string with offset
+    let mut cmd = assert_cmd::Command::cargo_bin("sunce").unwrap();
+    cmd.env("TZ", "Europe/Berlin");
+    cmd.args([
+        "--format=PARQUET",
+        "52.0",
+        "13.4",
+        "2024-06-21T12:00:00",
+        "position",
+    ]);
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+
+    // Parse parquet
+    let bytes = Bytes::from(output);
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
+    let reader = builder.build().expect("Failed to build Parquet reader");
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to read batches");
+
+    let batch = &batches[0];
+    let datetime_col = batch
+        .column_by_name("dateTime")
+        .expect("Should have dateTime column");
+
+    // dateTime should be stored as string (Utf8) to preserve timezone
+    assert!(
+        matches!(datetime_col.data_type(), arrow::datatypes::DataType::Utf8),
+        "dateTime must be stored as string to preserve timezone, got: {:?}",
+        datetime_col.data_type()
+    );
+
+    // Verify the actual value contains timezone offset
+    let datetime_array = datetime_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("dateTime should be StringArray");
+    let datetime_value = datetime_array.value(0);
+
+    // Should contain +02:00 for Europe/Berlin in summer
+    assert!(
+        datetime_value.contains("+02:00"),
+        "dateTime should preserve timezone offset +02:00, got: {}",
+        datetime_value
+    );
+    assert_eq!(
+        datetime_value, "2024-06-21T12:00:00+02:00",
+        "dateTime should exactly match input with timezone"
+    );
+}
+
+#[test]
+fn test_parquet_sunrise_type_consistency() {
+    // Test that parquet sunrise type field uses "NORMAL" (consistent with CSV/JSON)
+    // not "RegularDay" (Rust enum variant name)
+    let output = SunceTest::new()
+        .args(["--format=PARQUET", "52.0", "13.4", "2024-06-21", "sunrise"])
+        .get_output();
+
+    assert!(output.status.success());
+
+    let bytes = Bytes::from(output.stdout);
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
+    let reader = builder.build().expect("Failed to build Parquet reader");
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to read batches");
+
+    let batch = &batches[0];
+    let type_col = batch
+        .column_by_name("type")
+        .expect("Should have type column");
+    let type_array = type_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("type should be StringArray");
+    let type_value = type_array.value(0);
+
+    // Should be "NORMAL" (consistent with CSV/JSON), not "RegularDay"
+    assert_eq!(
+        type_value, "NORMAL",
+        "type field should use 'NORMAL' for consistency with CSV/JSON formats"
+    );
+}
+
+#[test]
+fn test_parquet_sunrise_null_handling() {
+    // Test that AllDay/AllNight scenarios properly use null instead of empty strings
+    // for sunrise/sunset fields in parquet output
+    let output = SunceTest::new()
+        .args([
+            "--format=PARQUET",
+            "90.0", // North pole - AllDay in summer
+            "0.0",
+            "2024-06-21",
+            "sunrise",
+        ])
+        .get_output();
+
+    assert!(output.status.success());
+
+    let bytes = Bytes::from(output.stdout);
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
+    let reader = builder.build().expect("Failed to build Parquet reader");
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to read batches");
+
+    let batch = &batches[0];
+
+    // Verify type is AllDay
+    let type_col = batch
+        .column_by_name("type")
+        .expect("Should have type column");
+    let type_array = type_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("type should be StringArray");
+    let type_value = type_array.value(0);
+    assert_eq!(
+        type_value, "AllDay",
+        "Should be AllDay scenario at north pole in summer"
+    );
+
+    // Verify sunrise is null (not empty string)
+    let sunrise_col = batch
+        .column_by_name("sunrise")
+        .expect("Should have sunrise column");
+    let sunrise_array = sunrise_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("sunrise should be StringArray");
+    assert!(
+        sunrise_array.is_null(0),
+        "sunrise should be null (not empty string) for AllDay scenario"
+    );
+
+    // Verify sunset is null (not empty string)
+    let sunset_col = batch
+        .column_by_name("sunset")
+        .expect("Should have sunset column");
+    let sunset_array = sunset_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("sunset should be StringArray");
+    assert!(
+        sunset_array.is_null(0),
+        "sunset should be null (not empty string) for AllDay scenario"
+    );
+
+    // Verify transit is NOT null (always present)
+    let transit_col = batch
+        .column_by_name("transit")
+        .expect("Should have transit column");
+    let transit_array = transit_col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("transit should be StringArray");
+    assert!(!transit_array.is_null(0), "transit should never be null");
+}
+
+#[test]
+fn test_parquet_sunrise_twilight_null_handling() {
+    // Test that twilight times are properly null when not RegularDay
+    let output = SunceTest::new()
+        .args([
+            "--format=PARQUET",
+            "90.0", // North pole - AllDay in summer
+            "0.0",
+            "2024-06-21",
+            "sunrise",
+            "--twilight",
+        ])
+        .get_output();
+
+    assert!(output.status.success());
+
+    let bytes = Bytes::from(output.stdout);
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
+    let reader = builder.build().expect("Failed to build Parquet reader");
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to read batches");
+
+    let batch = &batches[0];
+
+    // Verify all twilight fields are null for AllDay scenario
+    for twilight_field in [
+        "civil_start",
+        "civil_end",
+        "nautical_start",
+        "nautical_end",
+        "astronomical_start",
+        "astronomical_end",
+    ] {
+        let col = batch
+            .column_by_name(twilight_field)
+            .unwrap_or_else(|| panic!("{} column should exist", twilight_field));
+        let array = col
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap_or_else(|| panic!("{} should be StringArray", twilight_field));
+        assert!(
+            array.is_null(0),
+            "{} should be null (not empty string) for AllDay scenario",
+            twilight_field
+        );
+    }
 }
