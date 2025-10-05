@@ -84,14 +84,14 @@ fn format_csv_position(
             if first && headers {
                 if show_inputs {
                     if params.elevation_angle {
-                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle\n");
+                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle\r\n");
                     } else {
-                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith\n");
+                        output.push_str("latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith\r\n");
                     }
                 } else if params.elevation_angle {
-                    output.push_str("dateTime,azimuth,elevation-angle\n");
+                    output.push_str("dateTime,azimuth,elevation-angle\r\n");
                 } else {
-                    output.push_str("dateTime,azimuth,zenith\n");
+                    output.push_str("dateTime,azimuth,zenith\r\n");
                 }
             }
 
@@ -104,7 +104,7 @@ fn format_csv_position(
 
             if show_inputs {
                 output.push_str(&format!(
-                    "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}\n",
+                    "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}\r\n",
                     lat,
                     lon,
                     params.elevation,
@@ -117,7 +117,7 @@ fn format_csv_position(
                 ));
             } else {
                 output.push_str(&format!(
-                    "{},{:.5},{:.5}\n",
+                    "{},{:.5},{:.5}\r\n",
                     datetime.to_rfc3339(),
                     position.azimuth(),
                     angle_value
@@ -148,10 +148,10 @@ fn format_csv_sunrise(
             if first && headers {
                 if show_inputs {
                     output.push_str(
-                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\n",
+                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\r\n",
                     );
                 } else {
-                    output.push_str("dateTime,type,sunrise,transit,sunset\n");
+                    output.push_str("dateTime,type,sunrise,transit,sunset\r\n");
                 }
             }
 
@@ -165,7 +165,7 @@ fn format_csv_sunrise(
 
             if show_inputs {
                 output.push_str(&format!(
-                    "{:.5},{:.5},{},{:.3},{},{},{},{}\n",
+                    "{:.5},{:.5},{},{:.3},{},{},{},{}\r\n",
                     lat,
                     lon,
                     date.to_rfc3339(),
@@ -177,7 +177,7 @@ fn format_csv_sunrise(
                 ));
             } else {
                 output.push_str(&format!(
-                    "{},{},{},{},{}\n",
+                    "{},{},{},{},{}\r\n",
                     date.format("%Y-%m-%d"),
                     type_str,
                     sunrise_str,
@@ -201,9 +201,9 @@ fn format_csv_sunrise(
 
             if first && headers {
                 if show_inputs {
-                    output.push_str("latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\n");
+                    output.push_str("latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n");
                 } else {
-                    output.push_str("dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\n");
+                    output.push_str("dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n");
                 }
             }
 
@@ -236,7 +236,7 @@ fn format_csv_sunrise(
 
             if show_inputs {
                 output.push_str(&format!(
-                    "{:.5},{:.5},{},{:.3},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{:.5},{:.5},{},{:.3},{},{},{},{},{},{},{},{},{},{}\r\n",
                     lat,
                     lon,
                     date.to_rfc3339(),
@@ -254,7 +254,7 @@ fn format_csv_sunrise(
                 ));
             } else {
                 output.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{}\r\n",
                     date.format("%Y-%m-%d"),
                     type_str,
                     sunrise_str,
