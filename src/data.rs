@@ -982,6 +982,9 @@ fn expand_partial_date(
 }
 
 fn parse_duration(s: &str) -> Option<Duration> {
+    if let Ok(num) = s.parse::<i64>() {
+        return Some(Duration::seconds(num));
+    }
     let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
     let num = num_str.parse::<i64>().ok()?;
     match unit {

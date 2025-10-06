@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+mod common;
+
 #[test]
 fn test_options_before_positionals() {
     Command::cargo_bin("sunce")
@@ -234,4 +236,54 @@ fn test_sunrise_with_options_anywhere() {
         ])
         .assert()
         .success();
+}
+
+#[test]
+fn test_step_without_unit() {
+    let output = Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01",
+            "position",
+            "--step=3600",
+            "--format=csv",
+            "--no-headers",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    assert_eq!(lines.len(), 24);
+    assert!(lines[0].contains("2024-01-01T00:00:00"));
+    assert!(lines[1].contains("2024-01-01T01:00:00"));
+}
+
+#[test]
+fn test_step_with_unit_still_works() {
+    let output = Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01",
+            "position",
+            "--step=1h",
+            "--format=csv",
+            "--no-headers",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    assert_eq!(lines.len(), 24);
+    assert!(lines[0].contains("2024-01-01T00:00:00"));
+    assert!(lines[1].contains("2024-01-01T01:00:00"));
 }

@@ -4,13 +4,13 @@
 
 ## Status
 
-This project *aims* to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos), but it's not quite there yet. While the core functionality is stable and decently tested with compatibility validation against solarpos, the tool hasn't seen much user testing (see [Contributing](#contributing) for how to help).
+This project aims to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos). It is under active development; while the core functionality is stable, some features are still being added and the command-line interface may change.
 
 ## Use cases
 
-- **Solar-energy operations** – compute sun angles and event times for panel tracking, production estimates, and scheduling.
-- **Astronomical and simulation tools** – provide precise solar positions for rendering and sky models.
-- **Geospatial processing** – integrate into GIS or ETL pipelines via command-line streaming and CSV/JSON output.
+- Solar-energy operations: compute sun angles and event times for panel tracking, production estimates, and scheduling.
+- Astronomical and simulation tools: provide precise solar positions for rendering and sky models.
+- Geospatial processing: integrate into GIS or ETL pipelines via command-line streaming and CSV/JSON output.
 
 See [https://github.com/klausbrunner/sunpath-r](https://github.com/klausbrunner/sunpath-r) for some example uses of `sunce` in R.
 
@@ -108,7 +108,7 @@ Run `sunce help` or `sunce help <command>` for the full reference.
 
 ## Performance
 
-`sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth.
+`sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth. In combined geographic sweeps and time series, the tool can generate several million records per second on a decently modern machine.
 
 ## License
 

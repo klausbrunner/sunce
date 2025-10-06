@@ -4,14 +4,13 @@ Sunce is a high-performance command-line solar position calculator written in Ru
 
 ## Module Structure
 
-The codebase consists of four core modules:
+The codebase consists of five core modules:
 
 - **main.rs**: Entry point, orchestrates the pipeline, handles errors
 - **data.rs**: CLI parsing, input expansion, timezone handling
 - **compute.rs**: Solar calculations with streaming and SPA caching
 - **output.rs**: Output formatting for CSV, JSON, text
 - **parquet.rs**: Output formatting for Parquet (optional feature)
-
 
 ## Command Structure
 
@@ -27,9 +26,9 @@ Both commands share the same input processing pipeline and support identical inp
 
 Input handling in `data.rs` supports three modes:
 
-**Separate inputs**: Latitude, longitude, and datetime specified as separate arguments. Each can be a single value, a range (start:end:step), or a file (@file.txt or @- for stdin).
+**Separate inputs**: Latitude, longitude, and datetime specified as separate arguments. Each can be a single value, a range (start:end:step), or a file (`@file.txt` or `@-` for stdin).
 
-**Paired file input**: Single file containing latitude, longitude, and datetime on each line. Uses @file.txt or @- for stdin.
+**Paired file input**: Single file containing latitude, longitude, and datetime on each line. Uses `@file.txt` or `@-` for stdin.
 
 **Special syntax**:
 
@@ -93,8 +92,6 @@ Timezone processing in `data.rs`:
 
 **DST handling**: All DST transitions handled correctly by chrono library.
 
-Calculations internally use UTC but results are formatted in the original timezone.
-
 ## Error Handling
 
 All errors are `String` types with user-facing messages. Errors are created inline with `format!()` macros and immediately displayed to stderr before exiting. No error recovery or structured error types are used since the application is a CLI tool that terminates on any error.
@@ -123,8 +120,8 @@ The entire pipeline maintains lazy evaluation. Nothing is materialized into memo
 
 **Profile settings**:
 
-- Release builds use LTO, single codegen unit, panic=abort
-- Most dependencies optimized for size (opt-level="z")
+- Release builds use LTO, single codegen unit, panic=abort, strip=true
+- Most dependencies optimized for balanced size/speed (opt-level="s")
 - Performance-critical crates optimized for speed (opt-level=3): sunce, solar-positioning, chrono, chrono-tz
 
 **Dependencies**:
@@ -136,7 +133,7 @@ The entire pipeline maintains lazy evaluation. Nothing is materialized into memo
 
 ## Testing
 
-Test suite includes approximately 118 tests:
+Test suite includes more than 170 tests:
 
 **Integration tests**: End-to-end CLI testing with `assert_cmd` and `predicates`
 **Critical tests**: Calculation accuracy against reference values
@@ -145,13 +142,12 @@ Test suite includes approximately 118 tests:
 **Parquet tests**: Schema and data validation using `bytes` crate
 **Twilight tests**: All horizon calculations and output formats
 
-All tests run with `TZ=UTC` environment variable to ensure timezone consistency.
+Tests run with explicit `TZ` environment variable to ensure timezone consistency.
 
 ## Performance Characteristics
 
-**Throughput**: ~1 million calculations/second (single-core) on standard smoke test
+**Throughput**: Over 1 million calculations/second (single-core) on standard smoke test
 **Memory**: Constant usage independent of input size
-**Startup**: Sub-100ms for simple calculations
 **Streaming**: Zero memory leaks with infinite inputs
 
 Standard smoke test: `sunce --perf --format=CSV --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null`
