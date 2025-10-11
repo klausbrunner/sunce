@@ -71,6 +71,46 @@ fn test_time_file_position() {
     assert_eq!(lines.len(), 4);
 }
 
+#[test]
+fn test_time_file_missing_errors() {
+    let dir = tempdir().unwrap();
+    let missing_file = dir.path().join("missing_times.txt");
+
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            &format!("@{}", missing_file.to_str().unwrap()),
+            "position",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Error opening"));
+}
+
+#[test]
+fn test_time_file_with_invalid_timestamp_errors() {
+    let dir = tempdir().unwrap();
+    let times_file = dir.path().join("bad_times.txt");
+
+    let mut file = File::create(&times_file).unwrap();
+    writeln!(file, "2024-06-21T12:00:00").unwrap();
+    writeln!(file, "not-a-timestamp").unwrap();
+
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            &format!("@{}", times_file.to_str().unwrap()),
+            "position",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bad_times.txt:2"));
+}
+
 /// Test paired data file input for position command
 #[test]
 fn test_paired_file_position() {

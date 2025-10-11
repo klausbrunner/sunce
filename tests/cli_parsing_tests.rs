@@ -88,13 +88,31 @@ fn test_global_and_command_options_mixed() {
             "--format=csv",
             "52.0",
             "13.4",
-            "2024-01-01T12:00:00",
+            "2024-01-01",
             "--step=1h",
             "position",
             "--no-headers",
         ])
         .assert()
         .success();
+}
+
+#[test]
+fn test_step_with_full_datetime_rejected() {
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "--step=1h",
+            "position",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Option --step requires date-only input",
+        ));
 }
 
 #[test]
@@ -210,7 +228,7 @@ fn test_all_position_options_anywhere() {
             "52.0",
             "--algorithm=grena3",
             "13.4",
-            "2024-01-01T12:00:00",
+            "2024-01-01",
             "--elevation=100.0",
             "position",
             "--temperature=20.0",

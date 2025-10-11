@@ -196,13 +196,13 @@ fn test_timezone_handling() {
 #[test]
 fn test_time_step_formats() {
     // Test seconds
-    time_series_test("2024-01-01T12:00:00", "30s").assert_success();
+    time_series_test("2024-01-01", "30s").assert_success();
 
     // Test minutes
-    time_series_test("2024-01-01T12:00:00", "15m").assert_success();
+    time_series_test("2024-01-01", "15m").assert_success();
 
     // Test hours
-    time_series_test("2024-01-01T12:00:00", "2h").assert_success();
+    time_series_test("2024-01-01", "2h").assert_success();
 
     // Test days
     time_series_test("2024-01", "7d").assert_success();

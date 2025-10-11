@@ -7,7 +7,7 @@ use chrono_tz::Tz;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 static SYSTEM_TIMEZONE: OnceLock<FixedOffset> = OnceLock::new();
 
@@ -439,14 +439,24 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> Result<TimeSource, Str
         return Ok(TimeSource::Now);
     }
 
-    if is_partial_date(time_str) || params.step.is_some() {
-        // Partial dates or any date with --step become time series
-        Ok(TimeSource::Range(time_str.to_string(), params.step.clone()))
-    } else {
-        // Validate that this is a valid datetime string before creating TimeSource::Single
-        parse_datetime_string(time_str, None)?;
-        Ok(TimeSource::Single(time_str.to_string()))
+    if is_partial_date(time_str) {
+        return Ok(TimeSource::Range(time_str.to_string(), params.step.clone()));
     }
+
+    if params.step.is_some() && is_date_without_time(time_str) {
+        return Ok(TimeSource::Range(time_str.to_string(), params.step.clone()));
+    }
+
+    if params.step.is_some() {
+        return Err(
+            "Option --step requires date-only input (YYYY, YYYY-MM, or YYYY-MM-DD) or 'now'"
+                .to_string(),
+        );
+    }
+
+    // Validate that this is a valid datetime string before creating TimeSource::Single
+    parse_datetime_string(time_str, None)?;
+    Ok(TimeSource::Single(time_str.to_string()))
 }
 
 fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, String> {
@@ -493,6 +503,16 @@ fn is_partial_date(s: &str) -> bool {
     false
 }
 
+fn is_date_without_time(s: &str) -> bool {
+    s.len() == 10
+        && s.matches('-').count() == 2
+        && !s.contains('T')
+        && !s.contains(' ')
+        && s.chars()
+            .enumerate()
+            .all(|(idx, c)| matches!(idx, 4 | 7) || c.is_ascii_digit())
+}
+
 fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {
     match source {
         DataSource::Separate(loc, time) => {
@@ -503,15 +523,7 @@ fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {
             let has_time_file = matches!(time, TimeSource::File(_));
 
             // Special case: position command with YYYY-MM-DD date (no time) expands to time series
-            let is_position_date_series = match time {
-                TimeSource::Single(s) => {
-                    command == Command::Position
-                        && s.len() == 10
-                        && s.matches('-').count() == 2
-                        && !s.contains('T')
-                }
-                _ => false,
-            };
+            let is_position_date_series = matches!(time, TimeSource::Single(s) if command == Command::Position && is_date_without_time(s));
 
             has_location_range
                 || has_location_file
@@ -552,18 +564,21 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
 
                 if lat_count <= lon_count {
                     // Collect latitudes (smaller), iterate longitudes
-                    let lat_coords: Vec<f64> = lat_iter.collect();
+                    let lat_coords = Arc::new(lat_iter.collect::<Vec<f64>>());
                     Box::new(
                         coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
-                            lat_coords.clone().into_iter().map(move |lat| (lat, lon))
+                            let lat_coords = Arc::clone(&lat_coords);
+                            (0..lat_coords.len()).map(move |idx| (lat_coords[idx], lon))
                         }),
                     )
                 } else {
                     // Collect longitudes (smaller), iterate latitudes
-                    let lon_coords: Vec<f64> =
-                        coord_range_iter(lon_start, lon_end, lon_step).collect();
+                    let lon_coords = Arc::new(
+                        coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<f64>>(),
+                    );
                     Box::new(lat_iter.flat_map(move |lat| {
-                        lon_coords.clone().into_iter().map(move |lon| (lat, lon))
+                        let lon_coords = Arc::clone(&lon_coords);
+                        (0..lon_coords.len()).map(move |idx| (lat, lon_coords[idx]))
                     }))
                 }
             } else {
@@ -1000,16 +1015,45 @@ fn read_times_file(
     input_path: InputPath,
     override_tz: Option<String>,
 ) -> impl Iterator<Item = DateTime<FixedOffset>> {
-    match open_input(&input_path) {
-        Ok(reader) => Box::new(reader.lines().filter_map(move |line| {
-            if let Ok(line) = line {
-                parse_datetime_string(line.trim(), override_tz.as_deref()).ok()
-            } else {
-                None
+    let path_display = match &input_path {
+        InputPath::Stdin => "stdin".to_string(),
+        InputPath::File(p) => p.display().to_string(),
+    };
+
+    let reader = match open_input(&input_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error opening {}: {}", path_display, e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut line_num = 0;
+
+    Box::new(reader.lines().filter_map(move |line_result| {
+        line_num += 1;
+
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
+                std::process::exit(1);
             }
-        })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>,
-        Err(_) => Box::new(std::iter::empty()) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>,
-    }
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return None;
+        }
+
+        match parse_datetime_string(trimmed, override_tz.as_deref()) {
+            Ok(dt) => Some(dt),
+            Err(e) => {
+                eprintln!("Error: {}:{}: {}", path_display, line_num, e);
+                std::process::exit(1);
+            }
+        }
+    })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>
 }
 
 pub fn expand_cartesian_product(
@@ -1029,33 +1073,25 @@ pub fn expand_cartesian_product(
 
     if is_loc_single && !is_time_single {
         // Single location, multiple times - stream times
-        let locs: Vec<(f64, f64)> = expand_location_source(loc_source).collect();
+        let locs = Arc::new(expand_location_source(loc_source).collect::<Vec<(f64, f64)>>());
         Box::new(
             expand_time_source(time_source, step, override_tz, command).flat_map(move |dt| {
-                locs.clone()
-                    .into_iter()
-                    .map(move |(lat, lon)| (lat, lon, dt))
+                let locs = Arc::clone(&locs);
+                (0..locs.len()).map(move |idx| {
+                    let (lat, lon) = locs[idx];
+                    (lat, lon, dt)
+                })
             }),
         )
-    } else if !is_loc_single && is_time_single {
-        // Multiple locations, single time - stream locations
-        let times: Vec<DateTime<FixedOffset>> =
-            expand_time_source(time_source, step, override_tz, command).collect();
-        Box::new(expand_location_source(loc_source).flat_map(move |coord| {
-            times
-                .clone()
-                .into_iter()
-                .map(move |dt| (coord.0, coord.1, dt))
-        }))
     } else {
-        // Both ranges or both single - materialize times (typically smaller)
-        let times: Vec<DateTime<FixedOffset>> =
-            expand_time_source(time_source, step, override_tz, command).collect();
+        // Materialize times so they can be reused for each location
+        let times = Arc::new(
+            expand_time_source(time_source, step, override_tz, command)
+                .collect::<Vec<DateTime<FixedOffset>>>(),
+        );
         Box::new(expand_location_source(loc_source).flat_map(move |coord| {
-            times
-                .clone()
-                .into_iter()
-                .map(move |dt| (coord.0, coord.1, dt))
+            let times = Arc::clone(&times);
+            (0..times.len()).map(move |idx| (coord.0, coord.1, times[idx]))
         }))
     }
 }

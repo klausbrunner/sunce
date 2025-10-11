@@ -425,3 +425,181 @@ fn test_unicode_in_error_messages() {
         .args([&format!("@{}", unicode_path.display()), "position"])
         .assert_failure();
 }
+
+#[test]
+fn test_negative_coordinates_position() {
+    // Sydney, Australia (negative latitude)
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "-33.8688",
+            "151.2093",
+            "2024-06-21T12:00:00",
+            "position",
+        ])
+        .assert_success();
+
+    // Buenos Aires, Argentina (negative latitude and longitude)
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "-34.6037",
+            "-58.3816",
+            "2024-12-21T12:00:00",
+            "position",
+        ])
+        .assert_success();
+
+    // West of Prime Meridian (negative longitude only)
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "40.7128",
+            "-74.0060",
+            "2024-03-20T12:00:00",
+            "position",
+        ])
+        .assert_success();
+}
+
+#[test]
+fn test_negative_coordinates_sunrise() {
+    // Sydney, Australia - should have winter sunrise/sunset
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "-33.8688",
+            "151.2093",
+            "2024-06-21",
+            "sunrise",
+        ])
+        .assert_success();
+
+    // Buenos Aires, Argentina - should have summer sunrise/sunset
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "-34.6037",
+            "-58.3816",
+            "2024-12-21",
+            "sunrise",
+        ])
+        .assert_success();
+
+    // Cape Town, South Africa (negative latitude)
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "--no-headers",
+            "-33.9249",
+            "18.4241",
+            "2024-01-15",
+            "sunrise",
+        ])
+        .assert_success();
+}
+
+#[test]
+fn test_negative_longitude_range() {
+    // Test longitude range from positive to negative (crossing Prime Meridian)
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+
+    cmd.args([
+        "--format=csv",
+        "--no-headers",
+        "51.5",
+        "-5:5:2.5",
+        "2024-06-21T12:00:00",
+        "position",
+    ]);
+
+    let output = cmd.output().expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "Should handle longitude range crossing Prime Meridian"
+    );
+
+    // Expected: longitude -5, -2.5, 0, 2.5, 5 (5 values)
+    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
+    assert_eq!(line_count, 5, "Should produce 5 longitude points");
+}
+
+#[test]
+fn test_negative_latitude_range_southern_hemisphere() {
+    // Test latitude range entirely in southern hemisphere
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+
+    cmd.args([
+        "--format=csv",
+        "--no-headers",
+        "-40:-30:5",
+        "150",
+        "2024-12-21T12:00:00",
+        "position",
+    ]);
+
+    let output = cmd.output().expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "Should handle negative latitude range"
+    );
+
+    // Expected: latitude -40, -35, -30 (3 values)
+    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
+    assert_eq!(line_count, 3, "Should produce 3 latitude points");
+}
+
+#[test]
+fn test_both_coordinate_ranges_crossing_zero() {
+    // Test both coordinates crossing zero simultaneously
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+
+    cmd.args([
+        "--format=csv",
+        "--no-headers",
+        "-2:2:2",
+        "-2:2:2",
+        "2024-06-21T12:00:00",
+        "position",
+    ]);
+
+    let output = cmd.output().expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "Should handle both coordinates crossing zero"
+    );
+
+    // Expected: lat -2, 0, 2 (3 values) × lon -2, 0, 2 (3 values) = 9 combinations
+    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
+    assert_eq!(line_count, 9, "Should produce 3x3 grid");
+}
+
+#[test]
+fn test_extreme_negative_coordinates() {
+    // Test near south pole
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "-89.5",
+            "0",
+            "2024-12-21T12:00:00",
+            "position",
+        ])
+        .assert_success();
+
+    // Test date line crossing with negative coordinates
+    SunceTest::new()
+        .args([
+            "--format=csv",
+            "-45.0",
+            "-179.9",
+            "2024-06-21T12:00:00",
+            "position",
+        ])
+        .assert_success();
+}
