@@ -38,6 +38,8 @@ Input handling in `data.rs` supports three modes:
 - Unix timestamps: integer values interpreted as seconds since epoch
 - Keyword `now`: current system time
 
+All step values must be strictly positive. When combining `now` with `--step`, only a single location may be supplied so the iterator remains bounded per location.
+
 The parser uses manual string processing without external CLI frameworks. All parsing produces lazy iterators.
 
 ## Streaming Architecture
@@ -52,7 +54,7 @@ The application implements true streaming with constant memory usage:
 
 **Immediate output**: First result appears as soon as first calculation completes, not after processing all inputs.
 
-This design handles infinite coordinate ranges and endless time series without memory growth. Performance exceeds 1 million calculations per second on modern hardware.
+This design handles large coordinate ranges and long-running time series without memory growth. Watch mode (`now` + `--step`) streams indefinitely for a single location; attempts to combine it with multiple locations are rejected up front to prevent unbounded buffering. Performance exceeds 1 million calculations per second on modern hardware.
 
 ## Calculation Layer
 
@@ -65,6 +67,8 @@ The `compute.rs` module wraps the `solar-positioning` library:
 **SPA caching**: Partial SPA calculation results are cached when processing multiple positions for the same datetime, significantly improving performance for time series.
 
 **Result types**: Enum variants distinguish between position results and sunrise results (with/without twilight).
+
+All calculations return `Result` values, allowing iterator consumers to surface errors (e.g., invalid refraction parameters) without panicking.
 
 ## Output Formatting
 
@@ -94,9 +98,9 @@ Timezone processing in `data.rs`:
 
 ## Error Handling
 
-All errors are `String` types with user-facing messages. Errors are created inline with `format!()` macros and immediately displayed to stderr before exiting. No error recovery or structured error types are used since the application is a CLI tool that terminates on any error.
+All errors are `String` types with user-facing messages. Iterator stages produce `Result` items so downstream consumers (CLI output) can report failures without panicking. Errors are created inline with `format!()` macros; the CLI prints them to stderr and exits.
 
-Common error cases include invalid coordinates, malformed datetimes, file I/O failures, and invalid command-line arguments.
+Common error cases include invalid coordinates, malformed datetimes, DST gaps in partial date expansions, invalid refraction parameters, file I/O failures, and invalid command-line arguments.
 
 ## Data Flow
 

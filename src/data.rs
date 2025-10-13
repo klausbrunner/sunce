@@ -44,6 +44,103 @@ pub enum DataSource {
     Paired(InputPath),
 }
 
+pub type CoordTime = (f64, f64, DateTime<FixedOffset>);
+pub type CoordTimeResult = Result<CoordTime, String>;
+pub type CoordTimeStream = Box<dyn Iterator<Item = CoordTimeResult>>;
+
+struct CoordRepeat {
+    coords: Arc<Vec<(f64, f64)>>,
+    index: usize,
+    dt: DateTime<FixedOffset>,
+}
+
+impl CoordRepeat {
+    fn new(coords: Arc<Vec<(f64, f64)>>, dt: DateTime<FixedOffset>) -> Self {
+        Self {
+            coords,
+            index: 0,
+            dt,
+        }
+    }
+}
+
+impl Iterator for CoordRepeat {
+    type Item = CoordTimeResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (lat, lon) = self.coords.get(self.index).copied()?;
+        self.index += 1;
+        Some(Ok((lat, lon, self.dt)))
+    }
+}
+
+struct TimeStepIter {
+    tz: TimezoneInfo,
+    next: Option<DateTime<FixedOffset>>,
+    end: DateTime<FixedOffset>,
+    step: Duration,
+}
+
+impl TimeStepIter {
+    fn new(
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+        step: Duration,
+        tz: TimezoneInfo,
+    ) -> Self {
+        Self {
+            tz,
+            next: Some(start),
+            end,
+            step,
+        }
+    }
+}
+
+impl Iterator for TimeStepIter {
+    type Item = DateTime<FixedOffset>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.next?;
+        let candidate = self
+            .tz
+            .to_datetime_from_utc(&(current.naive_utc() + self.step));
+
+        self.next = if candidate <= self.end {
+            Some(candidate)
+        } else {
+            None
+        };
+
+        Some(current)
+    }
+}
+
+pub struct TimeStream {
+    iter: Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>,
+    bounded: bool,
+}
+
+impl TimeStream {
+    fn new<I>(iter: I, bounded: bool) -> Self
+    where
+        I: Iterator<Item = Result<DateTime<FixedOffset>, String>> + 'static,
+    {
+        Self {
+            iter: Box::new(iter),
+            bounded,
+        }
+    }
+
+    fn is_bounded(&self) -> bool {
+        self.bounded
+    }
+
+    fn into_iter(self) -> Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>> {
+        self.iter
+    }
+}
+
 impl DataSource {
     pub fn uses_stdin(&self) -> bool {
         match self {
@@ -183,7 +280,10 @@ pub fn parse_cli(args: Vec<String>) -> Result<(DataSource, Command, Parameters),
                         }
                         params.algorithm = algo_lower;
                     }
-                    "step" => params.step = Some(value.to_string()),
+                    "step" => {
+                        validate_step_value(value)?;
+                        params.step = Some(value.to_string())
+                    }
                     "elevation" => {
                         params.elevation = value
                             .parse::<f64>()
@@ -840,54 +940,36 @@ pub fn expand_time_source(
     step_override: Option<String>,
     override_tz: Option<String>,
     command: Command,
-) -> Box<dyn Iterator<Item = DateTime<FixedOffset>>> {
+) -> Result<TimeStream, String> {
     match source {
         TimeSource::Single(dt_str) => {
-            // For position command, treat YYYY-MM-DD as time series (24 hours)
-            if command == Command::Position
-                && dt_str.len() == 10
-                && dt_str.matches('-').count() == 2
-                && !dt_str.contains('T')
-            {
+            let is_date_only =
+                dt_str.len() == 10 && dt_str.matches('-').count() == 2 && !dt_str.contains('T');
+            if command == Command::Position && is_date_only {
                 let step = step_override.unwrap_or_else(|| "1h".to_string());
-                Box::new(expand_partial_date(dt_str, step, override_tz.clone()))
+                expand_partial_date(dt_str, step, override_tz)
             } else {
-                let dt = parse_datetime_string(&dt_str, override_tz.as_deref());
-                match dt {
-                    Ok(dt) => Box::new(std::iter::once(dt)),
-                    Err(_) => Box::new(std::iter::empty()),
-                }
+                let dt = parse_datetime_string(&dt_str, override_tz.as_deref())?;
+                Ok(TimeStream::new(std::iter::once(Ok(dt)), true))
             }
         }
         TimeSource::Range(partial_date, step_opt) => {
-            // Expand into time series with appropriate step
             let step = step_override.or(step_opt).unwrap_or_else(|| {
-                // Sunrise always daily (sunrise times don't change hourly)
-                // Position with year is also daily, but year-month defaults to hourly
                 if command == Command::Sunrise || partial_date.len() == 4 {
                     "1d".to_string()
                 } else {
                     "1h".to_string()
                 }
             });
-
-            Box::new(expand_partial_date(partial_date, step, override_tz.clone()))
+            expand_partial_date(partial_date, step, override_tz)
         }
-        TimeSource::File(path) => Box::new(read_times_file(path, override_tz.clone())),
+        TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
             let local_tz = get_local_timezone(override_tz.as_deref());
-
             if let Some(step_str) = step_override {
-                let step_duration = parse_duration(&step_str).unwrap_or_else(|| {
-                    eprintln!(
-                        "Error: Invalid step format: '{}'. Expected format: <number><unit> where unit is s, m, h, or d (e.g., 1h, 30m, 1d)",
-                        step_str
-                    );
-                    std::process::exit(1);
-                });
-
+                let step_duration = parse_duration_positive(&step_str)?;
                 let mut first = true;
-                Box::new(std::iter::from_fn(move || {
+                let iter = std::iter::from_fn(move || {
                     if !std::mem::take(&mut first) {
                         std::thread::sleep(
                             step_duration
@@ -895,165 +977,234 @@ pub fn expand_time_source(
                                 .unwrap_or(std::time::Duration::from_secs(1)),
                         );
                     }
-                    Some(Utc::now().with_timezone(&local_tz))
-                }))
+                    Some(Ok(Utc::now().with_timezone(&local_tz)))
+                });
+                Ok(TimeStream::new(iter, false))
             } else {
-                Box::new(std::iter::once(Utc::now().with_timezone(&local_tz)))
+                Ok(TimeStream::new(
+                    std::iter::once(Ok(Utc::now().with_timezone(&local_tz))),
+                    true,
+                ))
             }
         }
     }
+}
+
+struct NaiveBounds {
+    start: NaiveDateTime,
+    end: NaiveDateTime,
+}
+
+fn naive_bounds_from_partial(date_str: &str) -> Result<NaiveBounds, String> {
+    let to_day_bounds = |date: NaiveDate| -> NaiveBounds {
+        let start = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight must be constructible");
+        let end = date
+            .and_hms_opt(23, 59, 59)
+            .expect("end-of-day must be constructible");
+        NaiveBounds { start, end }
+    };
+
+    let parse_year = |value: &str| {
+        value
+            .parse::<i32>()
+            .map_err(|_| format!("Invalid year value: '{}'", value))
+    };
+
+    let parse_month = |value: &str| {
+        value
+            .parse::<u32>()
+            .map_err(|_| format!("Invalid month value: '{}'", value))
+    };
+
+    let parse_day = |value: &str| {
+        value
+            .parse::<u32>()
+            .map_err(|_| format!("Invalid day value: '{}'", value))
+    };
+
+    match date_str.len() {
+        4 => {
+            let year = parse_year(date_str)?;
+            let start = NaiveDate::from_ymd_opt(year, 1, 1)
+                .ok_or_else(|| format!("Invalid start of year for {}", date_str))?;
+            let end = NaiveDate::from_ymd_opt(year, 12, 31)
+                .ok_or_else(|| format!("Invalid end of year for {}", date_str))?;
+            Ok(NaiveBounds {
+                start: to_day_bounds(start).start,
+                end: to_day_bounds(end).end,
+            })
+        }
+        7 => {
+            let (year_str, month_str) = date_str
+                .split_once('-')
+                .ok_or_else(|| format!("Invalid year-month format: '{}'", date_str))?;
+            let year = parse_year(year_str)?;
+            let month = parse_month(month_str)?;
+            let start = NaiveDate::from_ymd_opt(year, month, 1)
+                .ok_or_else(|| format!("Invalid start date for {}", date_str))?;
+            let (next_year, next_month) = if month == 12 {
+                (year + 1, 1)
+            } else {
+                (year, month + 1)
+            };
+            let end = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+                .and_then(|d| d.pred_opt())
+                .ok_or_else(|| format!("Cannot determine end date for {}", date_str))?;
+            Ok(NaiveBounds {
+                start: to_day_bounds(start).start,
+                end: to_day_bounds(end).end,
+            })
+        }
+        10 => {
+            let parts: Vec<_> = date_str.split('-').collect();
+            if parts.len() != 3 {
+                return Err(format!(
+                    "Invalid full date format: '{}'. Expected YYYY-MM-DD",
+                    date_str
+                ));
+            }
+            let date = NaiveDate::from_ymd_opt(
+                parse_year(parts[0])?,
+                parse_month(parts[1])?,
+                parse_day(parts[2])?,
+            )
+            .ok_or_else(|| format!("Invalid date: '{}'", date_str))?;
+            Ok(to_day_bounds(date))
+        }
+        _ => Err(format!(
+            "Unsupported date format: '{}'. Use YYYY, YYYY-MM, or YYYY-MM-DD",
+            date_str
+        )),
+    }
+}
+
+fn to_local_datetime(
+    tz_info: &TimezoneInfo,
+    naive: NaiveDateTime,
+    label: &str,
+    original: &str,
+) -> Result<DateTime<FixedOffset>, String> {
+    tz_info.to_datetime_from_local(&naive).ok_or_else(|| {
+        format!(
+            "{} time does not exist in timezone (likely DST gap): {}",
+            label, original
+        )
+    })
 }
 
 fn expand_partial_date(
     date_str: String,
     step: String,
     override_tz: Option<String>,
-) -> Box<dyn Iterator<Item = DateTime<FixedOffset>>> {
-    let step_duration = parse_duration(&step).unwrap_or_else(|| {
-        eprintln!(
-            "Error: Invalid step format: '{}'. Expected format: <number><unit> where unit is s, m, h, or d (e.g., 1h, 30m, 1d)",
-            step
-        );
-        std::process::exit(1);
-    });
-
+) -> Result<TimeStream, String> {
+    let step_duration = parse_duration_positive(&step)?;
     let tz_info = get_timezone_info(override_tz.as_deref());
+    let bounds = naive_bounds_from_partial(&date_str)?;
 
-    let to_naive_range = |date: NaiveDate| {
-        (
-            date.and_hms_opt(0, 0, 0)
-                .expect("Midnight creation cannot fail"),
-            date.and_hms_opt(23, 59, 59)
-                .expect("End of day creation cannot fail"),
-        )
-    };
+    let start_dt = to_local_datetime(&tz_info, bounds.start, "Start", &date_str)?;
+    let end_dt = to_local_datetime(&tz_info, bounds.end, "End", &date_str)?;
 
-    let (start_naive, end_naive) = match date_str.len() {
-        4 => {
-            let year = date_str
-                .parse::<i32>()
-                .expect("Year must be valid 4-digit integer");
-            (
-                to_naive_range(
-                    NaiveDate::from_ymd_opt(year, 1, 1).expect("Year start must be valid"),
-                )
-                .0,
-                to_naive_range(
-                    NaiveDate::from_ymd_opt(year, 12, 31).expect("Year end must be valid"),
-                )
-                .1,
-            )
-        }
-        7 => {
-            let (year_str, month_str) = date_str.split_once('-').expect("Invalid month format");
-            let (year, month) = (
-                year_str.parse::<i32>().expect("Year must be valid integer"),
-                month_str
-                    .parse::<u32>()
-                    .expect("Month must be valid integer"),
-            );
-            let start_date =
-                NaiveDate::from_ymd_opt(year, month, 1).expect("Month start must be valid");
-            let next_month_date = if month == 12 {
-                NaiveDate::from_ymd_opt(year + 1, 1, 1)
-            } else {
-                NaiveDate::from_ymd_opt(year, month + 1, 1)
-            }
-            .expect("Next month must be valid");
-            let end_date = next_month_date.pred_opt().expect("Previous day must exist");
+    let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(Ok);
 
-            (to_naive_range(start_date).0, to_naive_range(end_date).1)
-        }
-        10 => {
-            let parts: Vec<_> = date_str.split('-').collect();
-            let date = NaiveDate::from_ymd_opt(
-                parts[0].parse().expect("Year must be valid"),
-                parts[1].parse().expect("Month must be valid"),
-                parts[2].parse().expect("Day must be valid"),
-            )
-            .expect("Date must be valid");
-            to_naive_range(date)
-        }
-        _ => return Box::new(std::iter::empty()),
-    };
-
-    let to_local_or_exit = |naive: NaiveDateTime, desc: &str| {
-        tz_info.to_datetime_from_local(&naive).unwrap_or_else(|| {
-            eprintln!(
-                "Error: {} time does not exist in timezone (likely DST gap): {}",
-                desc, date_str
-            );
-            std::process::exit(1);
-        })
-    };
-
-    let start_dt = to_local_or_exit(start_naive, "Start");
-    let end_dt = to_local_or_exit(end_naive, "End");
-
-    Box::new(std::iter::successors(Some(start_dt), move |current_dt| {
-        let next_dt = tz_info.to_datetime_from_utc(&(current_dt.naive_utc() + step_duration));
-        (next_dt <= end_dt).then_some(next_dt)
-    })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>
+    Ok(TimeStream::new(iter, true))
 }
 
-fn parse_duration(s: &str) -> Option<Duration> {
-    if let Ok(num) = s.parse::<i64>() {
-        return Some(Duration::seconds(num));
+fn parse_duration_positive(s: &str) -> Result<Duration, String> {
+    let ensure_positive = |num: i64| {
+        if num <= 0 {
+            Err(format!("Step must be positive, got '{}'", s))
+        } else {
+            Ok(num)
+        }
+    };
+
+    if let Ok(raw_seconds) = s.parse::<i64>() {
+        let seconds = ensure_positive(raw_seconds)?;
+        return Ok(Duration::seconds(seconds));
     }
-    let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
-    let num = num_str.parse::<i64>().ok()?;
-    match unit {
-        "s" => Some(Duration::seconds(num)),
-        "m" => Some(Duration::minutes(num)),
-        "h" => Some(Duration::hours(num)),
-        "d" => Some(Duration::days(num)),
-        _ => None,
+
+    if s.len() < 2 {
+        return Err(format!(
+            "Invalid step format: '{}'. Expected <number><unit> such as 1h or 30m",
+            s
+        ));
     }
+
+    let (num_str, unit) = s.split_at(s.len() - 1);
+    let value = num_str.parse::<i64>().map_err(|_| {
+        format!(
+            "Invalid step value in '{}'. Use an integer before the unit (e.g., 15m)",
+            s
+        )
+    })?;
+    let positive = ensure_positive(value)?;
+
+    let duration = match unit {
+        "s" => Duration::seconds(positive),
+        "m" => Duration::minutes(positive),
+        "h" => Duration::hours(positive),
+        "d" => Duration::days(positive),
+        _ => {
+            return Err(format!(
+                "Invalid step unit in '{}'. Supported units: s, m, h, d",
+                s
+            ));
+        }
+    };
+
+    Ok(duration)
+}
+
+fn validate_step_value(step: &str) -> Result<(), String> {
+    parse_duration_positive(step).map(|_| ())
 }
 
 fn read_times_file(
     input_path: InputPath,
     override_tz: Option<String>,
-) -> impl Iterator<Item = DateTime<FixedOffset>> {
+) -> Result<TimeStream, String> {
     let path_display = match &input_path {
         InputPath::Stdin => "stdin".to_string(),
         InputPath::File(p) => p.display().to_string(),
     };
 
-    let reader = match open_input(&input_path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error opening {}: {}", path_display, e);
-            std::process::exit(1);
-        }
-    };
+    let reader =
+        open_input(&input_path).map_err(|e| format!("Error opening {}: {}", path_display, e))?;
 
-    let mut line_num = 0;
+    let mut lines = reader.lines().enumerate();
+    let tz_override = override_tz.clone();
 
-    Box::new(reader.lines().filter_map(move |line_result| {
-        line_num += 1;
+    let iter = std::iter::from_fn(move || {
+        for (idx, line_result) in lines.by_ref() {
+            let line_number = idx + 1;
+            let line = match line_result {
+                Ok(value) => value,
+                Err(err) => {
+                    return Some(Err(format!(
+                        "{}:{}: failed to read line: {}",
+                        path_display, line_number, err
+                    )));
+                }
+            };
 
-        let line = match line_result {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
-                std::process::exit(1);
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
             }
-        };
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            return None;
-        }
-
-        match parse_datetime_string(trimmed, override_tz.as_deref()) {
-            Ok(dt) => Some(dt),
-            Err(e) => {
-                eprintln!("Error: {}:{}: {}", path_display, line_num, e);
-                std::process::exit(1);
+            match parse_datetime_string(trimmed, tz_override.as_deref()) {
+                Ok(dt) => return Some(Ok(dt)),
+                Err(err) => {
+                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
+                }
             }
         }
-    })) as Box<dyn Iterator<Item = DateTime<FixedOffset>>>
+        None
+    });
+
+    Ok(TimeStream::new(iter, true))
 }
 
 pub fn expand_cartesian_product(
@@ -1062,112 +1213,116 @@ pub fn expand_cartesian_product(
     step: Option<String>,
     override_tz: Option<String>,
     command: Command,
-) -> Box<dyn Iterator<Item = (f64, f64, DateTime<FixedOffset>)>> {
-    // For single location + time range: materialize locations (1 item), stream times
-    // For location range + single time: materialize times (1 item), stream locations
-    // For both ranges: estimate sizes and materialize the smaller one
-
+) -> Result<CoordTimeStream, String> {
     let is_loc_single = matches!(loc_source, LocationSource::Single(_, _));
     let is_time_single = matches!(time_source, TimeSource::Single(_))
         || (matches!(time_source, TimeSource::Now) && step.is_none());
 
+    let time_stream = expand_time_source(time_source, step, override_tz, command)?;
+
     if is_loc_single && !is_time_single {
-        // Single location, multiple times - stream times
         let locs = Arc::new(expand_location_source(loc_source).collect::<Vec<(f64, f64)>>());
-        Box::new(
-            expand_time_source(time_source, step, override_tz, command).flat_map(move |dt| {
-                let locs = Arc::clone(&locs);
-                (0..locs.len()).map(move |idx| {
-                    let (lat, lon) = locs[idx];
-                    (lat, lon, dt)
-                })
-            }),
-        )
+        let iter = time_stream.into_iter().flat_map(move |time_result| {
+            let locs = Arc::clone(&locs);
+            match time_result {
+                Ok(dt) => Box::new(CoordRepeat::new(locs, dt))
+                    as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            }
+        });
+        Ok(Box::new(iter))
     } else {
-        // Materialize times so they can be reused for each location
-        let times = Arc::new(
-            expand_time_source(time_source, step, override_tz, command)
-                .collect::<Vec<DateTime<FixedOffset>>>(),
-        );
-        Box::new(expand_location_source(loc_source).flat_map(move |coord| {
+        if !time_stream.is_bounded() {
+            return Err(
+                "Cannot use an unbounded time stream with multiple locations. Drop --step or choose a single location when combining 'now' with streaming."
+                    .to_string(),
+            );
+        }
+
+        let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
+        let iter = expand_location_source(loc_source).flat_map(move |coord| {
             let times = Arc::clone(&times);
-            (0..times.len()).map(move |idx| (coord.0, coord.1, times[idx]))
-        }))
+            (0..times.len()).map(move |idx| Ok((coord.0, coord.1, times[idx])))
+        });
+        Ok(Box::new(iter))
     }
 }
 
 pub fn expand_paired_file(
     input_path: InputPath,
     override_tz: Option<String>,
-) -> Box<dyn Iterator<Item = (f64, f64, DateTime<FixedOffset>)>> {
+) -> Result<CoordTimeStream, String> {
     let path_display = match &input_path {
         InputPath::Stdin => "stdin".to_string(),
         InputPath::File(p) => p.display().to_string(),
     };
 
-    let reader = match open_input(&input_path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error opening {}: {}", path_display, e);
-            std::process::exit(1);
+    let reader =
+        open_input(&input_path).map_err(|e| format!("Error opening {}: {}", path_display, e))?;
+
+    let mut lines = reader.lines().enumerate();
+    let tz_override = override_tz.clone();
+
+    let iter = std::iter::from_fn(move || {
+        for (idx, line_result) in lines.by_ref() {
+            let line_number = idx + 1;
+            let line = match line_result {
+                Ok(value) => value,
+                Err(err) => {
+                    return Some(Err(format!(
+                        "{}:{}: failed to read line: {}",
+                        path_display, line_number, err
+                    )));
+                }
+            };
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts = parse_delimited_line(&line);
+            if parts.len() < 3 {
+                return Some(Err(format!(
+                    "{}:{}: expected 3 fields (lat lon datetime), found {}",
+                    path_display,
+                    line_number,
+                    parts.len()
+                )));
+            }
+
+            let lat = match parts[0].trim().parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Some(Err(format!(
+                        "{}:{}: invalid latitude '{}'",
+                        path_display, line_number, parts[0]
+                    )));
+                }
+            };
+
+            let lon = match parts[1].trim().parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    return Some(Err(format!(
+                        "{}:{}: invalid longitude '{}'",
+                        path_display, line_number, parts[1]
+                    )));
+                }
+            };
+
+            let dt_str = parts[2..].join(" ");
+            match parse_datetime_string(dt_str.trim(), tz_override.as_deref()) {
+                Ok(dt) => return Some(Ok((lat, lon, dt))),
+                Err(err) => {
+                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
+                }
+            }
         }
-    };
+        None
+    });
 
-    let mut line_num = 0;
-
-    Box::new(reader.lines().filter_map(move |line_result| {
-        line_num += 1;
-
-        let line = match line_result {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
-                std::process::exit(1);
-            }
-        };
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            return None;
-        }
-
-        let parts = parse_delimited_line(&line);
-        if parts.len() < 3 {
-            eprintln!(
-                "Error: line {}: expected 3 fields (lat lon datetime), found {}",
-                line_num,
-                parts.len()
-            );
-            std::process::exit(1);
-        }
-
-        let lat: f64 = match parts[0].trim().parse() {
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!("Error: line {}: invalid latitude '{}'", line_num, parts[0]);
-                std::process::exit(1);
-            }
-        };
-
-        let lon: f64 = match parts[1].trim().parse() {
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!("Error: line {}: invalid longitude '{}'", line_num, parts[1]);
-                std::process::exit(1);
-            }
-        };
-
-        let dt_str = parts[2..].join(" ").trim().to_string();
-        let dt = match parse_datetime_string(&dt_str, override_tz.as_deref()) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Error: line {}: {}", line_num, e);
-                std::process::exit(1);
-            }
-        };
-
-        Some((lat, lon, dt))
-    }))
+    Ok(Box::new(iter))
 }
 
 fn get_version_text() -> String {

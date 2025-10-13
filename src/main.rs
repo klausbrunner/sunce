@@ -32,7 +32,11 @@ fn main() {
                 DataSource::Paired(path) => {
                     data::expand_paired_file(path.clone(), params.timezone.clone())
                 }
-            };
+            }
+            .unwrap_or_else(|err| {
+                eprintln!("Error: {}", err);
+                std::process::exit(1);
+            });
 
             // Calculate results
             let results = compute::calculate_stream(data_iter, command, params.clone());

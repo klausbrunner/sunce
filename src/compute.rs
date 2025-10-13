@@ -1,9 +1,11 @@
 //! Solar position calculations with streaming architecture and SPA caching.
 
-use crate::data::{Command, Parameters};
+use crate::data::{Command, CoordTimeStream, Parameters};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::{self, SolarPosition};
 use std::collections::HashMap;
+
+type CalculationStream = Box<dyn Iterator<Item = Result<CalculationResult, String>>>;
 
 // Result types for calculations
 #[derive(Debug, Clone)]
@@ -50,7 +52,15 @@ pub fn calculate_position(
     });
 
     let refraction = if params.refraction {
-        Some(RefractionCorrection::new(params.pressure, params.temperature).unwrap())
+        match RefractionCorrection::new(params.pressure, params.temperature) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                return Err(format!(
+                    "Invalid refraction parameters (pressure={}, temperature={}): {}",
+                    params.pressure, params.temperature, err
+                ));
+            }
+        }
     } else {
         None
     };
@@ -94,15 +104,32 @@ pub fn calculate_sunrise(
             Horizon::AstronomicalTwilight,
         ];
 
-        let mut results: Vec<_> =
+        let results: Vec<_> =
             solar_positioning::spa::sunrise_sunset_multiple(dt, lat, lon, deltat, horizons)
                 .map(|r| r.map_err(|e| format!("Failed to calculate twilight: {}", e)))
                 .collect::<Result<Vec<_>, _>>()?;
 
-        let astronomical = results.pop().expect("Missing astronomical twilight").1;
-        let nautical = results.pop().expect("Missing nautical twilight").1;
-        let civil = results.pop().expect("Missing civil twilight").1;
-        let sunrise_sunset = results.pop().expect("Missing sunrise/sunset").1;
+        if results.len() != 4 {
+            return Err("Failed to calculate twilight: incomplete result set".to_string());
+        }
+
+        let mut iter = results.into_iter();
+        let sunrise_sunset = iter
+            .next()
+            .ok_or_else(|| "Missing sunrise/sunset result".to_string())?
+            .1;
+        let civil = iter
+            .next()
+            .ok_or_else(|| "Missing civil twilight result".to_string())?
+            .1;
+        let nautical = iter
+            .next()
+            .ok_or_else(|| "Missing nautical twilight result".to_string())?
+            .1;
+        let astronomical = iter
+            .next()
+            .ok_or_else(|| "Missing astronomical twilight result".to_string())?
+            .1;
 
         Ok(CalculationResult::SunriseWithTwilight {
             lat,
@@ -136,10 +163,10 @@ pub fn calculate_sunrise(
 
 // Apply calculations to a stream of data points
 pub fn calculate_stream(
-    data: Box<dyn Iterator<Item = (f64, f64, DateTime<FixedOffset>)>>,
+    data: CoordTimeStream,
     command: Command,
     params: Parameters,
-) -> Box<dyn Iterator<Item = Result<CalculationResult, String>>> {
+) -> CalculationStream {
     match command {
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
@@ -150,25 +177,52 @@ pub fn calculate_stream(
 
                 // Cache for time-dependent SPA calculations
                 // Key must be the original DateTime with timezone to handle different TZ correctly
-                let mut time_cache: HashMap<DateTime<FixedOffset>, (spa::SpaTimeDependent, f64)> =
-                    HashMap::new();
+                let mut time_cache: HashMap<
+                    DateTime<FixedOffset>,
+                    Result<(spa::SpaTimeDependent, f64), String>,
+                > = HashMap::new();
 
-                Box::new(data.map(move |(lat, lon, dt)| {
+                Box::new(data.map(move |item| {
+                    let (lat, lon, dt) = match item {
+                        Ok(values) => values,
+                        Err(err) => return Err(err),
+                    };
+
                     // Get or compute time-dependent parts (cached for same timestamp WITH timezone)
-                    let (time_parts, deltat) = time_cache.entry(dt).or_insert_with(|| {
+                    let entry = time_cache.entry(dt).or_insert_with(|| {
                         let deltat = params
                             .deltat
                             .unwrap_or_else(|| DeltaT::estimate_from_date_like(dt).unwrap_or(0.0));
-                        let parts = spa::spa_time_dependent_parts(dt, deltat)
-                            .expect("Failed to calculate time-dependent parts");
-                        (parts, deltat)
+                        match spa::spa_time_dependent_parts(dt, deltat) {
+                            Ok(parts) => Ok((parts, deltat)),
+                            Err(err) => Err(format!(
+                                "Failed to calculate time-dependent parts: {}",
+                                err
+                            )),
+                        }
                     });
+
+                    if let Err(err) = entry {
+                        return Err(err.clone());
+                    }
+
+                    let (time_parts, stored_deltat) = match entry.as_ref() {
+                        Ok((parts, deltat)) => (parts, deltat),
+                        Err(_) => unreachable!("entry error already returned"),
+                    };
+                    let deltat = *stored_deltat;
 
                     // Calculate position using cached time parts
                     let refraction = if params.refraction {
-                        Some(
-                            RefractionCorrection::new(params.pressure, params.temperature).unwrap(),
-                        )
+                        match RefractionCorrection::new(params.pressure, params.temperature) {
+                            Ok(value) => Some(value),
+                            Err(err) => {
+                                return Err(format!(
+                                    "Invalid refraction parameters (pressure={}, temperature={}): {}",
+                                    params.pressure, params.temperature, err
+                                ))
+                            }
+                        }
                     } else {
                         None
                     };
@@ -189,16 +243,20 @@ pub fn calculate_stream(
                         lon,
                         datetime: dt,
                         position,
-                        deltat: *deltat, // Use the stored deltaT
+                        deltat, // Use the stored deltaT
                     })
                 }))
             } else {
                 // Regular calculation for non-SPA or when optimization isn't beneficial
-                Box::new(data.map(move |(lat, lon, dt)| calculate_position(lat, lon, dt, &params)))
+                Box::new(data.map(move |item| match item {
+                    Ok((lat, lon, dt)) => calculate_position(lat, lon, dt, &params),
+                    Err(err) => Err(err),
+                }))
             }
         }
-        Command::Sunrise => {
-            Box::new(data.map(move |(lat, lon, dt)| calculate_sunrise(lat, lon, dt, &params)))
-        }
+        Command::Sunrise => Box::new(data.map(move |item| match item {
+            Ok((lat, lon, dt)) => calculate_sunrise(lat, lon, dt, &params),
+            Err(err) => Err(err),
+        })),
     }
 }

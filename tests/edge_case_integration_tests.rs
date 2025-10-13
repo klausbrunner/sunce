@@ -99,6 +99,18 @@ fn test_year_long_time_series_memory() {
 }
 
 #[test]
+fn test_unbounded_watch_requires_single_location() {
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args(["52:53:1", "13.4", "now", "--step=1m", "position"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Cannot use an unbounded time stream",
+        ));
+}
+
+#[test]
 fn test_streaming_with_head_command() {
     // Test that output streams properly and can be interrupted with head
     let mut child = StdCommand::new("cargo")

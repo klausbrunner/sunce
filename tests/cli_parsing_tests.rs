@@ -116,6 +116,16 @@ fn test_step_with_full_datetime_rejected() {
 }
 
 #[test]
+fn test_negative_step_rejected() {
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args(["52.0", "13.4", "2024-01-01", "--step=-1h", "position"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Step must be positive"));
+}
+
+#[test]
 fn test_invalid_option_for_position_command() {
     Command::cargo_bin("sunce")
         .unwrap()
@@ -163,6 +173,40 @@ fn test_algorithm_invalid_for_sunrise() {
         .stderr(predicate::str::contains(
             "--algorithm not valid for sunrise",
         ));
+}
+
+#[test]
+fn test_invalid_timezone_datetime_surfaces_error() {
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "40.0",
+            "-74.0",
+            "2024-03-10T02:30:00",
+            "--timezone=America/New_York",
+            "position",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Datetime does not exist in timezone",
+        ));
+}
+
+#[test]
+fn test_invalid_refraction_inputs_surface_error() {
+    Command::cargo_bin("sunce")
+        .unwrap()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+            "--pressure=-10",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid refraction parameters"));
 }
 
 #[test]
