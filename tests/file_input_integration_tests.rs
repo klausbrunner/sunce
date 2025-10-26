@@ -716,6 +716,37 @@ fn test_single_coordinates_with_time_files() {
     assert_eq!(lines.len(), 3);
 }
 
+/// Coordinate file + stdin times should stream without buffering all timestamps
+#[test]
+fn test_coordinate_file_with_stdin_times() {
+    let dir = tempdir().unwrap();
+    let coords_file = dir.path().join("coords.txt");
+
+    let mut coords = File::create(&coords_file).unwrap();
+    writeln!(coords, "52.0,13.4").unwrap();
+    writeln!(coords, "40.42,-3.70").unwrap();
+
+    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    cmd.env("TZ", "UTC").args([
+        "--format=CSV",
+        &format!("@{}", coords_file.to_str().unwrap()),
+        "@-",
+        "position",
+    ]);
+    cmd.write_stdin("2024-06-21T12:00:00\n2024-06-21T18:00:00\n");
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let output_str = String::from_utf8(output).unwrap();
+
+    // Two coordinates × two timestamps → four data rows + header
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 5);
+    assert!(output_str.contains("52.00000,13.40000"));
+    assert!(output_str.contains("40.42000,-3.70000"));
+    assert!(output_str.contains("2024-06-21T12:00:00"));
+    assert!(output_str.contains("2024-06-21T18:00:00"));
+}
+
 /// Test mixed ranges (lat range, lon single) with time files
 #[test]
 fn test_mixed_coordinate_ranges_with_time_files() {

@@ -1214,27 +1214,27 @@ pub fn expand_cartesian_product(
     override_tz: Option<String>,
     command: Command,
 ) -> Result<CoordTimeStream, String> {
-    let is_loc_single = matches!(loc_source, LocationSource::Single(_, _));
     let is_time_single = matches!(time_source, TimeSource::Single(_))
         || (matches!(time_source, TimeSource::Now) && step.is_none());
+    let location_from_stdin = matches!(loc_source, LocationSource::File(InputPath::Stdin));
+    let is_loc_single = matches!(loc_source, LocationSource::Single(_, _));
 
     let time_stream = expand_time_source(time_source, step, override_tz, command)?;
+    let is_time_bounded = time_stream.is_bounded();
 
-    if is_loc_single && !is_time_single {
-        let locs = Arc::new(expand_location_source(loc_source).collect::<Vec<(f64, f64)>>());
-        let iter = time_stream.into_iter().flat_map(move |time_result| {
-            let locs = Arc::clone(&locs);
-            match time_result {
-                Ok(dt) => Box::new(CoordRepeat::new(locs, dt))
-                    as Box<dyn Iterator<Item = CoordTimeResult>>,
-                Err(err) => Box::new(std::iter::once(Err(err))),
-            }
+    if is_time_single {
+        let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
+        let iter = expand_location_source(loc_source).flat_map(move |coord| {
+            let times = Arc::clone(&times);
+            (0..times.len()).map(move |idx| Ok((coord.0, coord.1, times[idx])))
         });
-        Ok(Box::new(iter))
-    } else {
-        if !time_stream.is_bounded() {
+        return Ok(Box::new(iter));
+    }
+
+    if location_from_stdin {
+        if !is_time_bounded {
             return Err(
-                "Cannot use an unbounded time stream with multiple locations. Drop --step or choose a single location when combining 'now' with streaming."
+                "Cannot combine coordinate stdin input with unbounded time stream. Supply explicit times or use paired input."
                     .to_string(),
             );
         }
@@ -1244,8 +1244,44 @@ pub fn expand_cartesian_product(
             let times = Arc::clone(&times);
             (0..times.len()).map(move |idx| Ok((coord.0, coord.1, times[idx])))
         });
-        Ok(Box::new(iter))
+        return Ok(Box::new(iter));
     }
+
+    if !is_time_bounded && !is_loc_single {
+        return Err(
+            "Cannot use an unbounded time stream with multiple locations. Drop --step or choose a single location when combining 'now' with streaming."
+                .to_string(),
+        );
+    }
+
+    let location_cache: Option<Arc<Vec<(f64, f64)>>> = match &loc_source {
+        LocationSource::Single(lat, lon) => Some(Arc::new(vec![(*lat, *lon)])),
+        LocationSource::File(InputPath::File(_)) => {
+            let coords = expand_location_source(loc_source.clone()).collect::<Vec<_>>();
+            Some(Arc::new(coords))
+        }
+        _ => None,
+    };
+
+    let loc_source_for_iter = loc_source;
+    let iter = time_stream
+        .into_iter()
+        .flat_map(move |time_result| match time_result {
+            Ok(dt) => {
+                if let Some(cache) = location_cache.as_ref() {
+                    Box::new(CoordRepeat::new(Arc::clone(cache), dt))
+                        as Box<dyn Iterator<Item = CoordTimeResult>>
+                } else {
+                    let locations = expand_location_source(loc_source_for_iter.clone());
+                    Box::new(locations.map(move |(lat, lon)| Ok((lat, lon, dt))))
+                        as Box<dyn Iterator<Item = CoordTimeResult>>
+                }
+            }
+            Err(err) => {
+                Box::new(std::iter::once(Err(err))) as Box<dyn Iterator<Item = CoordTimeResult>>
+            }
+        });
+    Ok(Box::new(iter))
 }
 
 pub fn expand_paired_file(
