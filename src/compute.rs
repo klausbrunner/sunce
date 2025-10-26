@@ -2,6 +2,8 @@
 
 use crate::data::{Command, CoordTimeStream, Parameters};
 use chrono::{DateTime, FixedOffset};
+use solar_positioning::RefractionCorrection;
+use solar_positioning::time::DeltaT;
 use solar_positioning::{self, SolarPosition};
 use std::collections::HashMap;
 
@@ -36,6 +38,27 @@ pub enum CalculationResult {
     },
 }
 
+fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
+    params
+        .deltat
+        .unwrap_or_else(|| DeltaT::estimate_from_date_like(dt).unwrap_or(0.0))
+}
+
+fn refraction_correction(params: &Parameters) -> Result<Option<RefractionCorrection>, String> {
+    if params.refraction {
+        RefractionCorrection::new(params.pressure, params.temperature)
+            .map(Some)
+            .map_err(|err| {
+                format!(
+                    "Invalid refraction parameters (pressure={}, temperature={}): {}",
+                    params.pressure, params.temperature, err
+                )
+            })
+    } else {
+        Ok(None)
+    }
+}
+
 // Calculate solar position for a single point
 pub fn calculate_position(
     lat: f64,
@@ -43,27 +66,8 @@ pub fn calculate_position(
     dt: DateTime<FixedOffset>,
     params: &Parameters,
 ) -> Result<CalculationResult, String> {
-    use solar_positioning::RefractionCorrection;
-    use solar_positioning::time::DeltaT;
-
-    let deltat = params.deltat.unwrap_or_else(|| {
-        // Auto-estimate based on year
-        DeltaT::estimate_from_date_like(dt).unwrap_or(0.0)
-    });
-
-    let refraction = if params.refraction {
-        match RefractionCorrection::new(params.pressure, params.temperature) {
-            Ok(value) => Some(value),
-            Err(err) => {
-                return Err(format!(
-                    "Invalid refraction parameters (pressure={}, temperature={}): {}",
-                    params.pressure, params.temperature, err
-                ));
-            }
-        }
-    } else {
-        None
-    };
+    let deltat = resolve_deltat(dt, params);
+    let refraction = refraction_correction(params)?;
 
     let position = if params.algorithm == "grena3" {
         solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
@@ -90,11 +94,8 @@ pub fn calculate_sunrise(
     params: &Parameters,
 ) -> Result<CalculationResult, String> {
     use solar_positioning::Horizon;
-    use solar_positioning::time::DeltaT;
 
-    let deltat = params
-        .deltat
-        .unwrap_or_else(|| DeltaT::estimate_from_date_like(dt).unwrap_or(0.0));
+    let deltat = resolve_deltat(dt, params);
 
     if params.twilight {
         let horizons = vec![
@@ -104,32 +105,24 @@ pub fn calculate_sunrise(
             Horizon::AstronomicalTwilight,
         ];
 
-        let results: Vec<_> =
+        let results =
             solar_positioning::spa::sunrise_sunset_multiple(dt, lat, lon, deltat, horizons)
                 .map(|r| r.map_err(|e| format!("Failed to calculate twilight: {}", e)))
                 .collect::<Result<Vec<_>, _>>()?;
 
-        if results.len() != 4 {
+        let mut iter = results.into_iter().map(|(_, result)| result);
+        let Some(sunrise_sunset) = iter.next() else {
             return Err("Failed to calculate twilight: incomplete result set".to_string());
-        }
-
-        let mut iter = results.into_iter();
-        let sunrise_sunset = iter
-            .next()
-            .ok_or_else(|| "Missing sunrise/sunset result".to_string())?
-            .1;
-        let civil = iter
-            .next()
-            .ok_or_else(|| "Missing civil twilight result".to_string())?
-            .1;
-        let nautical = iter
-            .next()
-            .ok_or_else(|| "Missing nautical twilight result".to_string())?
-            .1;
-        let astronomical = iter
-            .next()
-            .ok_or_else(|| "Missing astronomical twilight result".to_string())?
-            .1;
+        };
+        let Some(civil) = iter.next() else {
+            return Err("Failed to calculate twilight: incomplete result set".to_string());
+        };
+        let Some(nautical) = iter.next() else {
+            return Err("Failed to calculate twilight: incomplete result set".to_string());
+        };
+        let Some(astronomical) = iter.next() else {
+            return Err("Failed to calculate twilight: incomplete result set".to_string());
+        };
 
         Ok(CalculationResult::SunriseWithTwilight {
             lat,
@@ -171,9 +164,7 @@ pub fn calculate_stream(
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
             if params.algorithm == "spa" {
-                use solar_positioning::RefractionCorrection;
                 use solar_positioning::spa;
-                use solar_positioning::time::DeltaT;
 
                 // Cache for time-dependent SPA calculations
                 // Key must be the original DateTime with timezone to handle different TZ correctly
@@ -183,80 +174,49 @@ pub fn calculate_stream(
                 > = HashMap::new();
 
                 Box::new(data.map(move |item| {
-                    let (lat, lon, dt) = match item {
-                        Ok(values) => values,
-                        Err(err) => return Err(err),
-                    };
+                    item.and_then(|(lat, lon, dt)| {
+                        let entry = time_cache.entry(dt).or_insert_with(|| {
+                            let deltat = resolve_deltat(dt, &params);
+                            spa::spa_time_dependent_parts(dt, deltat)
+                                .map(|parts| (parts, deltat))
+                                .map_err(|err| {
+                                    format!("Failed to calculate time-dependent parts: {}", err)
+                                })
+                        });
 
-                    // Get or compute time-dependent parts (cached for same timestamp WITH timezone)
-                    let entry = time_cache.entry(dt).or_insert_with(|| {
-                        let deltat = params
-                            .deltat
-                            .unwrap_or_else(|| DeltaT::estimate_from_date_like(dt).unwrap_or(0.0));
-                        match spa::spa_time_dependent_parts(dt, deltat) {
-                            Ok(parts) => Ok((parts, deltat)),
-                            Err(err) => Err(format!(
-                                "Failed to calculate time-dependent parts: {}",
-                                err
-                            )),
-                        }
-                    });
+                        let (time_parts, deltat) = match entry {
+                            Ok((parts, deltat)) => (parts, *deltat),
+                            Err(err) => return Err(err.clone()),
+                        };
 
-                    if let Err(err) = entry {
-                        return Err(err.clone());
-                    }
+                        let refraction = refraction_correction(&params)?;
+                        let position = spa::spa_with_time_dependent_parts(
+                            lat,
+                            lon,
+                            params.elevation,
+                            refraction,
+                            time_parts,
+                        )
+                        .map_err(|e| format!("Failed to calculate solar position: {}", e))?;
 
-                    let (time_parts, stored_deltat) = match entry.as_ref() {
-                        Ok((parts, deltat)) => (parts, deltat),
-                        Err(_) => unreachable!("entry error already returned"),
-                    };
-                    let deltat = *stored_deltat;
-
-                    // Calculate position using cached time parts
-                    let refraction = if params.refraction {
-                        match RefractionCorrection::new(params.pressure, params.temperature) {
-                            Ok(value) => Some(value),
-                            Err(err) => {
-                                return Err(format!(
-                                    "Invalid refraction parameters (pressure={}, temperature={}): {}",
-                                    params.pressure, params.temperature, err
-                                ))
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    let position = match spa::spa_with_time_dependent_parts(
-                        lat,
-                        lon,
-                        params.elevation,
-                        refraction,
-                        time_parts,
-                    ) {
-                        Ok(pos) => pos,
-                        Err(e) => return Err(format!("Failed to calculate solar position: {}", e)),
-                    };
-
-                    Ok(CalculationResult::Position {
-                        lat,
-                        lon,
-                        datetime: dt,
-                        position,
-                        deltat, // Use the stored deltaT
+                        Ok(CalculationResult::Position {
+                            lat,
+                            lon,
+                            datetime: dt,
+                            position,
+                            deltat,
+                        })
                     })
                 }))
             } else {
                 // Regular calculation for non-SPA or when optimization isn't beneficial
-                Box::new(data.map(move |item| match item {
-                    Ok((lat, lon, dt)) => calculate_position(lat, lon, dt, &params),
-                    Err(err) => Err(err),
+                Box::new(data.map(move |item| {
+                    item.and_then(|(lat, lon, dt)| calculate_position(lat, lon, dt, &params))
                 }))
             }
         }
-        Command::Sunrise => Box::new(data.map(move |item| match item {
-            Ok((lat, lon, dt)) => calculate_sunrise(lat, lon, dt, &params),
-            Err(err) => Err(err),
+        Command::Sunrise => Box::new(data.map(move |item| {
+            item.and_then(|(lat, lon, dt)| calculate_sunrise(lat, lon, dt, &params))
         })),
     }
 }

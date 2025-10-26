@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.3.4-dev"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.90"
 description = "High-performance command-line solar position calculator"
@@ -30,8 +30,8 @@ path = "src/main.rs"
 chrono = "0.4"
 chrono-tz = "0.10"
 solar-positioning = "0.4"
-arrow = { version = "56", default-features = false, optional = true }
-parquet = { version = "56", features = ["arrow", "snap"], default-features = false, optional = true }
+arrow = { version = "57", default-features = false, optional = true }
+parquet = { version = "57", features = ["arrow", "snap"], default-features = false, optional = true }
 
 [features]
 default = ["parquet"]
