@@ -301,10 +301,21 @@ fn write_json_position<W: std::io::Write>(
             position,
             deltat,
         } => {
+            let angle_label = if params.elevation_angle {
+                "elevation"
+            } else {
+                "zenith"
+            };
+            let angle_value = if params.elevation_angle {
+                90.0 - position.zenith_angle()
+            } else {
+                position.zenith_angle()
+            };
+
             if show_inputs {
                 writeln!(
                     writer,
-                    r#"{{"latitude":{},"longitude":{},"elevation":{},"pressure":{},"temperature":{},"dateTime":"{}","deltaT":{},"azimuth":{},"zenith":{}}}"#,
+                    r#"{{"latitude":{},"longitude":{},"elevation":{},"pressure":{},"temperature":{},"dateTime":"{}","deltaT":{},"azimuth":{},"{}":{}}}"#,
                     lat,
                     lon,
                     params.elevation,
@@ -313,15 +324,17 @@ fn write_json_position<W: std::io::Write>(
                     datetime.to_rfc3339(),
                     deltat,
                     position.azimuth(),
-                    position.zenith_angle()
+                    angle_label,
+                    angle_value
                 )
             } else {
                 writeln!(
                     writer,
-                    r#"{{"dateTime":"{}","azimuth":{},"zenith":{}}}"#,
+                    r#"{{"dateTime":"{}","azimuth":{},"{}":{}}}"#,
                     datetime.to_rfc3339(),
                     position.azimuth(),
-                    position.zenith_angle()
+                    angle_label,
+                    angle_value
                 )
             }
         }

@@ -5,9 +5,15 @@ use chrono::{DateTime, FixedOffset};
 use solar_positioning::RefractionCorrection;
 use solar_positioning::time::DeltaT;
 use solar_positioning::{self, SolarPosition};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 type CalculationStream = Box<dyn Iterator<Item = Result<CalculationResult, String>>>;
+
+const TIME_CACHE_CAPACITY: usize = 2048;
+type SpaTimeParts = Arc<solar_positioning::spa::SpaTimeDependent>;
+type SpaCacheValue = Result<(SpaTimeParts, f64), String>;
+type SpaCache = HashMap<DateTime<FixedOffset>, SpaCacheValue>;
 
 // Result types for calculations
 #[derive(Debug, Clone)]
@@ -154,39 +160,74 @@ pub fn calculate_sunrise(
     }
 }
 
+fn time_cache_get(
+    cache: &mut SpaCache,
+    order: &mut VecDeque<DateTime<FixedOffset>>,
+    capacity: usize,
+    dt: DateTime<FixedOffset>,
+    params: &Parameters,
+) -> Result<(SpaTimeParts, f64), String> {
+    if let Some(existing) = cache.get(&dt) {
+        order.push_back(dt);
+        return match existing {
+            Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
+            Err(err) => Err(err.clone()),
+        };
+    }
+
+    while cache.len() >= capacity {
+        match order.pop_front() {
+            Some(oldest) if cache.remove(&oldest).is_some() => break,
+            Some(_) => continue,
+            None => break,
+        }
+    }
+
+    let entry = cache.entry(dt).or_insert_with(|| {
+        let deltat = resolve_deltat(dt, params);
+        solar_positioning::spa::spa_time_dependent_parts(dt, deltat)
+            .map(|parts| (Arc::new(parts), deltat))
+            .map_err(|err| format!("Failed to calculate time-dependent parts: {}", err))
+    });
+
+    order.push_back(dt);
+
+    match entry {
+        Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
+        Err(err) => Err(err.clone()),
+    }
+}
+
 // Apply calculations to a stream of data points
 pub fn calculate_stream(
     data: CoordTimeStream,
     command: Command,
     params: Parameters,
+    allow_time_cache: bool,
 ) -> CalculationStream {
     match command {
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
-            if params.algorithm == "spa" {
+            if params.algorithm == "spa" && allow_time_cache {
                 use solar_positioning::spa;
 
                 // Cache for time-dependent SPA calculations
                 // Key must be the original DateTime with timezone to handle different TZ correctly
-                let mut time_cache: HashMap<
-                    DateTime<FixedOffset>,
-                    Result<(spa::SpaTimeDependent, f64), String>,
-                > = HashMap::new();
+                let mut time_cache: SpaCache = HashMap::new();
+                let mut time_cache_order: VecDeque<DateTime<FixedOffset>> = VecDeque::new();
+                let params = params.clone();
 
                 Box::new(data.map(move |item| {
                     item.and_then(|(lat, lon, dt)| {
-                        let entry = time_cache.entry(dt).or_insert_with(|| {
-                            let deltat = resolve_deltat(dt, &params);
-                            spa::spa_time_dependent_parts(dt, deltat)
-                                .map(|parts| (parts, deltat))
-                                .map_err(|err| {
-                                    format!("Failed to calculate time-dependent parts: {}", err)
-                                })
-                        });
-
-                        let (time_parts, deltat) = match entry {
-                            Ok((parts, deltat)) => (parts, *deltat),
-                            Err(err) => return Err(err.clone()),
+                        let (time_parts, deltat) = match time_cache_get(
+                            &mut time_cache,
+                            &mut time_cache_order,
+                            TIME_CACHE_CAPACITY,
+                            dt,
+                            &params,
+                        ) {
+                            Ok(value) => value,
+                            Err(err) => return Err(err),
                         };
 
                         let refraction = refraction_correction(&params)?;
@@ -195,7 +236,7 @@ pub fn calculate_stream(
                             lon,
                             params.elevation,
                             refraction,
-                            time_parts,
+                            time_parts.as_ref(),
                         )
                         .map_err(|e| format!("Failed to calculate solar position: {}", e))?;
 
@@ -210,6 +251,7 @@ pub fn calculate_stream(
                 }))
             } else {
                 // Regular calculation for non-SPA or when optimization isn't beneficial
+                let params = params.clone();
                 Box::new(data.map(move |item| {
                     item.and_then(|(lat, lon, dt)| calculate_position(lat, lon, dt, &params))
                 }))
@@ -218,5 +260,46 @@ pub fn calculate_stream(
         Command::Sunrise => Box::new(data.map(move |item| {
             item.and_then(|(lat, lon, dt)| calculate_sunrise(lat, lon, dt, &params))
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn spa_time_cache_enforces_capacity() {
+        let mut cache: SpaCache = HashMap::new();
+        let mut order = VecDeque::new();
+        let params = Parameters::default();
+        let tz = FixedOffset::east_opt(0).unwrap();
+
+        for minute in 0..10 {
+            let dt = tz.with_ymd_and_hms(2024, 1, 1, 0, minute, 0).unwrap();
+            time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        }
+
+        assert!(
+            cache.len() <= 3,
+            "cache len {} exceeded capacity",
+            cache.len()
+        );
+    }
+
+    #[test]
+    fn spa_time_cache_reuses_existing_entry() {
+        let mut cache: SpaCache = HashMap::new();
+        let mut order = VecDeque::new();
+        let mut params = Parameters::default();
+        params.deltat = Some(0.0);
+
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+
+        let first = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        let second = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+
+        assert!(Arc::ptr_eq(&first.0, &second.0));
     }
 }

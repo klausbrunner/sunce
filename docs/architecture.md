@@ -64,7 +64,7 @@ The `compute.rs` module wraps the `solar-positioning` library:
 
 **Sunrise calculations**: Iterative refinement algorithm from NREL Appendix A.2. Supports standard horizon (-0.833°) plus civil (-6°), nautical (-12°), astronomical (-18°), and custom horizons.
 
-**SPA caching**: Partial SPA calculation results are cached when processing multiple positions for the same datetime, significantly improving performance for time series.
+**SPA caching**: Partial SPA calculation results are cached when processing multiple positions for the same datetime, significantly improving performance for time series. The cache uses an LRU eviction policy to keep memory usage bounded even for long-running streams.
 
 **Result types**: Enum variants distinguish between position results and sunrise results (with/without twilight).
 

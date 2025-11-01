@@ -39,7 +39,9 @@ fn main() {
             });
 
             // Calculate results
-            let results = compute::calculate_stream(data_iter, command, params.clone());
+            let allow_time_cache = !source.is_watch_mode(&params.step);
+            let results =
+                compute::calculate_stream(data_iter, command, params.clone(), allow_time_cache);
 
             // Write output in appropriate format
             let record_count = if params.format.to_uppercase() == "PARQUET" {

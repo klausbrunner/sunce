@@ -47,6 +47,13 @@ pub enum DataSource {
 pub type CoordTime = (f64, f64, DateTime<FixedOffset>);
 pub type CoordTimeResult = Result<CoordTime, String>;
 pub type CoordTimeStream = Box<dyn Iterator<Item = CoordTimeResult>>;
+type LocationResult = Result<(f64, f64), String>;
+type LocationStream = Box<dyn Iterator<Item = LocationResult>>;
+
+fn repeat_times(lat: f64, lon: f64, times: Arc<Vec<DateTime<FixedOffset>>>) -> CoordTimeStream {
+    let len = times.len();
+    Box::new((0..len).map(move |idx| Ok((lat, lon, times[idx]))))
+}
 
 struct CoordRepeat {
     coords: Arc<Vec<(f64, f64)>>,
@@ -650,41 +657,42 @@ fn coord_range_iter(start: f64, end: f64, step: f64) -> Box<dyn Iterator<Item = 
     }
 }
 
-pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item = (f64, f64)>> {
+pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, String> {
     match source {
-        LocationSource::Single(lat, lon) => Box::new(std::iter::once((lat, lon))),
+        LocationSource::Single(lat, lon) => Ok(Box::new(std::iter::once(Ok((lat, lon))))),
         LocationSource::Range { lat, lon } => {
             let lat_iter = coord_range_iter(lat.0, lat.1, lat.2);
 
-            if let Some((lon_start, lon_end, lon_step)) = lon {
-                // Create a vector for one dimension to allow repeated iteration
-                // Choose the smaller dimension to minimize memory usage
-                let lat_count = ((lat.1 - lat.0) / lat.2 + 1.0) as usize;
-                let lon_count = ((lon_end - lon_start) / lon_step + 1.0) as usize;
-
-                if lat_count <= lon_count {
-                    // Collect latitudes (smaller), iterate longitudes
-                    let lat_coords = Arc::new(lat_iter.collect::<Vec<f64>>());
-                    Box::new(
-                        coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
-                            let lat_coords = Arc::clone(&lat_coords);
-                            (0..lat_coords.len()).map(move |idx| (lat_coords[idx], lon))
-                        }),
-                    )
-                } else {
-                    // Collect longitudes (smaller), iterate latitudes
-                    let lon_coords = Arc::new(
-                        coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<f64>>(),
-                    );
-                    Box::new(lat_iter.flat_map(move |lat| {
-                        let lon_coords = Arc::clone(&lon_coords);
-                        (0..lon_coords.len()).map(move |idx| (lat, lon_coords[idx]))
-                    }))
-                }
-            } else {
+            let Some((lon_start, lon_end, lon_step)) = lon else {
                 unreachable!(
                     "Range without longitude range - should be prevented by parse_cli validation"
-                )
+                );
+            };
+
+            // Create a vector for one dimension to allow repeated iteration
+            // Choose the smaller dimension to minimize memory usage
+            let lat_count = ((lat.1 - lat.0) / lat.2 + 1.0) as usize;
+            let lon_count = ((lon_end - lon_start) / lon_step + 1.0) as usize;
+
+            if lat_count <= lon_count {
+                // Collect latitudes (smaller), iterate longitudes
+                let lat_coords = Arc::new(lat_iter.collect::<Vec<f64>>());
+                Ok(Box::new(
+                    coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
+                        let lat_coords = Arc::clone(&lat_coords);
+                        (0..lat_coords.len())
+                            .map(move |idx| Ok::<(f64, f64), String>((lat_coords[idx], lon)))
+                    }),
+                ))
+            } else {
+                // Collect longitudes (smaller), iterate latitudes
+                let lon_coords =
+                    Arc::new(coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<f64>>());
+                Ok(Box::new(lat_iter.flat_map(move |lat| {
+                    let lon_coords = Arc::clone(&lon_coords);
+                    (0..lon_coords.len())
+                        .map(move |idx| Ok::<(f64, f64), String>((lat, lon_coords[idx])))
+                })))
             }
         }
         LocationSource::File(input_path) => {
@@ -693,80 +701,85 @@ pub fn expand_location_source(source: LocationSource) -> Box<dyn Iterator<Item =
                 InputPath::File(p) => p.display().to_string(),
             };
 
-            let reader = match open_input(&input_path) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Error opening {}: {}", path_display, e);
-                    std::process::exit(1);
-                }
-            };
+            let reader = open_input(&input_path)
+                .map_err(|e| format!("Error opening {}: {}", path_display, e))?;
 
-            let mut line_num = 0;
+            let mut lines = reader.lines().enumerate();
+            let mut finished = false;
 
-            Box::new(reader.lines().filter_map(move |line_result| {
-                line_num += 1;
-
-                let line = match line_result {
-                    Ok(l) => l,
-                    Err(e) => {
-                        eprintln!("Error reading {}:{}: {}", path_display, line_num, e);
-                        std::process::exit(1);
-                    }
-                };
-
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
+            let iter = std::iter::from_fn(move || {
+                if finished {
                     return None;
                 }
 
-                let parts = parse_delimited_line(trimmed);
-                if parts.len() < 2 {
-                    eprintln!(
-                        "Error: {}:{}: expected 2 fields (lat lon), found {}",
-                        path_display,
-                        line_num,
-                        parts.len()
-                    );
-                    std::process::exit(1);
-                }
-                if parts.len() > 2 {
-                    eprintln!(
-                        "Error: {}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
-                        path_display,
-                        line_num,
-                        parts.len()
-                    );
-                    std::process::exit(1);
-                }
+                for (idx, line_result) in lines.by_ref() {
+                    let line_number = idx + 1;
+                    let line = match line_result {
+                        Ok(l) => l,
+                        Err(e) => {
+                            finished = true;
+                            return Some(Err(format!(
+                                "{}:{}: failed to read line: {}",
+                                path_display, line_number, e
+                            )));
+                        }
+                    };
 
-                let lat: f64 = match parts[0].trim().parse() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        eprintln!(
-                            "Error: {}:{}: invalid latitude '{}'",
-                            path_display,
-                            line_num,
-                            parts[0]
-                        );
-                        std::process::exit(1);
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
                     }
-                };
 
-                let lon: f64 = match parts[1].trim().parse() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        eprintln!(
-                            "Error: {}:{}: invalid longitude '{}'",
+                    let parts = parse_delimited_line(trimmed);
+                    if parts.len() < 2 {
+                        finished = true;
+                        return Some(Err(format!(
+                            "{}:{}: expected 2 fields (lat lon), found {}",
                             path_display,
-                            line_num,
-                            parts[1]
-                        );
-                        std::process::exit(1);
+                            line_number,
+                            parts.len()
+                        )));
                     }
-                };
+                    if parts.len() > 2 {
+                        finished = true;
+                        return Some(Err(format!(
+                            "{}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
+                            path_display,
+                            line_number,
+                            parts.len()
+                        )));
+                    }
 
-                Some((lat, lon))
-            }))
+                    let lat: f64 = match parts[0].trim().parse() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            finished = true;
+                            return Some(Err(format!(
+                                "{}:{}: invalid latitude '{}'",
+                                path_display, line_number, parts[0]
+                            )));
+                        }
+                    };
+
+                    let lon: f64 = match parts[1].trim().parse() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            finished = true;
+                            return Some(Err(format!(
+                                "{}:{}: invalid longitude '{}'",
+                                path_display, line_number, parts[1]
+                            )));
+                        }
+                    };
+
+                    return Some(Ok((lat, lon)));
+                }
+
+                finished = true;
+                None
+            });
+
+            Ok(Box::new(iter))
         }
     }
 }
@@ -1224,9 +1237,10 @@ pub fn expand_cartesian_product(
 
     if is_time_single {
         let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
-        let iter = expand_location_source(loc_source).flat_map(move |coord| {
-            let times = Arc::clone(&times);
-            (0..times.len()).map(move |idx| Ok((coord.0, coord.1, times[idx])))
+        let locations = expand_location_source(loc_source)?;
+        let iter = locations.flat_map(move |coord_res| match coord_res {
+            Ok((lat, lon)) => repeat_times(lat, lon, Arc::clone(&times)),
+            Err(err) => Box::new(std::iter::once(Err(err))),
         });
         return Ok(Box::new(iter));
     }
@@ -1240,9 +1254,10 @@ pub fn expand_cartesian_product(
         }
 
         let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
-        let iter = expand_location_source(loc_source).flat_map(move |coord| {
-            let times = Arc::clone(&times);
-            (0..times.len()).map(move |idx| Ok((coord.0, coord.1, times[idx])))
+        let locations = expand_location_source(loc_source)?;
+        let iter = locations.flat_map(move |coord_res| match coord_res {
+            Ok((lat, lon)) => repeat_times(lat, lon, Arc::clone(&times)),
+            Err(err) => Box::new(std::iter::once(Err(err))),
         });
         return Ok(Box::new(iter));
     }
@@ -1257,30 +1272,38 @@ pub fn expand_cartesian_product(
     let location_cache: Option<Arc<Vec<(f64, f64)>>> = match &loc_source {
         LocationSource::Single(lat, lon) => Some(Arc::new(vec![(*lat, *lon)])),
         LocationSource::File(InputPath::File(_)) => {
-            let coords = expand_location_source(loc_source.clone()).collect::<Vec<_>>();
+            let coords_iter = expand_location_source(loc_source.clone())?;
+            let coords = coords_iter.collect::<Result<Vec<_>, _>>()?;
             Some(Arc::new(coords))
         }
         _ => None,
     };
 
     let loc_source_for_iter = loc_source;
-    let iter = time_stream
-        .into_iter()
-        .flat_map(move |time_result| match time_result {
-            Ok(dt) => {
-                if let Some(cache) = location_cache.as_ref() {
-                    Box::new(CoordRepeat::new(Arc::clone(cache), dt))
-                        as Box<dyn Iterator<Item = CoordTimeResult>>
-                } else {
-                    let locations = expand_location_source(loc_source_for_iter.clone());
-                    Box::new(locations.map(move |(lat, lon)| Ok((lat, lon, dt))))
-                        as Box<dyn Iterator<Item = CoordTimeResult>>
+    let iter =
+        time_stream
+            .into_iter()
+            .flat_map(move |time_result| match time_result {
+                Ok(dt) => {
+                    if let Some(cache) = location_cache.as_ref() {
+                        Box::new(CoordRepeat::new(Arc::clone(cache), dt))
+                            as Box<dyn Iterator<Item = CoordTimeResult>>
+                    } else {
+                        let dt_value = dt;
+                        match expand_location_source(loc_source_for_iter.clone()) {
+                            Ok(locations) => Box::new(locations.map(move |coord_res| {
+                                coord_res.map(|(lat, lon)| (lat, lon, dt_value))
+                            }))
+                                as Box<dyn Iterator<Item = CoordTimeResult>>,
+                            Err(err) => Box::new(std::iter::once(Err(err)))
+                                as Box<dyn Iterator<Item = CoordTimeResult>>,
+                        }
+                    }
                 }
-            }
-            Err(err) => {
-                Box::new(std::iter::once(Err(err))) as Box<dyn Iterator<Item = CoordTimeResult>>
-            }
-        });
+                Err(err) => {
+                    Box::new(std::iter::once(Err(err))) as Box<dyn Iterator<Item = CoordTimeResult>>
+                }
+            });
     Ok(Box::new(iter))
 }
 
