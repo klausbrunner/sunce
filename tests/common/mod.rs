@@ -8,11 +8,15 @@ pub struct SunceTest {
     cmd: Command,
 }
 
+pub fn sunce_command() -> Command {
+    Command::new(assert_cmd::cargo::cargo_bin!("sunce"))
+}
+
 impl SunceTest {
     /// Create a new sunce command test
     pub fn new() -> Self {
         Self {
-            cmd: Command::cargo_bin("sunce").unwrap(),
+            cmd: sunce_command(),
         }
     }
 

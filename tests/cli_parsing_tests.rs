@@ -1,12 +1,11 @@
-use assert_cmd::Command;
 use predicates::prelude::*;
 
 mod common;
+use common::sunce_command;
 
 #[test]
 fn test_options_before_positionals() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--format=csv",
             "52.0",
@@ -20,8 +19,7 @@ fn test_options_before_positionals() {
 
 #[test]
 fn test_options_after_positionals() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -35,8 +33,7 @@ fn test_options_after_positionals() {
 
 #[test]
 fn test_options_mixed_positions() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--format=csv",
             "52.0",
@@ -52,8 +49,7 @@ fn test_options_mixed_positions() {
 
 #[test]
 fn test_command_specific_option_before_command() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -67,8 +63,7 @@ fn test_command_specific_option_before_command() {
 
 #[test]
 fn test_command_specific_option_after_command() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -82,8 +77,7 @@ fn test_command_specific_option_after_command() {
 
 #[test]
 fn test_global_and_command_options_mixed() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--format=csv",
             "52.0",
@@ -99,8 +93,7 @@ fn test_global_and_command_options_mixed() {
 
 #[test]
 fn test_step_with_full_datetime_rejected() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -117,8 +110,7 @@ fn test_step_with_full_datetime_rejected() {
 
 #[test]
 fn test_negative_step_rejected() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52.0", "13.4", "2024-01-01", "--step=-1h", "position"])
         .assert()
         .failure()
@@ -127,8 +119,7 @@ fn test_negative_step_rejected() {
 
 #[test]
 fn test_invalid_option_for_position_command() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52.0", "13.4", "2024-01-01", "--twilight", "position"])
         .assert()
         .failure()
@@ -139,8 +130,7 @@ fn test_invalid_option_for_position_command() {
 
 #[test]
 fn test_invalid_option_for_sunrise_command() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"])
         .assert()
         .failure()
@@ -149,8 +139,7 @@ fn test_invalid_option_for_sunrise_command() {
 
 #[test]
 fn test_horizon_invalid_for_position() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"])
         .assert()
         .failure()
@@ -159,8 +148,7 @@ fn test_horizon_invalid_for_position() {
 
 #[test]
 fn test_algorithm_invalid_for_sunrise() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -177,8 +165,7 @@ fn test_algorithm_invalid_for_sunrise() {
 
 #[test]
 fn test_invalid_timezone_datetime_surfaces_error() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "40.0",
             "-74.0",
@@ -195,8 +182,7 @@ fn test_invalid_timezone_datetime_surfaces_error() {
 
 #[test]
 fn test_invalid_refraction_inputs_surface_error() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -211,8 +197,7 @@ fn test_invalid_refraction_inputs_surface_error() {
 
 #[test]
 fn test_options_anywhere_with_file_input() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["--format=json", "@-", "position", "--no-headers"])
         .write_stdin("52.0 13.4 2024-01-01T12:00:00\n")
         .assert()
@@ -221,8 +206,7 @@ fn test_options_anywhere_with_file_input() {
 
 #[test]
 fn test_deltat_before_and_after_positionals() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -233,8 +217,7 @@ fn test_deltat_before_and_after_positionals() {
         .assert()
         .success();
 
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--deltat=69.2",
             "52.0",
@@ -248,8 +231,7 @@ fn test_deltat_before_and_after_positionals() {
 
 #[test]
 fn test_multiple_deltat_still_errors() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--deltat=69.2",
             "52.0",
@@ -265,8 +247,7 @@ fn test_multiple_deltat_still_errors() {
 
 #[test]
 fn test_all_position_options_anywhere() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--format=csv",
             "52.0",
@@ -285,8 +266,7 @@ fn test_all_position_options_anywhere() {
 
 #[test]
 fn test_sunrise_with_options_anywhere() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--format=csv",
             "52.0",
@@ -302,8 +282,7 @@ fn test_sunrise_with_options_anywhere() {
 
 #[test]
 fn test_step_without_unit() {
-    let output = Command::cargo_bin("sunce")
-        .unwrap()
+    let output = sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -327,8 +306,7 @@ fn test_step_without_unit() {
 
 #[test]
 fn test_step_with_unit_still_works() {
-    let output = Command::cargo_bin("sunce")
-        .unwrap()
+    let output = sunce_command()
         .args([
             "52.0",
             "13.4",

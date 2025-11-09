@@ -1,4 +1,5 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 use predicates::prelude::*;
 
 #[test]
@@ -6,7 +7,7 @@ fn test_dst_spring_forward_single_datetime() {
     // Test Europe/Berlin DST spring forward: 2024-03-31 02:00:00 doesn't exist
     // With explicit timezone, this should be treated as still being in winter time (CET)
     // until the actual DST transition at 02:00, so 02:00:00 shows as +01:00
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--show-inputs",
@@ -27,7 +28,7 @@ fn test_dst_spring_forward_single_datetime() {
 #[test]
 fn test_dst_spring_forward_time_series() {
     // Test Europe/Berlin DST spring forward time series: should skip 02:00:00
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--format=CSV",
@@ -53,7 +54,7 @@ fn test_dst_spring_forward_time_series() {
 #[test]
 fn test_dst_fall_back_single_datetime() {
     // Test fixed offset timezone: 2024-10-27 02:00:00 with +01:00
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--show-inputs",
@@ -71,7 +72,7 @@ fn test_dst_fall_back_single_datetime() {
 #[test]
 fn test_dst_fall_back_time_series() {
     // Test fixed offset timezone time series (no DST transitions)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--format=CSV",
@@ -94,7 +95,7 @@ fn test_dst_fall_back_time_series() {
 #[test]
 fn test_dst_normal_summer_time() {
     // Test normal summer time (CEST) - no DST transition
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+02:00",
         "--show-inputs",
@@ -112,7 +113,7 @@ fn test_dst_normal_summer_time() {
 #[test]
 fn test_dst_normal_winter_time() {
     // Test normal winter time (CET) - no DST transition
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--show-inputs",
@@ -130,7 +131,7 @@ fn test_dst_normal_winter_time() {
 #[test]
 fn test_dst_different_timezone_us_eastern() {
     // Test US Eastern timezone with fixed offset -05:00
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=-05:00",
         "--show-inputs",
@@ -148,7 +149,7 @@ fn test_dst_different_timezone_us_eastern() {
 #[test]
 fn test_dst_timezone_override() {
     // Test timezone override with DST
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+02:00",
         "--show-inputs",
@@ -165,9 +166,83 @@ fn test_dst_timezone_override() {
 }
 
 #[test]
+fn test_named_timezone_override_uses_dst_offset_summer() {
+    let mut cmd = sunce_command();
+    cmd.args([
+        "--timezone=America/New_York",
+        "--format=json",
+        "--no-show-inputs",
+        "0",
+        "0",
+        "2025-06-21T12:00:00Z",
+        "position",
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        r#""dateTime":"2025-06-21T08:00:00-04:00""#,
+    ));
+}
+
+#[test]
+fn test_named_timezone_override_uses_dst_offset_winter() {
+    let mut cmd = sunce_command();
+    cmd.args([
+        "--timezone=America/New_York",
+        "--format=json",
+        "--no-show-inputs",
+        "0",
+        "0",
+        "2025-01-15T12:00:00Z",
+        "position",
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        r#""dateTime":"2025-01-15T07:00:00-05:00""#,
+    ));
+}
+
+#[test]
+fn test_system_timezone_detection_without_tz_env_summer() {
+    let mut cmd = sunce_command();
+    cmd.env_remove("TZ")
+        .env("SUNCE_SYSTEM_TIMEZONE", "Europe/Berlin")
+        .args([
+            "--format=json",
+            "--no-show-inputs",
+            "0",
+            "0",
+            "2024-07-01T12:00:00",
+            "position",
+        ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        r#""dateTime":"2024-07-01T12:00:00+02:00""#,
+    ));
+}
+
+#[test]
+fn test_system_timezone_detection_without_tz_env_winter() {
+    let mut cmd = sunce_command();
+    cmd.env_remove("TZ")
+        .env("SUNCE_SYSTEM_TIMEZONE", "Europe/Berlin")
+        .args([
+            "--format=json",
+            "--no-show-inputs",
+            "0",
+            "0",
+            "2024-01-10T12:00:00",
+            "position",
+        ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        r#""dateTime":"2024-01-10T12:00:00+01:00""#,
+    ));
+}
+
+#[test]
 fn test_dst_partial_date_time_series() {
     // Test partial date (year-month) with fixed offset timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--format=CSV",
@@ -191,7 +266,7 @@ fn test_dst_partial_date_time_series() {
 #[test]
 fn test_dst_year_time_series() {
     // Test year input with fixed offset timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--format=CSV",
@@ -215,7 +290,7 @@ fn test_dst_year_time_series() {
 #[test]
 fn test_dst_edge_case_31st_march_exact_time() {
     // Test 30-minute time steps with fixed offset timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=+01:00",
         "--format=CSV",
@@ -241,7 +316,7 @@ fn test_dst_edge_case_31st_march_exact_time() {
 #[test]
 fn test_dst_comparison_with_utc() {
     // Test that UTC doesn't have DST transitions
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=UTC",
         "--format=CSV",
@@ -264,7 +339,7 @@ fn test_dst_comparison_with_utc() {
 #[test]
 fn test_dst_named_timezone_spring_forward() {
     // Test Europe/Berlin with DST spring forward: 02:00 doesn't exist on 2024-03-31
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=Europe/Berlin",
         "--format=CSV",
@@ -294,7 +369,7 @@ fn test_dst_named_timezone_spring_forward() {
 #[test]
 fn test_dst_named_timezone_fall_back() {
     // Test Europe/Berlin with DST fall back: 02:00 occurs twice on 2024-10-27
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=Europe/Berlin",
         "--format=CSV",
@@ -326,7 +401,7 @@ fn test_dst_named_timezone_fall_back() {
 #[test]
 fn test_dst_named_timezone_us_eastern() {
     // Test US/Eastern DST spring forward: 2024-03-10 02:00 doesn't exist
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--timezone=America/New_York",
         "--format=CSV",
@@ -355,7 +430,7 @@ fn test_dst_named_timezone_us_eastern() {
 fn test_system_timezone_detection() {
     // Test that system timezone detection works properly without any TZ override
     // This verifies that iana-time-zone works correctly on all platforms
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--show-inputs",
         "52.0",
@@ -397,7 +472,7 @@ fn test_system_timezone_detection() {
 fn test_now_respects_tz_env() {
     // CRITICAL: Test that 'now' uses TZ environment variable, not UTC default
     // This catches the bug where get_timezone_info() defaulted to UTC instead of detecting local timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "America/New_York"); // Set TZ to non-UTC timezone
     cmd.args(["--format=CSV", "40.7", "-74.0", "now", "position"]);
 
@@ -424,7 +499,7 @@ fn test_now_respects_tz_env() {
 #[test]
 fn test_now_respects_tz_env_fixed_offset() {
     // Test that 'now' uses fixed offset TZ environment variable
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "+05:30"); // Set TZ to India Standard Time
     cmd.args(["--format=CSV", "28.6", "77.2", "now", "position"]);
 
@@ -448,7 +523,7 @@ fn test_now_respects_tz_env_fixed_offset() {
 #[test]
 fn test_now_table_format_shows_timezone() {
     // Test that text table format shows timezone in DateTime column
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Paris");
     cmd.args(["48.8", "2.3", "now", "position"]);
 

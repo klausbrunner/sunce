@@ -1,10 +1,11 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 use predicates::prelude::*;
 
 /// Test that single-value inputs do NOT auto-enable show-inputs
 #[test]
 fn test_single_values_no_auto_show_inputs_csv() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -20,7 +21,7 @@ fn test_single_values_no_auto_show_inputs_csv() {
 
 #[test]
 fn test_single_values_no_auto_show_inputs_json() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=JSON")
         .arg("52.0")
         .arg("13.4")
@@ -39,7 +40,7 @@ fn test_single_values_no_auto_show_inputs_json() {
 /// Test that coordinate ranges DO auto-enable show-inputs
 #[test]
 fn test_coordinate_range_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52:53:1")
         .arg("13.4")
@@ -54,7 +55,7 @@ fn test_coordinate_range_auto_enables_show_inputs() {
 /// Test that time series (partial dates) DO auto-enable show-inputs
 #[test]
 fn test_partial_date_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -73,7 +74,7 @@ fn test_file_input_auto_enables_show_inputs() {
     let file_path = temp_dir.path().join("coords.txt");
     std::fs::write(&file_path, "52.0,13.4\n").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg(format!("@{}", file_path.display()))
         .arg("2024-06-21T12:00:00")
@@ -87,7 +88,7 @@ fn test_file_input_auto_enables_show_inputs() {
 /// Test that stdin input DO auto-enable show-inputs
 #[test]
 fn test_stdin_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("@-")
         .arg("2024-06-21T12:00:00")
@@ -106,7 +107,7 @@ fn test_paired_file_auto_enables_show_inputs() {
     let file_path = temp_dir.path().join("paired.txt");
     std::fs::write(&file_path, "52.0,13.4,2024-06-21T12:00:00\n").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg(format!("@{}", file_path.display()))
         .arg("position");
@@ -119,7 +120,7 @@ fn test_paired_file_auto_enables_show_inputs() {
 /// Test that --no-show-inputs overrides auto-enable
 #[test]
 fn test_no_show_inputs_override() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("--no-show-inputs")
         .arg("52:53:1")
@@ -136,7 +137,7 @@ fn test_no_show_inputs_override() {
 /// Test that explicit --show-inputs works for single values
 #[test]
 fn test_explicit_show_inputs_for_single_values() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("--show-inputs")
         .arg("52.0")
@@ -152,7 +153,7 @@ fn test_explicit_show_inputs_for_single_values() {
 /// Test sunrise single values do NOT auto-enable show-inputs
 #[test]
 fn test_sunrise_single_values_no_auto_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -171,7 +172,7 @@ fn test_sunrise_single_values_no_auto_show_inputs() {
 /// Test sunrise with partial date DOES auto-enable show-inputs
 #[test]
 fn test_sunrise_partial_date_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -186,7 +187,7 @@ fn test_sunrise_partial_date_auto_enables_show_inputs() {
 /// Test sunrise with coordinate range DOES auto-enable show-inputs
 #[test]
 fn test_sunrise_coordinate_range_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52:53:1")
         .arg("13.4")
@@ -201,7 +202,7 @@ fn test_sunrise_coordinate_range_auto_enables_show_inputs() {
 /// Test twilight single values do NOT auto-enable show-inputs
 #[test]
 fn test_twilight_single_values_no_auto_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -220,7 +221,7 @@ fn test_twilight_single_values_no_auto_show_inputs() {
 /// Test twilight with range DOES auto-enable show-inputs
 #[test]
 fn test_twilight_range_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52:53:1")
         .arg("13.4")
@@ -237,7 +238,7 @@ fn test_twilight_range_auto_enables_show_inputs() {
 /// because it expands to time series
 #[test]
 fn test_position_complete_date_auto_enables_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")
@@ -253,7 +254,7 @@ fn test_position_complete_date_auto_enables_show_inputs() {
 /// because it's a single sunrise calculation
 #[test]
 fn test_sunrise_complete_date_no_auto_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.arg("--format=CSV")
         .arg("52.0")
         .arg("13.4")

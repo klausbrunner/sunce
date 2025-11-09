@@ -1,4 +1,5 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 use predicates::prelude::*;
 use std::fs::File;
 use std::io::Write;
@@ -15,7 +16,7 @@ fn test_coordinate_file_position() {
     writeln!(file, "59.334,18.063").unwrap();
     writeln!(file, "40.42,-3.70").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -48,7 +49,7 @@ fn test_time_file_position() {
     writeln!(file, "2024-06-21T18:00:00").unwrap();
     writeln!(file, "2024-12-21T12:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "52.0",
@@ -76,8 +77,7 @@ fn test_time_file_missing_errors() {
     let dir = tempdir().unwrap();
     let missing_file = dir.path().join("missing_times.txt");
 
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -98,8 +98,7 @@ fn test_time_file_with_invalid_timestamp_errors() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "not-a-timestamp").unwrap();
 
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -122,7 +121,7 @@ fn test_paired_file_position() {
     writeln!(file, "59.334,18.063,2024-06-21T18:00:00").unwrap();
     writeln!(file, "40.42,-3.70,2024-12-21T12:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", paired_file.to_str().unwrap()),
@@ -155,7 +154,7 @@ fn test_coordinate_file_sunrise() {
     writeln!(file, "52.0,13.4").unwrap();
     writeln!(file, "59.334,18.063").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -188,7 +187,7 @@ fn test_paired_file_sunrise() {
     writeln!(file, "52.0,13.4,2024-06-21").unwrap();
     writeln!(file, "40.42,-3.70,2024-12-21").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", paired_file.to_str().unwrap()),
@@ -212,7 +211,7 @@ fn test_paired_file_sunrise() {
 /// Test stdin input with coordinate data
 #[test]
 fn test_stdin_paired_input() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=CSV", "@-", "position"]);
     cmd.write_stdin("52.0,13.4,2024-06-21T12:00:00\n");
 
@@ -236,7 +235,7 @@ fn test_file_input_with_comments() {
     writeln!(file, "# Another comment").unwrap();
     writeln!(file, "59.334,18.063").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -268,7 +267,7 @@ fn test_mixed_coordinate_formats() {
     writeln!(file, "59.334 18.063").unwrap(); // Space separated
     writeln!(file, "40.42 -3.70").unwrap(); // Space separated with negative
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -300,7 +299,7 @@ fn test_file_input_timezone_handling() {
     writeln!(file, "2024-06-21T12:00:00").unwrap(); // Naive datetime
     writeln!(file, "2024-12-21T15:30:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=+02:00", // This should be applied to naive datetimes
@@ -326,7 +325,7 @@ fn test_file_input_timezone_handling() {
     writeln!(file, "52.0,13.4,2024-06-21T12:00:00").unwrap(); // Naive datetime
     writeln!(file, "40.42,-3.70,2024-12-21T15:30:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=-05:00", // Different timezone
@@ -350,7 +349,7 @@ fn test_file_input_timezone_handling() {
     writeln!(file, "52.0,13.4").unwrap();
     writeln!(file, "40.42,-3.70").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=+09:00", // Tokyo timezone
@@ -382,7 +381,7 @@ fn test_file_input_mixed_timezones() {
     writeln!(file, "2024-06-21T15:00:00").unwrap(); // Naive - will use --timezone
     writeln!(file, "2024-06-21T18:00:00Z").unwrap(); // UTC - will be converted
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=+05:00", // OVERRIDES all timezones
@@ -417,7 +416,7 @@ fn test_file_input_mixed_timezones() {
 #[test]
 fn test_file_input_errors() {
     // Test non-existent file
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["@/non/existent/file.txt", "2024-06-21", "position"]);
     cmd.assert()
         .failure()
@@ -430,7 +429,7 @@ fn test_file_input_errors() {
     let mut file = File::create(&invalid_coords).unwrap();
     writeln!(file, "invalid,data").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         &format!("@{}", invalid_coords.to_str().unwrap()),
         "2024-06-21",
@@ -451,7 +450,7 @@ fn test_file_input_show_inputs_auto() {
     writeln!(file, "52.0,13.4").unwrap();
 
     // Should auto-enable show-inputs for file inputs
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -466,7 +465,7 @@ fn test_file_input_show_inputs_auto() {
     assert!(output_str.contains("latitude,longitude,elevation,pressure,temperature"));
 
     // Test explicit --no-show-inputs override
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--no-show-inputs",
@@ -494,7 +493,7 @@ fn test_solarpos_compatibility_coordinate_file() {
     writeln!(file, "59.334,18.063").unwrap();
 
     // Test sunce output
-    let mut sunce_cmd = Command::cargo_bin("sunce").unwrap();
+    let mut sunce_cmd = sunce_command();
     sunce_cmd.env("TZ", "UTC").args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -522,7 +521,7 @@ fn test_solarpos_compatibility_time_file() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "2024-06-21T18:00:00").unwrap();
 
-    let mut sunce_cmd = Command::cargo_bin("sunce").unwrap();
+    let mut sunce_cmd = sunce_command();
     sunce_cmd.env("TZ", "UTC").args([
         "--format=CSV",
         "52.0",
@@ -549,7 +548,7 @@ fn test_solarpos_compatibility_paired_file() {
     writeln!(file, "52.0,13.4,2024-06-21T12:00:00").unwrap();
     writeln!(file, "40.42,-3.70,2024-12-21T12:00:00").unwrap();
 
-    let mut sunce_cmd = Command::cargo_bin("sunce").unwrap();
+    let mut sunce_cmd = sunce_command();
     sunce_cmd.env("TZ", "UTC").args([
         "--format=CSV",
         &format!("@{}", paired_file.to_str().unwrap()),
@@ -574,7 +573,7 @@ fn test_solarpos_compatibility_sunrise_coordinate_file() {
     writeln!(file, "52.0,13.4").unwrap();
     writeln!(file, "40.42,-3.70").unwrap();
 
-    let mut sunce_cmd = Command::cargo_bin("sunce").unwrap();
+    let mut sunce_cmd = sunce_command();
     sunce_cmd.env("TZ", "UTC").args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -595,7 +594,7 @@ fn test_solarpos_compatibility_sunrise_coordinate_file() {
 /// Test stdin compatibility with solarpos format
 #[test]
 fn test_solarpos_compatibility_stdin() {
-    let mut sunce_cmd = Command::cargo_bin("sunce").unwrap();
+    let mut sunce_cmd = sunce_command();
     sunce_cmd
         .env("TZ", "UTC")
         .args(["--format=CSV", "@-", "position"]);
@@ -619,7 +618,7 @@ fn test_coordinate_ranges_with_time_files_position() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "2024-06-21T18:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "52.0:52.1:0.1", // Latitude range
@@ -656,7 +655,7 @@ fn test_coordinate_ranges_with_time_files_sunrise() {
     writeln!(file, "2024-06-21").unwrap(); // Summer solstice
     writeln!(file, "2024-12-21").unwrap(); // Winter solstice
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "50.0:51.0:1.0", // Latitude range (2 values)
@@ -694,7 +693,7 @@ fn test_single_coordinates_with_time_files() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "2024-06-21T15:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "52.0", // Single latitude
@@ -726,7 +725,7 @@ fn test_coordinate_file_with_stdin_times() {
     writeln!(coords, "52.0,13.4").unwrap();
     writeln!(coords, "40.42,-3.70").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "UTC").args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -756,7 +755,7 @@ fn test_mixed_coordinate_ranges_with_time_files() {
     let mut file = File::create(&times_file).unwrap();
     writeln!(file, "2024-06-21T12:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "52.0:53.0:1.0", // Latitude range (2 values)
@@ -793,7 +792,7 @@ fn test_coordinate_file_time_file_position() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "2024-12-21T12:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -830,7 +829,7 @@ fn test_coordinate_file_time_file_sunrise() {
     writeln!(file, "2024-06-21").unwrap(); // Summer solstice
     writeln!(file, "2024-12-21").unwrap(); // Winter solstice
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),
@@ -863,7 +862,7 @@ fn test_stdin_coordinates_time_file() {
     writeln!(file, "2024-06-21T12:00:00").unwrap();
     writeln!(file, "2024-12-21T12:00:00").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "@-",
@@ -895,7 +894,7 @@ fn test_coordinate_file_stdin_times() {
     writeln!(file, "52.0,13.4").unwrap();
     writeln!(file, "53.0,14.4").unwrap();
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         &format!("@{}", coords_file.to_str().unwrap()),

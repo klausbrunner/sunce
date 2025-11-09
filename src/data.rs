@@ -4,12 +4,15 @@ use chrono::{
     DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
 };
 use chrono_tz::Tz;
+use iana_time_zone::get_timezone;
+use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-static SYSTEM_TIMEZONE: OnceLock<FixedOffset> = OnceLock::new();
+static SYSTEM_TIMEZONE: OnceLock<TimezoneInfo> = OnceLock::new();
+const SYSTEM_TZ_OVERRIDE_ENV: &str = "SUNCE_SYSTEM_TIMEZONE";
 
 const DELTAT_MULTIPLE_ERROR: &str =
     "error: the argument '--deltat <DELTAT>' cannot be used multiple times";
@@ -562,7 +565,7 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> Result<TimeSource, Str
     }
 
     // Validate that this is a valid datetime string before creating TimeSource::Single
-    parse_datetime_string(time_str, None)?;
+    parse_datetime_string(time_str, params.timezone.as_deref())?;
     Ok(TimeSource::Single(time_str.to_string()))
 }
 
@@ -805,8 +808,12 @@ impl TimezoneInfo {
         match self {
             TimezoneInfo::Fixed(offset) => match offset.from_local_datetime(dt) {
                 chrono::LocalResult::Single(dt) => Some(dt),
-                chrono::LocalResult::None => None,
                 chrono::LocalResult::Ambiguous(dt1, _dt2) => Some(dt1),
+                chrono::LocalResult::None => {
+                    let seconds = offset.local_minus_utc() as i64;
+                    let utc_naive = *dt - Duration::seconds(seconds);
+                    Some(offset.from_utc_datetime(&utc_naive))
+                }
             },
             TimezoneInfo::Named(tz) => {
                 // Handle DST transitions:
@@ -823,30 +830,51 @@ impl TimezoneInfo {
     }
 }
 
-fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
-    let tz_env = std::env::var("TZ").ok();
-    let tz_str = override_tz.or(tz_env.as_deref());
-
-    tz_str
-        .and_then(|s| {
-            parse_tz_offset(s)
-                .map(TimezoneInfo::Fixed)
-                .or_else(|| s.parse::<Tz>().ok().map(TimezoneInfo::Named))
-        })
-        .unwrap_or_else(|| {
-            let offset = SYSTEM_TIMEZONE.get_or_init(|| Local::now().offset().fix());
-            TimezoneInfo::Fixed(*offset)
-        })
+fn convert_datetime_to_timezone<Tz: chrono::TimeZone>(
+    dt: DateTime<Tz>,
+    tz_info: &TimezoneInfo,
+) -> DateTime<FixedOffset> {
+    tz_info.to_datetime_from_utc(&dt.naive_utc())
 }
 
-fn get_local_timezone(override_tz: Option<&str>) -> FixedOffset {
-    match get_timezone_info(override_tz) {
-        TimezoneInfo::Fixed(offset) => offset,
-        TimezoneInfo::Named(tz) => {
-            let now = Utc::now();
-            tz.offset_from_utc_datetime(&now.naive_utc()).fix()
-        }
+fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
+    if spec.is_empty() {
+        return None;
     }
+    parse_tz_offset(spec)
+        .map(TimezoneInfo::Fixed)
+        .or_else(|| spec.parse::<Tz>().ok().map(TimezoneInfo::Named))
+}
+
+fn detect_system_timezone() -> TimezoneInfo {
+    if let Ok(override_value) = env::var(SYSTEM_TZ_OVERRIDE_ENV)
+        && let Some(info) = parse_timezone_spec(override_value.trim())
+    {
+        return info;
+    }
+
+    if let Ok(system_tz) = get_timezone()
+        && let Some(info) = parse_timezone_spec(system_tz.trim())
+    {
+        return info;
+    }
+
+    TimezoneInfo::Fixed(Local::now().offset().fix())
+}
+
+fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
+    if let Some(spec) = override_tz
+        && let Some(info) = parse_timezone_spec(spec)
+    {
+        return info;
+    }
+    if let Ok(env_tz) = env::var("TZ")
+        && let Some(info) = parse_timezone_spec(env_tz.trim())
+    {
+        return info;
+    }
+
+    SYSTEM_TIMEZONE.get_or_init(detect_system_timezone).clone()
 }
 
 fn parse_tz_offset(tz: &str) -> Option<FixedOffset> {
@@ -871,20 +899,21 @@ fn parse_datetime_string(
 ) -> Result<DateTime<FixedOffset>, String> {
     // Handle "now" specially
     if dt_str == "now" {
-        let local_tz = get_local_timezone(override_tz);
-        return Ok(Utc::now().with_timezone(&local_tz));
+        let tz_info = get_timezone_info(override_tz);
+        return Ok(convert_datetime_to_timezone(Utc::now(), &tz_info));
     }
 
     // Try ISO 8601 parsing with timezone
-    if dt_str.contains('T') || dt_str.contains(' ') && dt_str.matches(':').count() >= 2 {
+    let has_space_time = dt_str.contains(' ') && dt_str.matches(':').count() >= 1;
+    if dt_str.contains('T') || has_space_time {
         // Has time component (either T or space separator with at least HH:MM:SS)
         if dt_str.ends_with('Z') {
             // UTC timezone
             let utc_dt = dt_str
                 .parse::<DateTime<Utc>>()
                 .map_err(|e| format!("Failed to parse UTC datetime: {}", e))?;
-            let target_tz = get_local_timezone(override_tz);
-            return Ok(utc_dt.with_timezone(&target_tz));
+            let tz_info = get_timezone_info(override_tz);
+            return Ok(convert_datetime_to_timezone(utc_dt, &tz_info));
         } else if dt_str.contains('+') || dt_str.rfind('-').is_some_and(|i| i > 10) {
             // Has timezone offset
             let fixed_dt = dt_str
@@ -893,8 +922,8 @@ fn parse_datetime_string(
 
             // If we have an override timezone, convert to that
             if override_tz.is_some() {
-                let target_tz = get_local_timezone(override_tz);
-                return Ok(fixed_dt.with_timezone(&target_tz));
+                let tz_info = get_timezone_info(override_tz);
+                return Ok(convert_datetime_to_timezone(fixed_dt, &tz_info));
             }
 
             return Ok(fixed_dt);
@@ -926,8 +955,7 @@ fn parse_datetime_string(
 
         if override_tz.is_some() {
             let tz_info = get_timezone_info(override_tz);
-            let naive_utc = utc_dt.naive_utc();
-            return Ok(tz_info.to_datetime_from_utc(&naive_utc));
+            return Ok(convert_datetime_to_timezone(utc_dt, &tz_info));
         }
 
         return Ok(utc_dt.fixed_offset());
@@ -978,10 +1006,11 @@ pub fn expand_time_source(
         }
         TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
-            let local_tz = get_local_timezone(override_tz.as_deref());
+            let tz_info = get_timezone_info(override_tz.as_deref());
             if let Some(step_str) = step_override {
                 let step_duration = parse_duration_positive(&step_str)?;
                 let mut first = true;
+                let tz_clone = tz_info.clone();
                 let iter = std::iter::from_fn(move || {
                     if !std::mem::take(&mut first) {
                         std::thread::sleep(
@@ -990,12 +1019,12 @@ pub fn expand_time_source(
                                 .unwrap_or(std::time::Duration::from_secs(1)),
                         );
                     }
-                    Some(Ok(Utc::now().with_timezone(&local_tz)))
+                    Some(Ok(convert_datetime_to_timezone(Utc::now(), &tz_clone)))
                 });
                 Ok(TimeStream::new(iter, false))
             } else {
                 Ok(TimeStream::new(
-                    std::iter::once(Ok(Utc::now().with_timezone(&local_tz))),
+                    std::iter::once(Ok(convert_datetime_to_timezone(Utc::now(), &tz_info))),
                     true,
                 ))
             }
@@ -1489,5 +1518,17 @@ Examples:
             "Unknown command: {}\n\nRun 'sunce --help' for usage.",
             command
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_offset_timezone_accepts_dst_gap() {
+        let dt = parse_datetime_string("2024-03-31T02:00:00", Some("+01:00"))
+            .expect("should parse even in DST gap for fixed offset");
+        assert_eq!(dt.offset().local_minus_utc(), 3600);
     }
 }

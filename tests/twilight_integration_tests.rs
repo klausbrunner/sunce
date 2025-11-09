@@ -66,6 +66,39 @@ fn test_twilight_json_output() {
 }
 
 #[test]
+fn test_json_polar_day_and_night_use_null() {
+    let polar_day = SunceTest::new()
+        .args([
+            "--format=json",
+            "--timezone=UTC",
+            "80.0",
+            "0.0",
+            "2024-06-21",
+            "sunrise",
+        ])
+        .get_output();
+    let day_output = String::from_utf8(polar_day.stdout).unwrap();
+    assert!(day_output.contains(r#""type":"ALL_DAY""#));
+    assert!(day_output.contains(r#""sunrise":null"#));
+    assert!(day_output.contains(r#""sunset":null"#));
+
+    let polar_night = SunceTest::new()
+        .args([
+            "--format=json",
+            "--timezone=UTC",
+            "80.0",
+            "0.0",
+            "2024-12-21",
+            "sunrise",
+        ])
+        .get_output();
+    let night_output = String::from_utf8(polar_night.stdout).unwrap();
+    assert!(night_output.contains(r#""type":"ALL_NIGHT""#));
+    assert!(night_output.contains(r#""sunrise":null"#));
+    assert!(night_output.contains(r#""sunset":null"#));
+}
+
+#[test]
 fn test_twilight_text_output() {
     let output = SunceTest::new()
         .args([

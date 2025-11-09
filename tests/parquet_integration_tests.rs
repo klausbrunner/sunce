@@ -343,7 +343,7 @@ fn test_parquet_consistency_with_csv() {
 fn test_parquet_timezone_preservation() {
     // CRITICAL: Test that timezone information is preserved in parquet output
     // This catches the bug where dateTime was stored as timestamp (UTC) instead of string with offset
-    let mut cmd = assert_cmd::Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin");
     cmd.args([
         "--format=PARQUET",

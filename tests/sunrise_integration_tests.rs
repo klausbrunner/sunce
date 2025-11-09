@@ -1,10 +1,11 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 use predicates::prelude::*;
 
 /// Test basic sunrise calculation
 #[test]
 fn test_basic_sunrise() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
 
     cmd.assert()
@@ -17,7 +18,7 @@ fn test_basic_sunrise() {
 #[test]
 fn test_sunrise_output_formats() {
     // Test HUMAN format (default)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
@@ -25,14 +26,14 @@ fn test_sunrise_output_formats() {
         .stdout(predicate::str::contains("sunset"));
 
     // Test CSV format
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("type,sunrise,transit,sunset"));
 
     // Test JSON format
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=JSON", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
@@ -44,14 +45,14 @@ fn test_sunrise_output_formats() {
 #[test]
 fn test_sunrise_edge_cases() {
     // Test Arctic summer (midnight sun)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["80.0", "0.0", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("all day"));
 
     // Test Arctic winter (polar night)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["80.0", "0.0", "2024-12-21", "sunrise"]);
     cmd.assert()
         .success()
@@ -61,7 +62,7 @@ fn test_sunrise_edge_cases() {
 /// Test sunrise time series
 #[test]
 fn test_sunrise_time_series() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin")
         .args(["--format=CSV", "52.0", "13.4", "2024-06", "sunrise"]);
 
@@ -77,7 +78,7 @@ fn test_sunrise_time_series() {
 /// Test sunrise coordinate ranges
 #[test]
 fn test_sunrise_coordinate_ranges() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin").args([
         "--format=CSV",
         "52:53:1",
@@ -97,7 +98,7 @@ fn test_sunrise_coordinate_ranges() {
 /// Test sunrise with timezone - verifies timezone is correctly applied to specific dates
 #[test]
 fn test_sunrise_timezone() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--timezone=+02:00", "52.0", "13.4", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
@@ -110,7 +111,7 @@ fn test_sunrise_timezone() {
 #[test]
 fn test_sunrise_timezone_specific_date_fix() {
     // Test case 1: +02:00 timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=+02:00",
@@ -137,7 +138,7 @@ fn test_sunrise_timezone_specific_date_fix() {
     );
 
     // Test case 2: -05:00 timezone
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=CSV",
         "--timezone=-05:00",
@@ -176,7 +177,7 @@ fn test_sunrise_timezone_specific_date_fix() {
 #[test]
 fn test_sunrise_validation() {
     // Test invalid horizon
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=invalid"]);
     cmd.assert().failure();
 }
@@ -184,7 +185,7 @@ fn test_sunrise_validation() {
 /// Test sunrise show-inputs
 #[test]
 fn test_sunrise_show_inputs() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin").args([
         "--format=CSV",
         "--show-inputs",
@@ -201,7 +202,7 @@ fn test_sunrise_show_inputs() {
 /// Test sunrise DST handling
 #[test]
 fn test_sunrise_dst() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin")
         .args(["52.0", "13.4", "2024-03-31", "sunrise"]);
     cmd.assert().success();
@@ -212,7 +213,7 @@ fn test_sunrise_dst() {
 fn test_sunrise_accuracy_regression() {
     // Test the specific case that revealed the Horizon::Custom(-0.833) vs Horizon::SunriseSunset bug
     // These values were verified against solarpos to be exact matches
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin")
         .args(["--format=CSV", "53.0", "13.0", "2024-06-21", "sunrise"]);
 
@@ -226,7 +227,7 @@ fn test_sunrise_accuracy_regression() {
     assert!(output_str.contains("21:37:") && output_str.contains("+02:00")); // sunset with timezone
 
     // Test second problematic case that also revealed the bug
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Berlin")
         .args(["--format=CSV", "52.0", "13.4", "2024-06-02", "sunrise"]);
 
@@ -243,7 +244,7 @@ fn test_sunrise_accuracy_regression() {
 #[test]
 fn test_sunrise_specific_date_single_result() {
     // Bug: "2024-01-01" for sunrise was generating 24 rows instead of 1
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=CSV", "52.0", "13.4", "2024-01-01", "sunrise"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
@@ -273,7 +274,7 @@ fn test_sunrise_specific_date_single_result() {
 #[test]
 fn test_sunrise_partial_date_time_series() {
     // "2024-01" should generate a DAILY time series (31 days in January)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=CSV", "52.0", "13.4", "2024-01", "sunrise"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();
@@ -304,7 +305,7 @@ fn test_sunrise_partial_date_time_series() {
 #[test]
 fn test_position_specific_date_time_series() {
     // Position command should always generate time series for specific dates like "2024-01-01"
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args(["--format=CSV", "52.0", "13.4", "2024-01-01", "position"]);
 
     let output = cmd.assert().success().get_output().stdout.clone();

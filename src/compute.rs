@@ -291,8 +291,7 @@ mod tests {
     fn spa_time_cache_reuses_existing_entry() {
         let mut cache: SpaCache = HashMap::new();
         let mut order = VecDeque::new();
-        let mut params = Parameters::default();
-        params.deltat = Some(0.0);
+        let params = Parameters::default();
 
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();

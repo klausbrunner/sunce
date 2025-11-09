@@ -32,6 +32,7 @@ chrono-tz = "0.10"
 solar-positioning = "0.4"
 arrow = { version = "57", default-features = false, optional = true }
 parquet = { version = "57", features = ["arrow", "snap"], default-features = false, optional = true }
+iana-time-zone = "0.1"
 
 [features]
 default = ["parquet"]
@@ -42,10 +43,10 @@ minimal = []
 chrono = "0.4"
 
 [dev-dependencies]
-assert_cmd = "2.0"
+assert_cmd = "2.1"
 predicates = "3.1"
-tempfile = "3.8"
-bytes = "1.0"
+tempfile = "3.23"
+bytes = "1.10"
 
 [profile.release]
 opt-level = 3

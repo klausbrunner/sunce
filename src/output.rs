@@ -39,17 +39,11 @@ fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Optio
 }
 
 // Helper function to get type string from SunriseResult
-fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>, is_json: bool) -> &'static str {
+fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>) -> &'static str {
     match result {
         SunriseResult::RegularDay { .. } => "NORMAL",
         SunriseResult::AllDay { .. } => "ALL_DAY",
-        SunriseResult::AllNight { .. } => {
-            if is_json {
-                "NO_DAY"
-            } else {
-                "ALL_NIGHT"
-            }
-        }
+        SunriseResult::AllNight { .. } => "ALL_NIGHT",
     }
 }
 
@@ -160,7 +154,7 @@ fn write_csv_sunrise<W: std::io::Write>(
                 }
             }
 
-            let type_str = sunrise_type_str(sunrise_result, false);
+            let type_str = sunrise_type_str(sunrise_result);
             let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
             let (sunrise_str, transit_str, sunset_str) = (
                 format_datetime_opt(sunrise_opt),
@@ -218,7 +212,7 @@ fn write_csv_sunrise<W: std::io::Write>(
                 }
             }
 
-            let type_str = sunrise_type_str(sunrise_sunset, false);
+            let type_str = sunrise_type_str(sunrise_sunset);
 
             let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
             let (sunrise_str, transit_str, sunset_str) = (
@@ -355,30 +349,30 @@ fn write_json_sunrise<W: std::io::Write>(
             result: sunrise_result,
             deltat,
         } => {
-            let type_str = sunrise_type_str(sunrise_result, true);
+            let type_str = sunrise_type_str(sunrise_result);
             let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
 
             if show_inputs {
                 writeln!(
                     writer,
-                    r#"{{"latitude":{},"longitude":{},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}"}}"#,
+                    r#"{{"latitude":{},"longitude":{},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
                     lat,
                     lon,
                     date.to_rfc3339(),
                     deltat,
                     type_str,
-                    format_datetime_opt(sunrise_opt),
+                    format_datetime_json_null(sunrise_opt),
                     format_datetime(transit),
-                    format_datetime_opt(sunset_opt)
+                    format_datetime_json_null(sunset_opt)
                 )
             } else {
                 writeln!(
                     writer,
-                    r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}"}}"#,
+                    r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
                     type_str,
-                    format_datetime_opt(sunrise_opt),
+                    format_datetime_json_null(sunrise_opt),
                     format_datetime(transit),
-                    format_datetime_opt(sunset_opt)
+                    format_datetime_json_null(sunset_opt)
                 )
             }
         }
@@ -392,7 +386,7 @@ fn write_json_sunrise<W: std::io::Write>(
             astronomical,
             deltat,
         } => {
-            let type_str = sunrise_type_str(sunrise_sunset, true);
+            let type_str = sunrise_type_str(sunrise_sunset);
             let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
             let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
             let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
@@ -401,15 +395,15 @@ fn write_json_sunrise<W: std::io::Write>(
             if show_inputs {
                 writeln!(
                     writer,
-                    r#"{{"latitude":{:.5},"longitude":{:.5},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}","civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
+                    r#"{{"latitude":{:.5},"longitude":{:.5},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
                     lat,
                     lon,
                     date.to_rfc3339(),
                     deltat,
                     type_str,
-                    format_datetime_opt(sunrise_opt),
+                    format_datetime_json_null(sunrise_opt),
                     format_datetime(transit),
-                    format_datetime_opt(sunset_opt),
+                    format_datetime_json_null(sunset_opt),
                     format_datetime_json_null(civil_start_opt),
                     format_datetime_json_null(civil_end_opt),
                     format_datetime_json_null(nautical_start_opt),
@@ -420,11 +414,11 @@ fn write_json_sunrise<W: std::io::Write>(
             } else {
                 writeln!(
                     writer,
-                    r#"{{"type":"{}","sunrise":"{}","transit":"{}","sunset":"{}","civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
+                    r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
                     type_str,
-                    format_datetime_opt(sunrise_opt),
+                    format_datetime_json_null(sunrise_opt),
                     format_datetime(transit),
-                    format_datetime_opt(sunset_opt),
+                    format_datetime_json_null(sunset_opt),
                     format_datetime_json_null(civil_start_opt),
                     format_datetime_json_null(civil_end_opt),
                     format_datetime_json_null(nautical_start_opt),
@@ -623,17 +617,19 @@ fn write_streaming_text_table<W: std::io::Write>(
     writer: &mut W,
 ) -> std::io::Result<usize> {
     let formatted = format_streaming_text_table(results, params, source);
-    let mut count = 0;
+    let mut record_count = 0;
     for line_result in formatted {
         match line_result {
-            Ok(line) => {
+            Ok((line, is_record)) => {
                 write!(writer, "{}", line)?;
-                count += 1;
+                if is_record {
+                    record_count += 1;
+                }
             }
             Err(e) => return Err(std::io::Error::other(e)),
         }
     }
-    Ok(count)
+    Ok(record_count)
 }
 
 pub fn write_formatted_output<W: std::io::Write>(
@@ -694,7 +690,7 @@ fn format_streaming_text_table(
     mut results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     source: crate::data::DataSource,
-) -> Box<dyn Iterator<Item = Result<String, String>>> {
+) -> Box<dyn Iterator<Item = Result<(String, bool), String>>> {
     use crate::data::{DataSource, LocationSource, TimeSource};
 
     // Peek at first result to get invariant values and determine table structure
@@ -908,9 +904,9 @@ fn format_streaming_text_table(
     });
 
     Box::new(
-        std::iter::once(Ok(header))
-            .chain(std::iter::once(Ok(first_row)))
-            .chain(remaining_rows)
-            .chain(std::iter::once(Ok(footer))),
+        std::iter::once(Ok((header, false)))
+            .chain(std::iter::once(Ok((first_row, true))))
+            .chain(remaining_rows.map(|res| res.map(|line| (line, true))))
+            .chain(std::iter::once(Ok((footer, false)))),
     )
 }

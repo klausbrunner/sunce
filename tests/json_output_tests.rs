@@ -1,9 +1,10 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 use predicates::prelude::*;
 
 #[test]
 fn json_position_uses_elevation_angle_label() {
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=json",
         "--elevation-angle",

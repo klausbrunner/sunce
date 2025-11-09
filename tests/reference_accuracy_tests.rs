@@ -1,4 +1,5 @@
-use assert_cmd::Command;
+mod common;
+use common::sunce_command;
 
 /// Test solar position accuracy against known astronomical reference values
 /// These tests validate that sunce produces correct solar coordinates for well-documented cases
@@ -6,7 +7,7 @@ use assert_cmd::Command;
 fn test_solar_position_reference_accuracy() {
     // Test Case 1: Solar noon at Greenwich Observatory on Summer Solstice 2024
     // Reference values verified with solarpos to ensure perfect accuracy
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "UTC").args([
         "--format=CSV",
         "51.477928",
@@ -27,7 +28,7 @@ fn test_solar_position_reference_accuracy() {
 fn test_winter_solstice_reference_accuracy() {
     // Test Case 2: Winter solstice at latitude 40°N - lowest sun elevation of the year
     // Reference values verified with solarpos
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "UTC").args([
         "--format=CSV",
         "40.0",
@@ -48,7 +49,7 @@ fn test_winter_solstice_reference_accuracy() {
 fn test_equinox_reference_accuracy() {
     // Test Case 3: Spring equinox at equator - near solar noon
     // Reference values verified with solarpos
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "UTC").args([
         "--format=CSV",
         "0.0",
@@ -69,7 +70,7 @@ fn test_equinox_reference_accuracy() {
 fn test_southern_hemisphere_reference_accuracy() {
     // Test Case 4: Southern hemisphere reference - Sydney coordinates
     // Reference values verified with solarpos
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.env("TZ", "UTC").args([
         "--format=CSV",
         "-33.868820",

@@ -234,6 +234,34 @@ fn test_datetime_parsing() {
     }
 }
 
+#[test]
+fn test_space_separated_datetime_without_seconds() {
+    let output = sunce_command()
+        .env("TZ", "UTC")
+        .args([
+            "--format=JSON",
+            "--no-show-inputs",
+            "0",
+            "0",
+            "2024-01-01 12:00",
+            "position",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Command failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(r#""dateTime":"2024-01-01T12:00:00+00:00""#),
+        "Expected localized datetime in output, got: {}",
+        stdout
+    );
+}
+
 /// Test edge cases
 #[test]
 fn test_edge_cases() {
@@ -509,13 +537,12 @@ fn test_coordinate_range_floating_point_precision() {
 /// Verifies that watch mode generates multiple timestamped results at regular intervals
 #[test]
 fn test_watch_mode() {
-    use assert_cmd::cargo::CommandCargoExt;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::Duration;
 
-    let mut child = Command::cargo_bin("sunce")
-        .unwrap()
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("sunce"));
+    let mut child = child
         .args([
             "--format=csv",
             "52.5",

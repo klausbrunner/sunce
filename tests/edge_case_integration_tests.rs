@@ -1,6 +1,5 @@
 mod common;
-use assert_cmd::Command;
-use common::SunceTest;
+use common::{SunceTest, sunce_command};
 use predicates::prelude::*;
 use std::io::Write;
 use std::process::{Command as StdCommand, Stdio};
@@ -10,7 +9,7 @@ use std::time::Duration;
 fn test_large_coordinate_range_memory_usage() {
     // Test that large coordinate ranges don't cause excessive memory usage
     // This should stream results rather than collecting them all
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     // 101x101 grid = 10,201 points (ranges are inclusive)
     cmd.args([
@@ -39,7 +38,7 @@ fn test_large_coordinate_range_memory_usage() {
 #[test]
 fn test_very_fine_coordinate_step() {
     // Test extremely fine step sizes
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     // Very fine step: 0.001 degrees
     cmd.args([
@@ -72,7 +71,7 @@ fn test_very_fine_coordinate_step() {
 #[test]
 fn test_year_long_time_series_memory() {
     // Test that a year-long time series with hourly steps doesn't cause memory issues
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     // Full year with hourly steps = 8760 points (or 8784 in leap year)
     cmd.args([
@@ -100,8 +99,7 @@ fn test_year_long_time_series_memory() {
 
 #[test]
 fn test_unbounded_watch_requires_single_location() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52:53:1", "13.4", "now", "--step=1m", "position"])
         .assert()
         .failure()
@@ -210,7 +208,7 @@ fn test_partial_line_handling_in_file() {
     .expect("Failed to write test data");
     temp_file.flush().expect("Failed to flush");
 
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
     cmd.args([
         "--format=csv",
         "--no-headers",
@@ -281,7 +279,7 @@ fn test_sigpipe_handling() {
 #[test]
 fn test_coordinate_range_with_negative_values() {
     // Test coordinate ranges that cross zero
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     cmd.args([
         "--format=csv",
@@ -309,7 +307,7 @@ fn test_coordinate_range_with_negative_values() {
 #[test]
 fn test_time_series_crossing_dst_boundary() {
     // Test time series that crosses DST transition
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     // March 31, 2024 - DST transition in Europe/Berlin happens at 2:00 AM
     // Use a partial date to generate time series
@@ -519,7 +517,7 @@ fn test_negative_coordinates_sunrise() {
 #[test]
 fn test_negative_longitude_range() {
     // Test longitude range from positive to negative (crossing Prime Meridian)
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     cmd.args([
         "--format=csv",
@@ -544,7 +542,7 @@ fn test_negative_longitude_range() {
 #[test]
 fn test_negative_latitude_range_southern_hemisphere() {
     // Test latitude range entirely in southern hemisphere
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     cmd.args([
         "--format=csv",
@@ -569,7 +567,7 @@ fn test_negative_latitude_range_southern_hemisphere() {
 #[test]
 fn test_both_coordinate_ranges_crossing_zero() {
     // Test both coordinates crossing zero simultaneously
-    let mut cmd = Command::cargo_bin("sunce").unwrap();
+    let mut cmd = sunce_command();
 
     cmd.args([
         "--format=csv",

@@ -1,11 +1,10 @@
 mod common;
-use assert_cmd::Command;
+use common::sunce_command;
 use predicates::prelude::*;
 
 #[test]
 fn test_single_value_table_format() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args(["52.0", "13.4", "2024-06-21T12:00:00+02:00", "position"])
         .assert()
         .success()
@@ -17,8 +16,7 @@ fn test_single_value_table_format() {
 
 #[test]
 fn test_time_series_table_format() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--show-inputs",
             "52.0",
@@ -38,8 +36,7 @@ fn test_time_series_table_format() {
 
 #[test]
 fn test_coordinate_sweep_table_format() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "--show-inputs",
             "52:53:0.5",
@@ -60,8 +57,7 @@ fn test_coordinate_sweep_table_format() {
 
 #[test]
 fn test_elevation_angle_table_format() {
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -73,8 +69,7 @@ fn test_elevation_angle_table_format() {
         .success()
         .stdout(predicate::str::contains("│ Elevation"));
 
-    Command::cargo_bin("sunce")
-        .unwrap()
+    sunce_command()
         .args([
             "52.0",
             "13.4",
@@ -89,8 +84,7 @@ fn test_elevation_angle_table_format() {
 
 #[test]
 fn test_mixed_variance_detection() {
-    let output = Command::cargo_bin("sunce")
-        .unwrap()
+    let output = sunce_command()
         .args([
             "--show-inputs",
             "52:54:1",
@@ -111,8 +105,7 @@ fn test_mixed_variance_detection() {
 
 #[test]
 fn test_header_section_with_invariants() {
-    let output = Command::cargo_bin("sunce")
-        .unwrap()
+    let output = sunce_command()
         .args([
             "--show-inputs",
             "52.0",
@@ -137,4 +130,20 @@ fn test_header_section_with_invariants() {
     assert_eq!(lines[6], "");
 
     assert!(lines[7].contains("┌"));
+}
+
+#[test]
+fn test_perf_reports_true_record_count_in_text_mode() {
+    sunce_command()
+        .args([
+            "--format=text",
+            "--perf",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00+02:00",
+            "position",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Processed 1 records"));
 }
