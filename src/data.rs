@@ -660,6 +660,15 @@ fn coord_range_iter(start: f64, end: f64, step: f64) -> Box<dyn Iterator<Item = 
     }
 }
 
+fn range_point_count(start: f64, end: f64, step: f64) -> usize {
+    if step == 0.0 || (end - start).abs() < f64::EPSILON {
+        1
+    } else {
+        let span = (end - start).abs().max(0.0);
+        (span / step).floor() as usize + 1
+    }
+}
+
 pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, String> {
     match source {
         LocationSource::Single(lat, lon) => Ok(Box::new(std::iter::once(Ok((lat, lon))))),
@@ -674,8 +683,8 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
 
             // Create a vector for one dimension to allow repeated iteration
             // Choose the smaller dimension to minimize memory usage
-            let lat_count = ((lat.1 - lat.0) / lat.2 + 1.0) as usize;
-            let lon_count = ((lon_end - lon_start) / lon_step + 1.0) as usize;
+            let lat_count = range_point_count(lat.0, lat.1, lat.2);
+            let lon_count = range_point_count(lon_start, lon_end, lon_step);
 
             if lat_count <= lon_count {
                 // Collect latitudes (smaller), iterate longitudes
@@ -1530,5 +1539,25 @@ mod tests {
         let dt = parse_datetime_string("2024-03-31T02:00:00", Some("+01:00"))
             .expect("should parse even in DST gap for fixed offset");
         assert_eq!(dt.offset().local_minus_utc(), 3600);
+    }
+
+    #[test]
+    fn range_with_fixed_longitude_handles_single_step() {
+        let source = LocationSource::Range {
+            lat: (52.0, 53.0, 1.0),
+            lon: Some((13.4, 13.4, 0.0)),
+        };
+
+        let coords = expand_location_source(source).expect("expand range");
+        let collected = coords
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect coords");
+
+        assert_eq!(collected.len(), 2);
+        assert!(
+            collected
+                .iter()
+                .all(|(_, lon)| (*lon - 13.4).abs() < f64::EPSILON)
+        );
     }
 }

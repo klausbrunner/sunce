@@ -13,6 +13,15 @@ use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
 
+fn sunrise_type_label<T>(result: &solar_positioning::SunriseResult<T>) -> &'static str {
+    use solar_positioning::SunriseResult;
+    match result {
+        SunriseResult::RegularDay { .. } => "NORMAL",
+        SunriseResult::AllDay { .. } => "ALL_DAY",
+        SunriseResult::AllNight { .. } => "ALL_NIGHT",
+    }
+}
+
 // Helper to create optional Float64Builder
 fn opt_f64_builder(condition: bool) -> Option<Float64Builder> {
     condition.then(|| Float64Builder::with_capacity(BATCH_SIZE))
@@ -305,25 +314,25 @@ fn write_sunrise_parquet<W: Write + Send>(
                     deltat_builder.as_mut().unwrap().append_value(deltat);
                 }
 
+                let type_str = sunrise_type_label(&sunrise_result);
+                type_builder.append_value(type_str);
+
                 match &sunrise_result {
                     SunriseResult::RegularDay {
                         sunrise,
                         transit,
                         sunset,
                     } => {
-                        type_builder.append_value("NORMAL");
                         append_time(&mut sunrise_builder, sunrise);
                         append_time(&mut transit_builder, transit);
                         append_time(&mut sunset_builder, sunset);
                     }
                     SunriseResult::AllDay { transit } => {
-                        type_builder.append_value("AllDay");
                         sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
                         sunset_builder.append_null();
                     }
                     SunriseResult::AllNight { transit } => {
-                        type_builder.append_value("AllNight");
                         sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
                         sunset_builder.append_null();
@@ -354,25 +363,25 @@ fn write_sunrise_parquet<W: Write + Send>(
                     deltat_builder.as_mut().unwrap().append_value(deltat);
                 }
 
+                let type_str = sunrise_type_label(&sunrise_sunset);
+                type_builder.append_value(type_str);
+
                 match &sunrise_sunset {
                     SunriseResult::RegularDay {
                         sunrise,
                         transit,
                         sunset,
                     } => {
-                        type_builder.append_value("NORMAL");
                         append_time(&mut sunrise_builder, sunrise);
                         append_time(&mut transit_builder, transit);
                         append_time(&mut sunset_builder, sunset);
                     }
                     SunriseResult::AllDay { transit } => {
-                        type_builder.append_value("AllDay");
                         sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
                         sunset_builder.append_null();
                     }
                     SunriseResult::AllNight { transit } => {
-                        type_builder.append_value("AllNight");
                         sunrise_builder.append_null();
                         append_time(&mut transit_builder, transit);
                         sunset_builder.append_null();

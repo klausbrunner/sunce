@@ -150,6 +150,45 @@ fn test_explicit_show_inputs_for_single_values() {
     ));
 }
 
+/// Test that refraction parameters are omitted when refraction is disabled
+#[test]
+fn test_show_inputs_omits_refraction_fields_when_disabled_csv() {
+    let mut cmd = sunce_command();
+    cmd.arg("--format=CSV")
+        .arg("--show-inputs")
+        .arg("--no-refraction")
+        .arg("52.0")
+        .arg("13.4")
+        .arg("2024-06-21T12:00:00")
+        .arg("position");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "latitude,longitude,elevation,dateTime,deltaT,azimuth,zenith",
+        ))
+        .stdout(predicate::str::contains("pressure").not())
+        .stdout(predicate::str::contains("temperature").not());
+}
+
+/// Test JSON output also omits refraction fields when disabled
+#[test]
+fn test_show_inputs_omits_refraction_fields_when_disabled_json() {
+    let mut cmd = sunce_command();
+    cmd.arg("--format=JSON")
+        .arg("--show-inputs")
+        .arg("--no-refraction")
+        .arg("52.0")
+        .arg("13.4")
+        .arg("2024-06-21T12:00:00")
+        .arg("position");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(r#""pressure""#).not())
+        .stdout(predicate::str::contains(r#""temperature""#).not());
+}
+
 /// Test sunrise single values do NOT auto-enable show-inputs
 #[test]
 fn test_sunrise_single_values_no_auto_show_inputs() {

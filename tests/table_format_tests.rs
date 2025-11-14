@@ -147,3 +147,21 @@ fn test_perf_reports_true_record_count_in_text_mode() {
         .success()
         .stderr(predicate::str::contains("Processed 1 records"));
 }
+
+#[test]
+fn test_text_table_omits_refraction_fields_when_disabled() {
+    let output = sunce_command()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00+02:00",
+            "position",
+            "--no-refraction",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("Pressure:"));
+    assert!(!stdout.contains("Temperature:"));
+}

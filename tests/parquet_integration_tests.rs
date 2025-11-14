@@ -466,7 +466,7 @@ fn test_parquet_sunrise_null_handling() {
         .expect("type should be StringArray");
     let type_value = type_array.value(0);
     assert_eq!(
-        type_value, "AllDay",
+        type_value, "ALL_DAY",
         "Should be AllDay scenario at north pole in summer"
     );
 

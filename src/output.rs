@@ -73,19 +73,21 @@ fn write_csv_position<W: std::io::Write>(
             position,
             deltat,
         } => {
+            let angle_label = if params.elevation_angle {
+                "elevation-angle"
+            } else {
+                "zenith"
+            };
+
             if first && headers {
                 if show_inputs {
-                    if params.elevation_angle {
-                        write!(
-                            writer,
-                            "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,elevation-angle\r\n"
-                        )?;
-                    } else {
-                        write!(
-                            writer,
-                            "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith\r\n"
-                        )?;
+                    let mut header_fields = vec!["latitude", "longitude", "elevation"];
+                    if params.refraction {
+                        header_fields.push("pressure");
+                        header_fields.push("temperature");
                     }
+                    header_fields.extend(["dateTime", "deltaT", "azimuth", angle_label]);
+                    write!(writer, "{}\r\n", header_fields.join(","))?;
                 } else if params.elevation_angle {
                     write!(writer, "dateTime,azimuth,elevation-angle\r\n")?;
                 } else {
@@ -100,14 +102,13 @@ fn write_csv_position<W: std::io::Write>(
             };
 
             if show_inputs {
+                write!(writer, "{:.5},{:.5},{:.3},", lat, lon, params.elevation)?;
+                if params.refraction {
+                    write!(writer, "{:.3},{:.3},", params.pressure, params.temperature)?;
+                }
                 write!(
                     writer,
-                    "{:.5},{:.5},{:.3},{:.3},{:.3},{},{:.3},{:.5},{:.5}\r\n",
-                    lat,
-                    lon,
-                    params.elevation,
-                    params.pressure,
-                    params.temperature,
+                    "{},{:.3},{:.5},{:.5}\r\n",
                     datetime.to_rfc3339(),
                     deltat,
                     position.azimuth(),
@@ -307,14 +308,21 @@ fn write_json_position<W: std::io::Write>(
             };
 
             if show_inputs {
+                write!(
+                    writer,
+                    r#"{{"latitude":{},"longitude":{},"elevation":{}"#,
+                    lat, lon, params.elevation
+                )?;
+                if params.refraction {
+                    write!(
+                        writer,
+                        r#","pressure":{},"temperature":{}"#,
+                        params.pressure, params.temperature
+                    )?;
+                }
                 writeln!(
                     writer,
-                    r#"{{"latitude":{},"longitude":{},"elevation":{},"pressure":{},"temperature":{},"dateTime":"{}","deltaT":{},"azimuth":{},"{}":{}}}"#,
-                    lat,
-                    lon,
-                    params.elevation,
-                    params.pressure,
-                    params.temperature,
+                    r#","dateTime":"{}","deltaT":{},"azimuth":{},"{}":{}}}"#,
                     datetime.to_rfc3339(),
                     deltat,
                     position.azimuth(),
@@ -615,6 +623,7 @@ fn write_streaming_text_table<W: std::io::Write>(
     params: &Parameters,
     source: crate::data::DataSource,
     writer: &mut W,
+    flush_each: bool,
 ) -> std::io::Result<usize> {
     let formatted = format_streaming_text_table(results, params, source);
     let mut record_count = 0;
@@ -624,6 +633,9 @@ fn write_streaming_text_table<W: std::io::Write>(
                 write!(writer, "{}", line)?;
                 if is_record {
                     record_count += 1;
+                    if flush_each {
+                        std::io::Write::flush(writer)?;
+                    }
                 }
             }
             Err(e) => return Err(std::io::Error::other(e)),
@@ -643,7 +655,7 @@ pub fn write_formatted_output<W: std::io::Write>(
     let format = params.format.clone();
 
     if format == "text" && matches!(command, Command::Position) {
-        return write_streaming_text_table(results, params, source, writer);
+        return write_streaming_text_table(results, params, source, writer, flush_each);
     }
 
     let show_inputs = params.show_inputs.unwrap_or(false);
@@ -738,8 +750,10 @@ fn format_streaming_text_table(
         header.push_str(&format!("  Longitude:   {:.6}°\n", lon0));
     }
     header.push_str(&format!("  Elevation:   {:.1} m\n", params.elevation));
-    header.push_str(&format!("  Pressure:    {:.1} hPa\n", params.pressure));
-    header.push_str(&format!("  Temperature: {:.1}°C\n", params.temperature));
+    if params.refraction {
+        header.push_str(&format!("  Pressure:    {:.1} hPa\n", params.pressure));
+        header.push_str(&format!("  Temperature: {:.1}°C\n", params.temperature));
+    }
     if !time_varies {
         header.push_str(&format!(
             "  DateTime:    {}\n",
@@ -909,4 +923,66 @@ fn format_streaming_text_table(
             .chain(remaining_rows.map(|res| res.map(|line| (line, true))))
             .chain(std::iter::once(Ok((footer, false)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compute;
+    use crate::data::{DataSource, LocationSource, TimeSource};
+    use chrono::{FixedOffset, TimeZone};
+    use std::io::Write;
+
+    #[derive(Default)]
+    struct MockWriter {
+        buf: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.buf.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn streaming_text_flushes_each_record_when_requested() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+
+        let params = Parameters {
+            format: "text".to_string(),
+            ..Parameters::default()
+        };
+
+        let calc = compute::calculate_position(52.0, 13.4, dt, &params).unwrap();
+        let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
+            Box::new(vec![Ok(calc)].into_iter());
+
+        let source = DataSource::Separate(
+            LocationSource::Single(52.0, 13.4),
+            TimeSource::Single(dt.to_rfc3339()),
+        );
+
+        let mut writer = MockWriter::default();
+
+        write_formatted_output(
+            results,
+            Command::Position,
+            &params,
+            source,
+            &mut writer,
+            true,
+        )
+        .expect("write succeeds");
+
+        assert_eq!(writer.flushes, 1);
+        assert!(!writer.buf.is_empty());
+    }
 }
