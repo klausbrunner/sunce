@@ -4,13 +4,15 @@ Sunce is a high-performance command-line solar position calculator written in Ru
 
 ## Module Structure
 
-The codebase consists of five core modules:
+The codebase is organized into focused modules:
 
-- **main.rs**: Entry point, orchestrates the pipeline, handles errors
-- **data.rs**: CLI parsing, input expansion, timezone handling
-- **compute.rs**: Solar calculations with streaming and SPA caching
-- **output.rs**: Output formatting for CSV, JSON, text
-- **parquet.rs**: Output formatting for Parquet (optional feature)
+- **cli.rs**: Manual command-line parsing/validation that produces `Parameters`, `Command`, and `DataSource`.
+- **planner.rs**: Converts parsed inputs into separate `ComputePlan` and `OutputPlan`, deriving metadata such as cache/flush policies.
+- **data.rs**: Input expansion (ranges, files, cartesian products), timezone handling, and iterator utilities used by planner and compute layers.
+- **compute.rs**: Solar calculations with streaming and SPA caching.
+- **output.rs**: CSV/JSON/text formatting plus dispatch logic that chooses the appropriate writer based on the plan.
+- **parquet.rs**: Parquet writer (optional feature gated by `parquet` flag).
+- **main.rs**: Entry point that wires the stages together (parse → plan → compute → output) and handles error reporting/perf logging.
 
 ## Command Structure
 
@@ -24,7 +26,7 @@ Both commands share the same input processing pipeline and support identical inp
 
 ## Input Processing
 
-Input handling in `data.rs` supports three modes:
+CLI parsing in `cli.rs` delegates to `data.rs` helpers and supports three modes:
 
 **Separate inputs**: Latitude, longitude, and datetime specified as separate arguments. Each can be a single value, a range (start:end:step), or a file (`@file.txt` or `@-` for stdin).
 
@@ -40,7 +42,7 @@ Input handling in `data.rs` supports three modes:
 
 All step values must be strictly positive. When combining `now` with `--step`, only a single location may be supplied so the iterator remains bounded per location.
 
-The parser uses manual string processing without external CLI frameworks. All parsing produces lazy iterators.
+Parsing uses manual string processing (no external CLI framework) and outputs strongly typed structures consumed by the planner. All subsequent stages operate on lazy iterators.
 
 ## Streaming Architecture
 
@@ -98,18 +100,19 @@ Timezone processing in `data.rs`:
 
 ## Error Handling
 
-All errors are `String` types with user-facing messages. Iterator stages produce `Result` items so downstream consumers (CLI output) can report failures without panicking. Errors are created inline with `format!()` macros; the CLI prints them to stderr and exits.
+Each stage wraps its failures in a lightweight typed error (`CliError`, `PlannerError`, `OutputError`). Iterator stages still produce `Result` items, but we convert the strings that describe invalid input, timezone gaps, or file problems into the appropriate error enum before bubbling them upward. The CLI prints user-facing messages (prefixing help/version output with the standard text) while keeping internal error-handling strongly typed.
 
 Common error cases include invalid coordinates, malformed datetimes, DST gaps in partial date expansions, invalid refraction parameters, file I/O failures, and invalid command-line arguments.
 
 ## Data Flow
 
-1. **CLI parsing**: `data.rs::parse_cli()` processes command-line arguments into Parameters, Command, and DataSource
+1. **CLI parsing**: `cli.rs::parse_cli()` processes command-line arguments into `Parameters`, `Command`, and `DataSource`
    - Options can appear anywhere in the command line (before, after, or mixed with positional arguments)
    - Validation of command-specific options happens after the command is identified
-2. **Iterator creation**: Data source expands into lazy iterator yielding (lat, lon, datetime) tuples
-3. **Calculation**: `compute.rs::calculate_stream()` transforms input iterator into result iterator
-4. **Output**: Format-specific functions consume result iterator and write to stdout
+2. **Planning**: `planner::build_job()` derives a `ComputePlan` (iterator, params, cache policy) and an `OutputPlan` (data source, flush policy). The planner centralizes cartesian expansion, watch-mode checks, and other orchestration rules.
+3. **Iterator creation**: The planner calls into `data::expansion` to expand inputs into lazy iterators yielding `(lat, lon, datetime)` tuples.
+4. **Calculation**: `compute.rs::calculate_stream()` transforms the iterator into results.
+5. **Output**: `output::dispatch_output()` selects the appropriate writer (CSV/JSON/text/Parquet) based on plan metadata and writes results to stdout.
 5. **Performance reporting**: Optional `--perf` flag measures throughput and reports statistics to stderr
 
 The entire pipeline maintains lazy evaluation. Nothing is materialized into memory except where explicitly required for algorithm correctness (e.g., smaller dimension in cartesian products).

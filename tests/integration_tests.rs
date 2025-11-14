@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use predicates::prelude::*;
 
 /// Test basic position calculation
 #[test]
@@ -212,10 +213,14 @@ fn test_time_step_formats() {
 #[test]
 fn test_coordinate_validation() {
     // Test invalid latitude
-    custom_position("91.0", "13.4", "2024-01-01T12:00:00").assert_failure();
+    custom_position("91.0", "13.4", "2024-01-01T12:00:00")
+        .assert_failure()
+        .stderr(predicate::str::contains("Latitude must be between"));
 
     // Test invalid longitude
-    custom_position("52.0", "181.0", "2024-01-01T12:00:00").assert_failure();
+    custom_position("52.0", "181.0", "2024-01-01T12:00:00")
+        .assert_failure()
+        .stderr(predicate::str::contains("Longitude must be between"));
 }
 
 /// Test datetime parsing

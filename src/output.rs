@@ -2,7 +2,10 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
+use crate::error::OutputError;
+mod formatters;
 use chrono::{DateTime, FixedOffset};
+use formatters::{CsvFormatter, Formatter, JsonFormatter, TextFormatter};
 use solar_positioning::SunriseResult;
 
 // Helper functions for time formatting
@@ -73,7 +76,7 @@ fn write_csv_position<W: std::io::Write>(
             position,
             deltat,
         } => {
-            let angle_label = if params.elevation_angle {
+            let angle_label = if params.output.elevation_angle {
                 "elevation-angle"
             } else {
                 "zenith"
@@ -82,29 +85,37 @@ fn write_csv_position<W: std::io::Write>(
             if first && headers {
                 if show_inputs {
                     let mut header_fields = vec!["latitude", "longitude", "elevation"];
-                    if params.refraction {
+                    if params.environment.refraction {
                         header_fields.push("pressure");
                         header_fields.push("temperature");
                     }
                     header_fields.extend(["dateTime", "deltaT", "azimuth", angle_label]);
                     write!(writer, "{}\r\n", header_fields.join(","))?;
-                } else if params.elevation_angle {
+                } else if params.output.elevation_angle {
                     write!(writer, "dateTime,azimuth,elevation-angle\r\n")?;
                 } else {
                     write!(writer, "dateTime,azimuth,zenith\r\n")?;
                 }
             }
 
-            let angle_value = if params.elevation_angle {
+            let angle_value = if params.output.elevation_angle {
                 90.0 - position.zenith_angle()
             } else {
                 position.zenith_angle()
             };
 
             if show_inputs {
-                write!(writer, "{:.5},{:.5},{:.3},", lat, lon, params.elevation)?;
-                if params.refraction {
-                    write!(writer, "{:.3},{:.3},", params.pressure, params.temperature)?;
+                write!(
+                    writer,
+                    "{:.5},{:.5},{:.3},",
+                    lat, lon, params.environment.elevation
+                )?;
+                if params.environment.refraction {
+                    write!(
+                        writer,
+                        "{:.3},{:.3},",
+                        params.environment.pressure, params.environment.temperature
+                    )?;
                 }
                 write!(
                     writer,
@@ -296,12 +307,12 @@ fn write_json_position<W: std::io::Write>(
             position,
             deltat,
         } => {
-            let angle_label = if params.elevation_angle {
+            let angle_label = if params.output.elevation_angle {
                 "elevation"
             } else {
                 "zenith"
             };
-            let angle_value = if params.elevation_angle {
+            let angle_value = if params.output.elevation_angle {
                 90.0 - position.zenith_angle()
             } else {
                 position.zenith_angle()
@@ -311,13 +322,13 @@ fn write_json_position<W: std::io::Write>(
                 write!(
                     writer,
                     r#"{{"latitude":{},"longitude":{},"elevation":{}"#,
-                    lat, lon, params.elevation
+                    lat, lon, params.environment.elevation
                 )?;
-                if params.refraction {
+                if params.environment.refraction {
                     write!(
                         writer,
                         r#","pressure":{},"temperature":{}"#,
-                        params.pressure, params.temperature
+                        params.environment.pressure, params.environment.temperature
                     )?;
                 }
                 writeln!(
@@ -644,6 +655,7 @@ fn write_streaming_text_table<W: std::io::Write>(
     Ok(record_count)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn write_formatted_output<W: std::io::Write>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
@@ -652,50 +664,66 @@ pub fn write_formatted_output<W: std::io::Write>(
     writer: &mut W,
     flush_each: bool,
 ) -> std::io::Result<usize> {
-    let format = params.format.clone();
+    write_with_formatter(results, command, params, source, writer, flush_each)
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
 
-    if format == "text" && matches!(command, Command::Position) {
-        return write_streaming_text_table(results, params, source, writer, flush_each);
+pub fn dispatch_output(
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
+    command: Command,
+    params: &Parameters,
+    output_plan: &crate::planner::OutputPlan,
+) -> Result<usize, OutputError> {
+    if params.output.format.eq_ignore_ascii_case("parquet") {
+        #[cfg(feature = "parquet")]
+        {
+            let stdout = std::io::stdout();
+            return write_parquet_output(results, command, params, stdout)
+                .map_err(|e| OutputError::from(e.to_string()));
+        }
+        #[cfg(not(feature = "parquet"))]
+        {
+            return Err(OutputError::from(
+                "PARQUET format not available. Recompile with --features parquet",
+            ));
+        }
     }
 
-    let show_inputs = params.show_inputs.unwrap_or(false);
-    let headers = params.headers;
+    use std::io::{BufWriter, Write};
+    let stdout = std::io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    let res = write_with_formatter(
+        results,
+        command,
+        params,
+        output_plan.data_source.clone(),
+        &mut writer,
+        output_plan.flush_each_record,
+    );
+    let _ = writer.flush();
+    res
+}
 
-    let mut count = 0;
-    for (index, result_or_err) in results.enumerate() {
-        let result = match result_or_err {
-            Ok(r) => r,
-            Err(e) => return Err(std::io::Error::other(e)),
-        };
-        let first = index == 0;
-
-        match format.as_str() {
-            "csv" => match command {
-                Command::Position => {
-                    write_csv_position(&result, show_inputs, headers, first, params, writer)?
-                }
-                Command::Sunrise => {
-                    write_csv_sunrise(&result, show_inputs, headers, first, writer)?
-                }
-            },
-            "json" => match command {
-                Command::Position => write_json_position(&result, show_inputs, params, writer)?,
-                Command::Sunrise => write_json_sunrise(&result, show_inputs, writer)?,
-            },
-            _ => match command {
-                Command::Position => {
-                    write_text_position(&result, show_inputs, params.elevation_angle, writer)?
-                }
-                Command::Sunrise => write_text_sunrise(&result, show_inputs, writer)?,
-            },
-        }
-
-        if flush_each {
-            writer.flush()?;
-        }
-        count += 1;
-    }
-    Ok(count)
+fn write_with_formatter<W: std::io::Write>(
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
+    command: Command,
+    params: &Parameters,
+    data_source: crate::data::DataSource,
+    writer: &mut W,
+    flush_each: bool,
+) -> Result<usize, OutputError> {
+    let mut formatter: Box<dyn Formatter> = match params.output.format.as_str() {
+        "csv" => Box::new(CsvFormatter::new(writer, params, command, flush_each)),
+        "json" => Box::new(JsonFormatter::new(writer, params, command, flush_each)),
+        _ => Box::new(TextFormatter::new(
+            writer,
+            params,
+            command,
+            data_source,
+            flush_each,
+        )),
+    };
+    formatter.write(results).map_err(OutputError::from)
 }
 
 fn format_streaming_text_table(
@@ -749,10 +777,19 @@ fn format_streaming_text_table(
     if !lon_varies {
         header.push_str(&format!("  Longitude:   {:.6}°\n", lon0));
     }
-    header.push_str(&format!("  Elevation:   {:.1} m\n", params.elevation));
-    if params.refraction {
-        header.push_str(&format!("  Pressure:    {:.1} hPa\n", params.pressure));
-        header.push_str(&format!("  Temperature: {:.1}°C\n", params.temperature));
+    header.push_str(&format!(
+        "  Elevation:   {:.1} m\n",
+        params.environment.elevation
+    ));
+    if params.environment.refraction {
+        header.push_str(&format!(
+            "  Pressure:    {:.1} hPa\n",
+            params.environment.pressure
+        ));
+        header.push_str(&format!(
+            "  Temperature: {:.1}°C\n",
+            params.environment.temperature
+        ));
     }
     if !time_varies {
         header.push_str(&format!(
@@ -787,7 +824,7 @@ fn format_streaming_text_table(
         headers_vec.push("DateTime");
     }
     headers_vec.push("Azimuth");
-    if params.elevation_angle {
+    if params.output.elevation_angle {
         headers_vec.push("Elevation");
     } else {
         headers_vec.push("Zenith");
@@ -834,7 +871,7 @@ fn format_streaming_text_table(
 
     // Format a single row
     let col_widths_clone = col_widths.clone();
-    let elevation_angle = params.elevation_angle;
+    let elevation_angle = params.output.elevation_angle;
     let format_row = move |result: &CalculationResult| -> String {
         if let CalculationResult::Position {
             lat,
@@ -929,6 +966,7 @@ fn format_streaming_text_table(
 mod tests {
     use super::*;
     use crate::compute;
+    use crate::data::config::OutputOptions;
     use crate::data::{DataSource, LocationSource, TimeSource};
     use chrono::{FixedOffset, TimeZone};
     use std::io::Write;
@@ -957,7 +995,10 @@ mod tests {
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
         let params = Parameters {
-            format: "text".to_string(),
+            output: OutputOptions {
+                format: "text".to_string(),
+                ..OutputOptions::default()
+            },
             ..Parameters::default()
         };
 

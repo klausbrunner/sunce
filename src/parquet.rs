@@ -69,10 +69,10 @@ fn write_position_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.show_inputs.unwrap_or(false);
-    let elevation_angle = params.elevation_angle;
+    let show_inputs = params.output.show_inputs.unwrap_or(false);
+    let elevation_angle = params.output.elevation_angle;
 
-    let schema = build_position_schema(show_inputs, elevation_angle, params.refraction);
+    let schema = build_position_schema(show_inputs, elevation_angle, params.environment.refraction);
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -83,8 +83,8 @@ fn write_position_parquet<W: Write + Send>(
     let mut lat_builder = opt_f64_builder(show_inputs);
     let mut lon_builder = opt_f64_builder(show_inputs);
     let mut elev_builder = opt_f64_builder(show_inputs);
-    let mut press_builder = opt_f64_builder(show_inputs && params.refraction);
-    let mut temp_builder = opt_f64_builder(show_inputs && params.refraction);
+    let mut press_builder = opt_f64_builder(show_inputs && params.environment.refraction);
+    let mut temp_builder = opt_f64_builder(show_inputs && params.environment.refraction);
     let mut dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
     let mut deltat_builder = opt_f64_builder(show_inputs);
     let mut az_builder = Float64Builder::with_capacity(BATCH_SIZE);
@@ -110,16 +110,16 @@ fn write_position_parquet<W: Write + Send>(
                 elev_builder
                     .as_mut()
                     .unwrap()
-                    .append_value(params.elevation);
-                if params.refraction {
+                    .append_value(params.environment.elevation);
+                if params.environment.refraction {
                     press_builder
                         .as_mut()
                         .unwrap()
-                        .append_value(params.pressure);
+                        .append_value(params.environment.pressure);
                     temp_builder
                         .as_mut()
                         .unwrap()
-                        .append_value(params.temperature);
+                        .append_value(params.environment.temperature);
                 }
                 deltat_builder.as_mut().unwrap().append_value(deltat);
             }
@@ -261,8 +261,8 @@ fn write_sunrise_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.show_inputs.unwrap_or(false);
-    let show_twilight = params.twilight;
+    let show_inputs = params.output.show_inputs.unwrap_or(false);
+    let show_twilight = params.calculation.twilight;
 
     let schema = build_sunrise_schema(show_inputs, show_twilight);
     let props = WriterProperties::builder()

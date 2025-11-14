@@ -51,13 +51,13 @@ fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
 }
 
 fn refraction_correction(params: &Parameters) -> Result<Option<RefractionCorrection>, String> {
-    if params.refraction {
-        RefractionCorrection::new(params.pressure, params.temperature)
+    if params.environment.refraction {
+        RefractionCorrection::new(params.environment.pressure, params.environment.temperature)
             .map(Some)
             .map_err(|err| {
                 format!(
                     "Invalid refraction parameters (pressure={}, temperature={}): {}",
-                    params.pressure, params.temperature, err
+                    params.environment.pressure, params.environment.temperature, err
                 )
             })
     } else {
@@ -75,12 +75,19 @@ pub fn calculate_position(
     let deltat = resolve_deltat(dt, params);
     let refraction = refraction_correction(params)?;
 
-    let position = if params.algorithm == "grena3" {
+    let position = if params.calculation.algorithm == "grena3" {
         solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
             .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     } else {
-        solar_positioning::spa::solar_position(dt, lat, lon, params.elevation, deltat, refraction)
-            .map_err(|e| format!("Failed to calculate solar position: {}", e))?
+        solar_positioning::spa::solar_position(
+            dt,
+            lat,
+            lon,
+            params.environment.elevation,
+            deltat,
+            refraction,
+        )
+        .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     };
 
     Ok(CalculationResult::Position {
@@ -103,7 +110,7 @@ pub fn calculate_sunrise(
 
     let deltat = resolve_deltat(dt, params);
 
-    if params.twilight {
+    if params.calculation.twilight {
         let horizons = vec![
             Horizon::SunriseSunset,
             Horizon::CivilTwilight,
@@ -142,6 +149,7 @@ pub fn calculate_sunrise(
         })
     } else {
         let horizon = params
+            .calculation
             .horizon
             .map(Horizon::Custom)
             .unwrap_or(Horizon::SunriseSunset);
@@ -208,7 +216,7 @@ pub fn calculate_stream(
     match command {
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
-            if params.algorithm == "spa" && allow_time_cache {
+            if params.calculation.algorithm == "spa" && allow_time_cache {
                 use solar_positioning::spa;
 
                 // Cache for time-dependent SPA calculations
@@ -234,7 +242,7 @@ pub fn calculate_stream(
                         let position = spa::spa_with_time_dependent_parts(
                             lat,
                             lon,
-                            params.elevation,
+                            params.environment.elevation,
                             refraction,
                             time_parts.as_ref(),
                         )

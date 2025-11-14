@@ -52,7 +52,7 @@ sunce --format=csv 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
 # Sunrise, sunset, and twilight times for Tokyo throughout March 2027, JSON output
 sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twilight
 
-# High-performance data processing: large datasets with Parquet output (zstd compressed)
+# High-performance data processing: large datasets with Parquet output (Snappy compressed)
 sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
 ```
 
