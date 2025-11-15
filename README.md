@@ -98,7 +98,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 ## Key options
 
 - `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or a TZ database name (e.g., `Europe/Berlin`).
-- `--deltat[=<seconds>]` – specify delta-T explicitly, or provide the option without value to request an automatic estimate. For background on delta-T see [solar-positioning](https://crates.io/crates/solar-positioning).
+- `--deltat[=<seconds>]` – default is `0` seconds when omitted. Provide an explicit value with `--deltat=<seconds>` or pass the option without a value to request an automatic estimate. For background on delta-T see [solar-positioning](https://crates.io/crates/solar-positioning).
 - `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
 - `--[no-]headers` – include/omit header row for CSV output (default: headers on).
 - `--[no-]show-inputs` – include input parameters in the output.

@@ -113,7 +113,7 @@ Common error cases include invalid coordinates, malformed datetimes, DST gaps in
 3. **Iterator creation**: The planner calls into `data::expansion` to expand inputs into lazy iterators yielding `(lat, lon, datetime)` tuples.
 4. **Calculation**: `compute.rs::calculate_stream()` transforms the iterator into results.
 5. **Output**: `output::dispatch_output()` selects the appropriate writer (CSV/JSON/text/Parquet) based on plan metadata and writes results to stdout.
-5. **Performance reporting**: Optional `--perf` flag measures throughput and reports statistics to stderr
+6. **Performance reporting**: Optional `--perf` flag measures throughput and reports statistics to stderr
 
 The entire pipeline maintains lazy evaluation. Nothing is materialized into memory except where explicitly required for algorithm correctness (e.g., smaller dimension in cartesian products).
 
@@ -140,7 +140,7 @@ The entire pipeline maintains lazy evaluation. Nothing is materialized into memo
 
 ## Testing
 
-Test suite includes more than 170 tests:
+Test suite includes:
 
 **Integration tests**: End-to-end CLI testing with `assert_cmd` and `predicates`
 **Critical tests**: Calculation accuracy against reference values

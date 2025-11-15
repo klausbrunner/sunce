@@ -116,8 +116,8 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
                     "no-refraction" => params.environment.refraction = false,
                     "elevation-angle" => params.output.elevation_angle = true,
                     "twilight" => params.calculation.twilight = true,
-                    "help" => return Err(data::get_help_text().into()),
-                    "version" => return Err(data::get_version_text().into()),
+                    "help" => return Err(get_help_text().into()),
+                    "version" => return Err(get_version_text().into()),
                     _ => return Err(format!("Unknown option: --{}", stripped).into()),
                 }
             }
@@ -132,9 +132,9 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
 
     if positional_args[0] == "help" {
         if positional_args.len() >= 2 {
-            return Err(data::get_command_help(&positional_args[1]).into());
+            return Err(get_command_help(&positional_args[1]).into());
         } else {
-            return Err(data::get_help_text().into());
+            return Err(get_help_text().into());
         }
     }
 
@@ -410,4 +410,116 @@ fn validate_step_value(step: &str) -> CliResult<()> {
     data::parse_duration_positive(step)
         .map(|_| ())
         .map_err(CliError::from)
+}
+
+fn get_version_text() -> String {
+    format!(
+        "sunce {}\n Build: {} ({})\n Built: {}\n Features: {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("BUILD_PROFILE"),
+        env!("BUILD_TARGET"),
+        env!("BUILD_DATE"),
+        env!("BUILD_FEATURES")
+    )
+}
+
+fn get_help_text() -> String {
+    format!(
+        r#"sunce {}
+Calculates topocentric solar coordinates or sunrise/sunset times.
+
+Usage: sunce [OPTIONS] <latitude> <longitude> <dateTime> <COMMAND>
+
+Examples:
+  sunce 52.0 13.4 2024-01-01 position
+  sunce 52:53:0.1 13:14:0.1 2024 position --format=csv
+  sunce @coords.txt @times.txt position
+  sunce @data.txt position  # paired lat,lng,datetime data
+  echo '52.0 13.4 2024-01-01T12:00:00' | sunce @- position
+
+Arguments:
+  <latitude>        Latitude: decimal degrees, range, or file
+                      Range:       -90° to +90°
+                      52.5        single coordinate
+                      52:53:0.1   range from 52° to 53° in 0.1° steps
+                      @coords.txt file with coordinates (or @- for stdin)
+
+  <longitude>       Longitude: decimal degrees, range, or file
+                      Range:       -180° to +180°
+                      13.4        single coordinate
+                      13:14:0.1   range from 13° to 14° in 0.1° steps
+                      @coords.txt file with coordinates (or @- for stdin)
+
+  <dateTime>        Date/time: ISO format, partial dates, or file
+                      2024-01-01           specific date (midnight)
+                      2024-01-01T12:00:00  specific date and time
+                      2024                 entire year (with --step)
+                      now                  current date and time
+                      @times.txt           file with times (or @- for stdin)
+
+Options:
+  --deltat[=<value>]    Delta T in seconds. Default is 0 when the option is
+                        omitted. Use --deltat=<value> for an explicit value, or
+                        --deltat (no value) to request an automatic estimate.
+  --format=<format>     Output format: text, csv, json, parquet. Default: text
+  --help                Show this help message and exit.
+  --version             Print version information and exit.
+  --[no-]headers        Show headers in output (CSV only). Default: true
+  --[no-]show-inputs    Show all inputs in output. Auto-enabled for ranges/files
+                        unless --no-show-inputs is used.
+  --perf                Show performance statistics.
+  --timezone=<tz>       Timezone as offset (e.g. +01:00) or zone id (e.g.
+                        America/Los_Angeles). Overrides datetime timezone.
+
+Commands:
+  position              Calculate topocentric solar coordinates
+  sunrise               Calculate sunrise, transit, sunset and twilight times
+
+Run 'sunce help <command>' for command-specific options.
+"#,
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn get_command_help(command: &str) -> String {
+    match command {
+        "position" => r#"Usage: sunce position [OPTIONS]
+
+Calculates topocentric solar coordinates.
+
+Options:
+  --algorithm=<alg>         Algorithm: spa, grena3. Default: spa
+  --elevation=<meters>      Elevation above sea level in meters. Default: 0
+  --elevation-angle         Output elevation angle instead of zenith angle.
+  --[no-]refraction         Apply refraction correction. Default: true
+  --pressure=<hPa>          Avg. air pressure in hPa. Used for refraction. Default: 1013
+  --temperature=<celsius>   Avg. air temperature in °C. Used for refraction. Default: 15
+  --step=<interval>         Step interval for time series. Examples: 30s, 15m, 2h, 1d.
+                            Default: 1h
+
+Examples:
+  sunce 52.0 13.4 2024-06-21T12:00:00 position
+  sunce 52.0 13.4 2024 position --step=1d
+  sunce 50:55:0.5 10:15:0.5 2024-06-21T12:00:00 position --algorithm=grena3
+"#
+        .to_string(),
+        "sunrise" => r#"Usage: sunce sunrise [OPTIONS]
+
+Calculates sunrise, transit, sunset and (optionally) twilight times.
+
+Options:
+  --twilight                Include civil, nautical, and astronomical twilight times.
+  --horizon=<degrees>       Custom horizon angle in degrees (alternative to --twilight).
+
+Examples:
+  sunce 52.0 13.4 2024-06-21 sunrise
+  sunce 52.0 13.4 2024-06 sunrise --twilight
+  sunce 52.0 13.4 2024-06-21 sunrise --horizon=-6.0
+"#
+        .to_string(),
+        _ => format!(
+            "Unknown command: {}\n\nRun 'sunce --help' for usage.",
+            command
+        ),
+    }
 }
