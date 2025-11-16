@@ -362,18 +362,14 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
 }
 
 fn is_partial_date(s: &str) -> bool {
-    if s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()) {
-        return true;
+    match s.len() {
+        4 => s.chars().all(|c| c.is_ascii_digit()),
+        7 if s.as_bytes().get(4) == Some(&b'-') => s
+            .chars()
+            .enumerate()
+            .all(|(idx, c)| idx == 4 || c.is_ascii_digit()),
+        _ => false,
     }
-
-    if s.len() == 7 && &s[4..5] == "-" {
-        let year_part = &s[0..4];
-        let month_part = &s[5..7];
-        return year_part.chars().all(|c| c.is_ascii_digit())
-            && month_part.chars().all(|c| c.is_ascii_digit());
-    }
-
-    false
 }
 
 fn is_date_without_time(s: &str) -> bool {
@@ -389,18 +385,10 @@ fn is_date_without_time(s: &str) -> bool {
 fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {
     match source {
         DataSource::Separate(loc, time) => {
-            let has_location_range = matches!(loc, LocationSource::Range { .. });
-            let has_location_file = matches!(loc, LocationSource::File(_));
-            let has_time_range = matches!(time, TimeSource::Range(_, _));
-            let has_time_file = matches!(time, TimeSource::File(_));
-
-            let is_position_date_series = matches!(time, TimeSource::Single(s) if command == Command::Position && is_date_without_time(s));
-
-            has_location_range
-                || has_location_file
-                || has_time_range
-                || has_time_file
-                || is_position_date_series
+            matches!(loc, LocationSource::Range { .. } | LocationSource::File(_))
+                || matches!(time, TimeSource::Range(_, _) | TimeSource::File(_))
+                || (command == Command::Position
+                    && matches!(time, TimeSource::Single(s) if is_date_without_time(s)))
         }
         DataSource::Paired(_) => true,
     }

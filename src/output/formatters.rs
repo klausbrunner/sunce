@@ -33,7 +33,7 @@ impl<'a, W: Write> CsvFormatter<'a, W> {
             writer,
             params,
             command,
-            show_inputs: params.output.show_inputs.unwrap_or(false),
+            show_inputs: params.output.should_show_inputs(),
             headers: params.output.headers,
             flush_each,
         }
@@ -92,7 +92,7 @@ impl<'a, W: Write> JsonFormatter<'a, W> {
             writer,
             params,
             command,
-            show_inputs: params.output.show_inputs.unwrap_or(false),
+            show_inputs: params.output.should_show_inputs(),
             flush_each,
         }
     }
@@ -165,7 +165,7 @@ impl<'a, W: Write> Formatter for TextFormatter<'a, W> {
             .map_err(|e| e.to_string());
         }
 
-        let show_inputs = self.params.output.show_inputs.unwrap_or(false);
+        let show_inputs = self.params.output.should_show_inputs();
         let mut count = 0;
         for result_or_err in results {
             let result = result_or_err?;

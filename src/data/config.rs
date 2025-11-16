@@ -6,6 +6,13 @@ pub struct OutputOptions {
     pub elevation_angle: bool,
 }
 
+impl OutputOptions {
+    /// Returns whether inputs should be emitted in the output stream.
+    pub fn should_show_inputs(&self) -> bool {
+        self.show_inputs.unwrap_or(false)
+    }
+}
+
 impl Default for OutputOptions {
     fn default() -> Self {
         Self {

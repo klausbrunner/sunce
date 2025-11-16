@@ -9,6 +9,13 @@ use std::sync::OnceLock;
 static SYSTEM_TIMEZONE: OnceLock<TimezoneInfo> = OnceLock::new();
 const SYSTEM_TZ_OVERRIDE_ENV: &str = "SUNCE_SYSTEM_TIMEZONE";
 
+fn timezone_gap_error(dt_str: &str) -> String {
+    format!(
+        "Datetime does not exist in timezone (likely DST gap): {}",
+        dt_str
+    )
+}
+
 #[derive(Clone)]
 pub enum TimezoneInfo {
     Fixed(FixedOffset),
@@ -89,12 +96,9 @@ pub fn parse_datetime_string(
                 .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
 
             let tz_info = get_timezone_info(override_tz);
-            return tz_info.to_datetime_from_local(&naive_dt).ok_or_else(|| {
-                format!(
-                    "Datetime does not exist in timezone (likely DST gap): {}",
-                    dt_str
-                )
-            });
+            return tz_info
+                .to_datetime_from_local(&naive_dt)
+                .ok_or_else(|| timezone_gap_error(dt_str));
         }
     }
 
@@ -118,12 +122,9 @@ pub fn parse_datetime_string(
         .and_hms_opt(0, 0, 0)
         .expect("Midnight time creation cannot fail");
     let tz_info = get_timezone_info(override_tz);
-    tz_info.to_datetime_from_local(&naive_dt).ok_or_else(|| {
-        format!(
-            "Datetime does not exist in timezone (likely DST gap): {}",
-            dt_str
-        )
-    })
+    tz_info
+        .to_datetime_from_local(&naive_dt)
+        .ok_or_else(|| timezone_gap_error(dt_str))
 }
 
 pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
@@ -182,34 +183,15 @@ pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
 }
 
 fn detect_system_timezone() -> TimezoneInfo {
-    if let Ok(override_value) = env::var(SYSTEM_TZ_OVERRIDE_ENV)
-        && let Some(info) = parse_timezone_spec(override_value.trim())
-    {
-        return info;
-    }
-
-    if let Ok(system_tz) = get_timezone()
-        && let Some(info) = parse_timezone_spec(system_tz.trim())
-    {
-        return info;
-    }
-
-    TimezoneInfo::Fixed(Local::now().offset().fix())
+    parse_timezone_env(env::var(SYSTEM_TZ_OVERRIDE_ENV).ok())
+        .or_else(|| parse_timezone_env(get_timezone().ok()))
+        .unwrap_or_else(|| TimezoneInfo::Fixed(Local::now().offset().fix()))
 }
 
 pub fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
-    if let Some(spec) = override_tz
-        && let Some(info) = parse_timezone_spec(spec)
-    {
-        return info;
-    }
-    if let Ok(env_tz) = env::var("TZ")
-        && let Some(info) = parse_timezone_spec(env_tz.trim())
-    {
-        return info;
-    }
-
-    SYSTEM_TIMEZONE.get_or_init(detect_system_timezone).clone()
+    parse_timezone_override(override_tz)
+        .or_else(|| parse_timezone_env(env::var("TZ").ok()))
+        .unwrap_or_else(|| SYSTEM_TIMEZONE.get_or_init(detect_system_timezone).clone())
 }
 
 pub fn parse_tz_offset(tz: &str) -> Option<FixedOffset> {
@@ -226,4 +208,15 @@ pub fn parse_tz_offset(tz: &str) -> Option<FixedOffset> {
     };
 
     FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))
+}
+
+fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {
+    spec.map(str::trim).and_then(parse_timezone_spec)
+}
+
+fn parse_timezone_env(value: Option<String>) -> Option<TimezoneInfo> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .and_then(parse_timezone_spec)
 }

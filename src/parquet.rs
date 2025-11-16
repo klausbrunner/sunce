@@ -69,7 +69,7 @@ fn write_position_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.output.show_inputs.unwrap_or(false);
+    let show_inputs = params.output.should_show_inputs();
     let elevation_angle = params.output.elevation_angle;
 
     let schema = build_position_schema(show_inputs, elevation_angle, params.environment.refraction);
@@ -261,7 +261,7 @@ fn write_sunrise_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.output.show_inputs.unwrap_or(false);
+    let show_inputs = params.output.should_show_inputs();
     let show_twilight = params.calculation.twilight;
 
     let schema = build_sunrise_schema(show_inputs, show_twilight);
