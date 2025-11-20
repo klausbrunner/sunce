@@ -1,3 +1,4 @@
+use super::config::Step;
 use chrono::{DateTime, FixedOffset};
 use std::path::PathBuf;
 
@@ -20,7 +21,7 @@ pub enum LocationSource {
 #[derive(Debug, Clone)]
 pub enum TimeSource {
     Single(String),
-    Range(String, Option<String>),
+    Range(String, Option<Step>),
     File(InputPath),
     Now,
 }
@@ -44,7 +45,7 @@ impl DataSource {
         }
     }
 
-    pub fn is_watch_mode(&self, step: &Option<String>) -> bool {
+    pub fn is_watch_mode(&self, step: &Option<crate::data::config::Step>) -> bool {
         matches!(self, DataSource::Separate(_, TimeSource::Now)) && step.is_some()
     }
 }

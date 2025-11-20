@@ -1,11 +1,10 @@
 use super::time_utils::{
     TimezoneInfo, convert_datetime_to_timezone, get_timezone_info, parse_datetime_string,
-    parse_duration_positive,
 };
 use super::types::{
     CoordTimeResult, CoordTimeStream, InputPath, LocationSource, LocationStream, TimeSource,
 };
-use super::{Command, validate_latitude, validate_longitude};
+use super::{Command, Step, TimezoneOverride, validate_latitude, validate_longitude};
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, Utc};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
@@ -291,8 +290,8 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
 
 pub fn expand_time_source(
     source: TimeSource,
-    step_override: Option<String>,
-    override_tz: Option<String>,
+    step_override: Option<Step>,
+    override_tz: Option<TimezoneOverride>,
     command: Command,
 ) -> Result<TimeStream, String> {
     match source {
@@ -300,28 +299,29 @@ pub fn expand_time_source(
             let is_date_only =
                 dt_str.len() == 10 && dt_str.matches('-').count() == 2 && !dt_str.contains('T');
             if command == Command::Position && is_date_only {
-                let step = step_override.unwrap_or_else(|| "1h".to_string());
+                let step = step_override.unwrap_or_else(|| Step(chrono::Duration::hours(1)));
                 expand_partial_date(dt_str, step, override_tz)
             } else {
-                let dt = parse_datetime_string(&dt_str, override_tz.as_deref())?;
+                let dt =
+                    parse_datetime_string(&dt_str, override_tz.as_ref().map(|tz| tz.as_str()))?;
                 Ok(TimeStream::new(std::iter::once(Ok(dt)), true))
             }
         }
         TimeSource::Range(partial_date, step_opt) => {
             let step = step_override.or(step_opt).unwrap_or_else(|| {
                 if command == Command::Sunrise || partial_date.len() == 4 {
-                    "1d".to_string()
+                    Step(chrono::Duration::days(1))
                 } else {
-                    "1h".to_string()
+                    Step(chrono::Duration::hours(1))
                 }
             });
             expand_partial_date(partial_date, step, override_tz)
         }
         TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
-            let tz_info = get_timezone_info(override_tz.as_deref());
+            let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
             if let Some(step_str) = step_override {
-                let step_duration = parse_duration_positive(&step_str)?;
+                let step_duration: chrono::Duration = step_str.into();
                 let mut first = true;
                 let tz_clone = tz_info.clone();
                 let iter = std::iter::from_fn(move || {
@@ -451,11 +451,11 @@ fn to_local_datetime(
 
 fn expand_partial_date(
     date_str: String,
-    step: String,
-    override_tz: Option<String>,
+    step: Step,
+    override_tz: Option<TimezoneOverride>,
 ) -> Result<TimeStream, String> {
-    let step_duration = parse_duration_positive(&step)?;
-    let tz_info = get_timezone_info(override_tz.as_deref());
+    let step_duration: chrono::Duration = step.into();
+    let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
     let bounds = naive_bounds_from_partial(&date_str)?;
 
     let start_dt = to_local_datetime(&tz_info, bounds.start, "Start", &date_str)?;
@@ -468,7 +468,7 @@ fn expand_partial_date(
 
 fn read_times_file(
     input_path: InputPath,
-    override_tz: Option<String>,
+    override_tz: Option<TimezoneOverride>,
 ) -> Result<TimeStream, String> {
     let path_display = match &input_path {
         InputPath::Stdin => "stdin".to_string(),
@@ -499,7 +499,7 @@ fn read_times_file(
                 continue;
             }
 
-            match parse_datetime_string(trimmed, tz_override.as_deref()) {
+            match parse_datetime_string(trimmed, tz_override.as_ref().map(|tz| tz.as_str())) {
                 Ok(dt) => return Some(Ok(dt)),
                 Err(err) => {
                     return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
@@ -515,8 +515,8 @@ fn read_times_file(
 pub fn expand_cartesian_product(
     loc_source: LocationSource,
     time_source: TimeSource,
-    step: Option<String>,
-    override_tz: Option<String>,
+    step: Option<Step>,
+    override_tz: Option<TimezoneOverride>,
     command: Command,
 ) -> Result<CoordTimeStream, String> {
     let is_time_single = matches!(time_source, TimeSource::Single(_))
@@ -601,7 +601,7 @@ pub fn expand_cartesian_product(
 
 pub fn expand_paired_file(
     input_path: InputPath,
-    override_tz: Option<String>,
+    override_tz: Option<TimezoneOverride>,
 ) -> Result<CoordTimeStream, String> {
     let path_display = match &input_path {
         InputPath::Stdin => "stdin".to_string(),
@@ -675,7 +675,7 @@ pub fn expand_paired_file(
             };
 
             let dt_str = parts[2..].join(" ");
-            match parse_datetime_string(dt_str.trim(), tz_override.as_deref()) {
+            match parse_datetime_string(dt_str.trim(), tz_override.as_ref().map(|tz| tz.as_str())) {
                 Ok(dt) => return Some(Ok((lat, lon, dt))),
                 Err(err) => {
                     return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));

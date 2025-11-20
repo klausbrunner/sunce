@@ -1,7 +1,7 @@
 //! Output formatting for CSV, JSON, and text table formats.
 
 use crate::compute::CalculationResult;
-use crate::data::{Command, Parameters};
+use crate::data::{Command, OutputFormat, Parameters};
 use crate::error::OutputError;
 mod formatters;
 use chrono::{DateTime, FixedOffset};
@@ -674,19 +674,14 @@ pub fn dispatch_output(
     params: &Parameters,
     output_plan: &crate::planner::OutputPlan,
 ) -> Result<usize, OutputError> {
-    if params.output.format.eq_ignore_ascii_case("parquet") {
+    match params.output.format {
         #[cfg(feature = "parquet")]
-        {
+        OutputFormat::Parquet => {
             let stdout = std::io::stdout();
             return write_parquet_output(results, command, params, stdout)
                 .map_err(|e| OutputError::from(e.to_string()));
         }
-        #[cfg(not(feature = "parquet"))]
-        {
-            return Err(OutputError::from(
-                "PARQUET format not available. Recompile with --features parquet",
-            ));
-        }
+        _ => {}
     }
 
     use std::io::{BufWriter, Write};
@@ -712,9 +707,9 @@ fn write_with_formatter<W: std::io::Write>(
     writer: &mut W,
     flush_each: bool,
 ) -> Result<usize, OutputError> {
-    let mut formatter: Box<dyn Formatter> = match params.output.format.as_str() {
-        "csv" => Box::new(CsvFormatter::new(writer, params, command, flush_each)),
-        "json" => Box::new(JsonFormatter::new(writer, params, command, flush_each)),
+    let mut formatter: Box<dyn Formatter> = match params.output.format {
+        OutputFormat::Csv => Box::new(CsvFormatter::new(writer, params, command, flush_each)),
+        OutputFormat::Json => Box::new(JsonFormatter::new(writer, params, command, flush_each)),
         _ => Box::new(TextFormatter::new(
             writer,
             params,
@@ -967,7 +962,7 @@ mod tests {
     use super::*;
     use crate::compute;
     use crate::data::config::OutputOptions;
-    use crate::data::{DataSource, LocationSource, TimeSource};
+    use crate::data::{DataSource, LocationSource, OutputFormat, TimeSource};
     use chrono::{FixedOffset, TimeZone};
     use std::io::Write;
 
@@ -996,7 +991,7 @@ mod tests {
 
         let params = Parameters {
             output: OutputOptions {
-                format: "text".to_string(),
+                format: OutputFormat::Text,
                 ..OutputOptions::default()
             },
             ..Parameters::default()

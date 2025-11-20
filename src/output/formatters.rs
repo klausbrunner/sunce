@@ -3,7 +3,7 @@ use super::{
     write_streaming_text_table, write_text_position, write_text_sunrise,
 };
 use crate::compute::CalculationResult;
-use crate::data::{Command, DataSource, Parameters};
+use crate::data::{Command, DataSource, OutputFormat, Parameters};
 use std::io::Write;
 
 pub trait Formatter {
@@ -154,7 +154,9 @@ impl<'a, W: Write> Formatter for TextFormatter<'a, W> {
         &mut self,
         results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     ) -> Result<usize, String> {
-        if matches!(self.command, Command::Position) && self.params.output.format == "text" {
+        if matches!(self.command, Command::Position)
+            && self.params.output.format == OutputFormat::Text
+        {
             return write_streaming_text_table(
                 results,
                 self.params,

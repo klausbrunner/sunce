@@ -1,6 +1,9 @@
 //! Command-line parsing and validation.
 
-use crate::data::{self, Command, DataSource, InputPath, LocationSource, Parameters, TimeSource};
+use crate::data::{
+    self, CalculationAlgorithm, Command, DataSource, InputPath, LocationSource, OutputFormat,
+    Parameters, Step, TimeSource, TimezoneOverride,
+};
 use crate::error::CliError;
 use std::path::PathBuf;
 
@@ -20,107 +23,11 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
 
     for arg in args.iter().skip(1) {
         if let Some(stripped) = arg.strip_prefix("--") {
-            if let Some(eq_pos) = stripped.find('=') {
-                let option = &stripped[..eq_pos];
-                let value = &stripped[eq_pos + 1..];
-
-                match option {
-                    "format" => {
-                        let format_lower = value.to_lowercase();
-                        #[cfg(not(feature = "parquet"))]
-                        if format_lower == "parquet" {
-                            return Err(
-                                "PARQUET format not available. Recompile with --features parquet"
-                                    .into(),
-                            );
-                        }
-                        #[cfg(feature = "parquet")]
-                        let valid_formats = ["text", "csv", "json", "parquet"];
-                        #[cfg(not(feature = "parquet"))]
-                        let valid_formats = ["text", "csv", "json"];
-
-                        if !valid_formats.contains(&format_lower.as_str()) {
-                            #[cfg(feature = "parquet")]
-                            let supported = "text, csv, json, parquet";
-                            #[cfg(not(feature = "parquet"))]
-                            let supported = "text, csv, json";
-                            return Err(format!(
-                                "Invalid format: '{}'. Supported formats: {}",
-                                value, supported
-                            )
-                            .into());
-                        }
-                        params.output.format = format_lower;
-                    }
-                    "deltat" => {
-                        if deltat_seen {
-                            return Err(DELTAT_MULTIPLE_ERROR.into());
-                        }
-                        deltat_seen = true;
-                        params.deltat = Some(value.parse::<f64>().map_err(|_| {
-                            CliError::from(format!("Invalid deltat value: {}", value))
-                        })?)
-                    }
-                    "timezone" => params.timezone = Some(value.to_string()),
-                    "algorithm" => {
-                        let algo_lower = value.to_lowercase();
-                        if !["spa", "grena3"].contains(&algo_lower.as_str()) {
-                            return Err(format!(
-                                "Invalid algorithm: '{}'. Supported algorithms: spa, grena3",
-                                value
-                            )
-                            .into());
-                        }
-                        params.calculation.algorithm = algo_lower;
-                    }
-                    "step" => {
-                        validate_step_value(value)?;
-                        params.step = Some(value.to_string())
-                    }
-                    "elevation" => {
-                        params.environment.elevation = value.parse::<f64>().map_err(|_| {
-                            CliError::from(format!("Invalid elevation value: {}", value))
-                        })?
-                    }
-                    "temperature" => {
-                        params.environment.temperature = value.parse::<f64>().map_err(|_| {
-                            CliError::from(format!("Invalid temperature value: {}", value))
-                        })?
-                    }
-                    "pressure" => {
-                        params.environment.pressure = value.parse::<f64>().map_err(|_| {
-                            CliError::from(format!("Invalid pressure value: {}", value))
-                        })?
-                    }
-                    "horizon" => {
-                        params.calculation.horizon = Some(value.parse::<f64>().map_err(|_| {
-                            CliError::from(format!("Invalid horizon value: {}", value))
-                        })?)
-                    }
-                    _ => return Err(format!("Unknown option: --{}", option).into()),
-                }
-            } else {
-                match stripped {
-                    "headers" => params.output.headers = true,
-                    "no-headers" => params.output.headers = false,
-                    "show-inputs" => params.output.show_inputs = Some(true),
-                    "no-show-inputs" => params.output.show_inputs = Some(false),
-                    "perf" => params.perf = true,
-                    "deltat" => {
-                        if deltat_seen {
-                            return Err(DELTAT_MULTIPLE_ERROR.into());
-                        }
-                        deltat_seen = true;
-                        params.deltat = None;
-                    }
-                    "no-refraction" => params.environment.refraction = false,
-                    "elevation-angle" => params.output.elevation_angle = true,
-                    "twilight" => params.calculation.twilight = true,
-                    "help" => return Err(get_help_text().into()),
-                    "version" => return Err(get_version_text().into()),
-                    _ => return Err(format!("Unknown option: --{}", stripped).into()),
-                }
-            }
+            let (name, value) = stripped
+                .split_once('=')
+                .map(|(n, v)| (n, Some(v)))
+                .unwrap_or((stripped, None));
+            apply_option(name, value, &mut params, &mut deltat_seen)?;
         } else {
             positional_args.push(arg.clone());
         }
@@ -171,7 +78,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
             if params.output.elevation_angle {
                 return Err("Option --elevation-angle not valid for sunrise command".into());
             }
-            if params.calculation.algorithm != "spa" {
+            if params.calculation.algorithm != CalculationAlgorithm::Spa {
                 return Err("Option --algorithm not valid for sunrise command".into());
             }
             if params.environment.elevation != 0.0 {
@@ -232,6 +139,78 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
     }
 
     Ok((data_source, command, params))
+}
+
+fn apply_option(
+    name: &str,
+    value: Option<&str>,
+    params: &mut Parameters,
+    deltat_seen: &mut bool,
+) -> CliResult<()> {
+    match (name, value) {
+        ("format", Some(v)) => {
+            params.output.format = v.parse::<OutputFormat>().map_err(CliError::from)?
+        }
+        ("format", None) => return Err("Option --format requires a value".into()),
+        ("deltat", Some(v)) => {
+            if *deltat_seen {
+                return Err(DELTAT_MULTIPLE_ERROR.into());
+            }
+            *deltat_seen = true;
+            params.deltat = Some(
+                v.parse::<f64>()
+                    .map_err(|_| CliError::from(format!("Invalid deltat value: {}", v)))?,
+            );
+        }
+        ("deltat", None) => {
+            if *deltat_seen {
+                return Err(DELTAT_MULTIPLE_ERROR.into());
+            }
+            *deltat_seen = true;
+            params.deltat = None;
+        }
+        ("timezone", Some(v)) => params.timezone = Some(v.parse::<TimezoneOverride>()?),
+        ("timezone", None) => return Err("Option --timezone requires a value".into()),
+        ("algorithm", Some(v)) => {
+            params.calculation.algorithm = v.parse::<CalculationAlgorithm>().map_err(|e| {
+                // FromStr returns String directly for uniform error messages
+                CliError::from(e)
+            })?;
+        }
+        ("algorithm", None) => return Err("Option --algorithm requires a value".into()),
+        ("step", Some(v)) => params.step = Some(v.parse::<Step>().map_err(CliError::from)?),
+        ("step", None) => return Err("Option --step requires a value".into()),
+        ("elevation", Some(v)) => params.environment.elevation = parse_f64("elevation", v)?,
+        ("temperature", Some(v)) => params.environment.temperature = parse_f64("temperature", v)?,
+        ("pressure", Some(v)) => params.environment.pressure = parse_f64("pressure", v)?,
+        ("horizon", Some(v)) => {
+            params.calculation.horizon = Some(parse_f64("horizon", v)?);
+        }
+        ("horizon", None) => return Err("Option --horizon requires a value".into()),
+        ("headers", None) => params.output.headers = true,
+        ("no-headers", None) => params.output.headers = false,
+        ("show-inputs", None) => params.output.show_inputs = Some(true),
+        ("no-show-inputs", None) => params.output.show_inputs = Some(false),
+        ("perf", None) => params.perf = true,
+        ("no-refraction", None) => params.environment.refraction = false,
+        ("elevation-angle", None) => params.output.elevation_angle = true,
+        ("twilight", None) => params.calculation.twilight = true,
+        ("help", None) => return Err(get_help_text().into()),
+        ("version", None) => return Err(get_version_text().into()),
+        _ => return Err(format!("Unknown option: --{}", name).into()),
+    }
+
+    Ok(())
+}
+
+fn parse_f64(label: &str, value: &str) -> CliResult<f64> {
+    value.parse::<f64>().map_err(|_| {
+        CliError::from(format!(
+            "Invalid {} value: {}",
+            label.replace('-', " "),
+            value
+        ))
+    })
 }
 
 fn parse_file_arg(arg: &str) -> CliResult<InputPath> {
@@ -317,11 +296,11 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> 
     }
 
     if is_partial_date(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string(), params.step.clone()));
+        return Ok(TimeSource::Range(time_str.to_string(), params.step));
     }
 
     if params.step.is_some() && is_date_without_time(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string(), params.step.clone()));
+        return Ok(TimeSource::Range(time_str.to_string(), params.step));
     }
 
     if params.step.is_some() {
@@ -330,7 +309,8 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> 
         );
     }
 
-    data::parse_datetime_string(time_str, params.timezone.as_deref()).map_err(CliError::from)?;
+    data::parse_datetime_string(time_str, params.timezone.as_ref().map(|tz| tz.as_str()))
+        .map_err(CliError::from)?;
     Ok(TimeSource::Single(time_str.to_string()))
 }
 
@@ -392,12 +372,6 @@ fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {
         }
         DataSource::Paired(_) => true,
     }
-}
-
-fn validate_step_value(step: &str) -> CliResult<()> {
-    data::parse_duration_positive(step)
-        .map(|_| ())
-        .map_err(CliError::from)
 }
 
 fn get_version_text() -> String {

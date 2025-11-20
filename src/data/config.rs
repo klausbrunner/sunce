@@ -1,6 +1,63 @@
+use chrono::Duration;
+use std::fmt;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Csv,
+    Json,
+    #[cfg(feature = "parquet")]
+    Parquet,
+}
+
+impl OutputFormat {
+    const fn all() -> &'static [&'static str] {
+        &[
+            "text",
+            "csv",
+            "json",
+            #[cfg(feature = "parquet")]
+            "parquet",
+        ]
+    }
+}
+
+impl fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            OutputFormat::Text => "text",
+            OutputFormat::Csv => "csv",
+            OutputFormat::Json => "json",
+            #[cfg(feature = "parquet")]
+            OutputFormat::Parquet => "parquet",
+        };
+        f.write_str(s)
+    }
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Ok(OutputFormat::Text),
+            "csv" => Ok(OutputFormat::Csv),
+            "json" => Ok(OutputFormat::Json),
+            #[cfg(feature = "parquet")]
+            "parquet" => Ok(OutputFormat::Parquet),
+            _ => Err(format!(
+                "Invalid format: '{}'. Supported formats: {}",
+                s,
+                Self::all().join(", ")
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OutputOptions {
-    pub format: String,
+    pub format: OutputFormat,
     pub headers: bool,
     pub show_inputs: Option<bool>,
     pub elevation_angle: bool,
@@ -16,10 +73,41 @@ impl OutputOptions {
 impl Default for OutputOptions {
     fn default() -> Self {
         Self {
-            format: "text".to_string(),
+            format: OutputFormat::Text,
             headers: true,
             show_inputs: None,
             elevation_angle: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalculationAlgorithm {
+    Spa,
+    Grena3,
+}
+
+impl fmt::Display for CalculationAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            CalculationAlgorithm::Spa => "spa",
+            CalculationAlgorithm::Grena3 => "grena3",
+        };
+        f.write_str(s)
+    }
+}
+
+impl FromStr for CalculationAlgorithm {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "spa" => Ok(CalculationAlgorithm::Spa),
+            "grena3" => Ok(CalculationAlgorithm::Grena3),
+            _ => Err(format!(
+                "Invalid algorithm: '{}'. Supported algorithms: spa, grena3",
+                s
+            )),
         }
     }
 }
@@ -45,7 +133,7 @@ impl Default for Environment {
 
 #[derive(Debug, Clone)]
 pub struct CalculationOptions {
-    pub algorithm: String,
+    pub algorithm: CalculationAlgorithm,
     pub horizon: Option<f64>,
     pub twilight: bool,
 }
@@ -53,7 +141,7 @@ pub struct CalculationOptions {
 impl Default for CalculationOptions {
     fn default() -> Self {
         Self {
-            algorithm: "spa".to_string(),
+            algorithm: CalculationAlgorithm::Spa,
             horizon: None,
             twilight: false,
         }
@@ -67,8 +155,8 @@ pub struct Parameters {
     pub environment: Environment,
     pub calculation: CalculationOptions,
     pub perf: bool,
-    pub step: Option<String>,
-    pub timezone: Option<String>,
+    pub step: Option<Step>,
+    pub timezone: Option<TimezoneOverride>,
 }
 
 impl Default for Parameters {
@@ -89,4 +177,43 @@ impl Default for Parameters {
 pub enum Command {
     Position,
     Sunrise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Step(pub Duration);
+
+impl From<Step> for Duration {
+    fn from(value: Step) -> Self {
+        value.0
+    }
+}
+
+impl FromStr for Step {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::data::time_utils::parse_duration_positive(s).map(Step)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimezoneOverride(String);
+
+impl TimezoneOverride {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for TimezoneOverride {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.trim().is_empty() {
+            return Err("Option --timezone requires a value".to_string());
+        }
+        crate::data::time_utils::parse_timezone_spec(s)
+            .map(|_| TimezoneOverride(s.to_string()))
+            .ok_or_else(|| format!("Invalid timezone: '{}'", s))
+    }
 }

@@ -1,6 +1,6 @@
 //! Solar position calculations with streaming architecture and SPA caching.
 
-use crate::data::{Command, CoordTimeStream, Parameters};
+use crate::data::{CalculationAlgorithm, Command, CoordTimeStream, Parameters};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::RefractionCorrection;
 use solar_positioning::time::DeltaT;
@@ -75,7 +75,7 @@ pub fn calculate_position(
     let deltat = resolve_deltat(dt, params);
     let refraction = refraction_correction(params)?;
 
-    let position = if params.calculation.algorithm == "grena3" {
+    let position = if params.calculation.algorithm == CalculationAlgorithm::Grena3 {
         solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
             .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     } else {
@@ -176,6 +176,9 @@ fn time_cache_get(
     params: &Parameters,
 ) -> Result<(SpaTimeParts, f64), String> {
     if let Some(existing) = cache.get(&dt) {
+        if let Some(pos) = order.iter().position(|entry| entry == &dt) {
+            order.remove(pos);
+        }
         order.push_back(dt);
         return match existing {
             Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
@@ -183,12 +186,21 @@ fn time_cache_get(
         };
     }
 
+    if let Some(pos) = order.iter().position(|entry| entry == &dt) {
+        order.remove(pos);
+    }
+
     while cache.len() >= capacity {
-        match order.pop_front() {
-            Some(oldest) if cache.remove(&oldest).is_some() => break,
-            Some(_) => continue,
-            None => break,
+        if let Some(oldest) = order.pop_front()
+            && cache.remove(&oldest).is_some()
+        {
+            continue;
         }
+        // Fallback: remove an arbitrary entry if order is out of sync
+        if let Some(key) = cache.keys().next().cloned() {
+            cache.remove(&key);
+        }
+        break;
     }
 
     let entry = cache.entry(dt).or_insert_with(|| {
@@ -216,7 +228,7 @@ pub fn calculate_stream(
     match command {
         Command::Position => {
             // Optimize for coordinate sweeps with SPA algorithm
-            if params.calculation.algorithm == "spa" && allow_time_cache {
+            if params.calculation.algorithm == CalculationAlgorithm::Spa && allow_time_cache {
                 use solar_positioning::spa;
 
                 // Cache for time-dependent SPA calculations
@@ -308,5 +320,23 @@ mod tests {
         let second = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
 
         assert!(Arc::ptr_eq(&first.0, &second.0));
+    }
+
+    #[test]
+    fn spa_time_cache_order_does_not_grow_on_hits() {
+        let mut cache: SpaCache = HashMap::new();
+        let mut order = VecDeque::new();
+        let params = Parameters::default();
+
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+
+        // Repeated hits should not accumulate duplicates in the order queue
+        for _ in 0..10 {
+            let _ = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        }
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(order.len(), 1);
     }
 }

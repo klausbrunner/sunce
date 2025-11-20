@@ -42,7 +42,7 @@ CLI parsing in `cli.rs` delegates to `data.rs` helpers and supports three modes:
 
 All step values must be strictly positive. When combining `now` with `--step`, only a single location may be supplied so the iterator remains bounded per location.
 
-Parsing uses manual string processing (no external CLI framework) and outputs strongly typed structures consumed by the planner. All subsequent stages operate on lazy iterators.
+Parsing uses manual option dispatch (no external CLI framework) and outputs strongly typed structures (enums for format/algorithm, etc.) consumed by the planner. All subsequent stages operate on lazy iterators.
 
 ## Streaming Architecture
 

@@ -25,7 +25,7 @@ pub fn build_job(
         DataSource::Separate(loc_source, time_source) => data::expand_cartesian_product(
             loc_source.clone(),
             time_source.clone(),
-            params.step.clone(),
+            params.step,
             params.timezone.clone(),
             command,
         )
