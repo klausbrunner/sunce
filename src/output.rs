@@ -7,6 +7,7 @@ mod formatters;
 use chrono::{DateTime, FixedOffset};
 use formatters::{CsvFormatter, Formatter, JsonFormatter, TextFormatter};
 use solar_positioning::SunriseResult;
+use unicode_width::UnicodeWidthStr;
 
 // Helper functions for time formatting
 fn format_datetime(dt: &DateTime<FixedOffset>) -> String {
@@ -50,6 +51,130 @@ fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>) -> &'static str 
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct PositionRow {
+    pub lat: f64,
+    pub lon: f64,
+    pub datetime: DateTime<FixedOffset>,
+    pub deltat: f64,
+    pub azimuth: f64,
+    pub zenith: f64,
+}
+
+impl PositionRow {
+    pub fn angle(&self, elevation_angle: bool) -> f64 {
+        if elevation_angle {
+            90.0 - self.zenith
+        } else {
+            self.zenith
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SunriseRow {
+    pub lat: f64,
+    pub lon: f64,
+    pub date_time: DateTime<FixedOffset>,
+    pub deltat: f64,
+    pub type_label: &'static str,
+    pub sunrise: Option<DateTime<FixedOffset>>,
+    pub transit: DateTime<FixedOffset>,
+    pub sunset: Option<DateTime<FixedOffset>>,
+    pub civil_start: Option<DateTime<FixedOffset>>,
+    pub civil_end: Option<DateTime<FixedOffset>>,
+    pub nautical_start: Option<DateTime<FixedOffset>>,
+    pub nautical_end: Option<DateTime<FixedOffset>>,
+    pub astro_start: Option<DateTime<FixedOffset>>,
+    pub astro_end: Option<DateTime<FixedOffset>>,
+}
+
+pub(crate) fn normalize_position_result(result: &CalculationResult) -> Option<PositionRow> {
+    if let CalculationResult::Position {
+        lat,
+        lon,
+        datetime,
+        position,
+        deltat,
+    } = result
+    {
+        return Some(PositionRow {
+            lat: *lat,
+            lon: *lon,
+            datetime: *datetime,
+            deltat: *deltat,
+            azimuth: position.azimuth(),
+            zenith: position.zenith_angle(),
+        });
+    }
+    None
+}
+
+pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<SunriseRow> {
+    match result {
+        CalculationResult::Sunrise {
+            lat,
+            lon,
+            date,
+            result,
+            deltat,
+        } => {
+            let type_label = sunrise_type_str(result);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(result);
+            Some(SunriseRow {
+                lat: *lat,
+                lon: *lon,
+                date_time: *date,
+                deltat: *deltat,
+                type_label,
+                sunrise: sunrise_opt.copied(),
+                transit: *transit,
+                sunset: sunset_opt.copied(),
+                civil_start: None,
+                civil_end: None,
+                nautical_start: None,
+                nautical_end: None,
+                astro_start: None,
+                astro_end: None,
+            })
+        }
+        CalculationResult::SunriseWithTwilight {
+            lat,
+            lon,
+            date,
+            sunrise_sunset,
+            civil,
+            nautical,
+            astronomical,
+            deltat,
+        } => {
+            let type_label = sunrise_type_str(sunrise_sunset);
+            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
+            let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
+            let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
+            let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
+
+            Some(SunriseRow {
+                lat: *lat,
+                lon: *lon,
+                date_time: *date,
+                deltat: *deltat,
+                type_label,
+                sunrise: sunrise_opt.copied(),
+                transit: *transit,
+                sunset: sunset_opt.copied(),
+                civil_start: civil_start_opt.copied(),
+                civil_end: civil_end_opt.copied(),
+                nautical_start: nautical_start_opt.copied(),
+                nautical_end: nautical_end_opt.copied(),
+                astro_start: astro_start_opt.copied(),
+                astro_end: astro_end_opt.copied(),
+            })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(feature = "parquet")]
 pub fn write_parquet_output<W: std::io::Write + Send>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
@@ -61,572 +186,424 @@ pub fn write_parquet_output<W: std::io::Write + Send>(
 }
 
 fn write_csv_position<W: std::io::Write>(
-    result: &CalculationResult,
+    row: &PositionRow,
     show_inputs: bool,
     headers: bool,
     first: bool,
     params: &Parameters,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            position,
-            deltat,
-        } => {
-            let angle_label = if params.output.elevation_angle {
-                "elevation-angle"
-            } else {
-                "zenith"
-            };
+    let angle_label = if params.output.elevation_angle {
+        "elevation-angle"
+    } else {
+        "zenith"
+    };
 
-            if first && headers {
-                if show_inputs {
-                    let mut header_fields = vec!["latitude", "longitude", "elevation"];
-                    if params.environment.refraction {
-                        header_fields.push("pressure");
-                        header_fields.push("temperature");
-                    }
-                    header_fields.extend(["dateTime", "deltaT", "azimuth", angle_label]);
-                    write!(writer, "{}\r\n", header_fields.join(","))?;
-                } else if params.output.elevation_angle {
-                    write!(writer, "dateTime,azimuth,elevation-angle\r\n")?;
-                } else {
-                    write!(writer, "dateTime,azimuth,zenith\r\n")?;
-                }
+    if first && headers {
+        if show_inputs {
+            let mut header_fields = vec!["latitude", "longitude", "elevation"];
+            if params.environment.refraction {
+                header_fields.push("pressure");
+                header_fields.push("temperature");
             }
-
-            let angle_value = if params.output.elevation_angle {
-                90.0 - position.zenith_angle()
-            } else {
-                position.zenith_angle()
-            };
-
-            if show_inputs {
-                write!(
-                    writer,
-                    "{:.5},{:.5},{:.3},",
-                    lat, lon, params.environment.elevation
-                )?;
-                if params.environment.refraction {
-                    write!(
-                        writer,
-                        "{:.3},{:.3},",
-                        params.environment.pressure, params.environment.temperature
-                    )?;
-                }
-                write!(
-                    writer,
-                    "{},{:.3},{:.5},{:.5}\r\n",
-                    datetime.to_rfc3339(),
-                    deltat,
-                    position.azimuth(),
-                    angle_value
-                )?;
-            } else {
-                write!(
-                    writer,
-                    "{},{:.5},{:.5}\r\n",
-                    datetime.to_rfc3339(),
-                    position.azimuth(),
-                    angle_value
-                )?;
-            }
-            Ok(())
+            header_fields.extend(["dateTime", "deltaT", "azimuth", angle_label]);
+            write!(writer, "{}\r\n", header_fields.join(","))?;
+        } else if params.output.elevation_angle {
+            write!(writer, "dateTime,azimuth,elevation-angle\r\n")?;
+        } else {
+            write!(writer, "dateTime,azimuth,zenith\r\n")?;
         }
-        _ => Ok(()),
     }
+
+    let angle_value = row.angle(params.output.elevation_angle);
+
+    if show_inputs {
+        write!(
+            writer,
+            "{:.5},{:.5},{:.3},",
+            row.lat, row.lon, params.environment.elevation
+        )?;
+        if params.environment.refraction {
+            write!(
+                writer,
+                "{:.3},{:.3},",
+                params.environment.pressure, params.environment.temperature
+            )?;
+        }
+        write!(
+            writer,
+            "{},{:.3},{:.5},{:.5}\r\n",
+            row.datetime.to_rfc3339(),
+            row.deltat,
+            row.azimuth,
+            angle_value
+        )?;
+    } else {
+        write!(
+            writer,
+            "{},{:.5},{:.5}\r\n",
+            row.datetime.to_rfc3339(),
+            row.azimuth,
+            angle_value
+        )?;
+    }
+    Ok(())
 }
 
 fn write_csv_sunrise<W: std::io::Write>(
-    result: &CalculationResult,
+    row: &SunriseRow,
     show_inputs: bool,
     headers: bool,
     first: bool,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Sunrise {
-            lat,
-            lon,
-            date,
-            result: sunrise_result,
-            deltat,
-        } => {
-            if first && headers {
-                if show_inputs {
-                    write!(
-                        writer,
-                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\r\n"
-                    )?;
-                } else {
-                    write!(writer, "dateTime,type,sunrise,transit,sunset\r\n")?;
-                }
-            }
+    let has_twilight =
+        row.civil_start.is_some() || row.nautical_start.is_some() || row.astro_start.is_some();
 
-            let type_str = sunrise_type_str(sunrise_result);
-            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
-            let (sunrise_str, transit_str, sunset_str) = (
-                format_datetime_opt(sunrise_opt),
-                format_datetime(transit),
-                format_datetime_opt(sunset_opt),
-            );
-
+    if first && headers {
+        if has_twilight {
             if show_inputs {
                 write!(
                     writer,
-                    "{:.5},{:.5},{},{:.3},{},{},{},{}\r\n",
-                    lat,
-                    lon,
-                    date.to_rfc3339(),
-                    deltat,
-                    type_str,
-                    sunrise_str,
-                    transit_str,
-                    sunset_str
+                    "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
                 )?;
             } else {
                 write!(
                     writer,
-                    "{},{},{},{},{}\r\n",
-                    date.format("%Y-%m-%d"),
-                    type_str,
-                    sunrise_str,
-                    transit_str,
-                    sunset_str
+                    "dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
                 )?;
             }
-            Ok(())
+        } else if show_inputs {
+            write!(
+                writer,
+                "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset\r\n"
+            )?;
+        } else {
+            write!(writer, "dateTime,type,sunrise,transit,sunset\r\n")?;
         }
-        CalculationResult::SunriseWithTwilight {
-            lat,
-            lon,
-            date,
-            sunrise_sunset,
-            civil,
-            nautical,
-            astronomical,
-            deltat,
-        } => {
-            if first && headers {
-                if show_inputs {
-                    write!(
-                        writer,
-                        "latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
-                    )?;
-                } else {
-                    write!(
-                        writer,
-                        "dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end\r\n"
-                    )?;
-                }
-            }
-
-            let type_str = sunrise_type_str(sunrise_sunset);
-
-            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
-            let (sunrise_str, transit_str, sunset_str) = (
-                format_datetime_opt(sunrise_opt),
-                format_datetime(transit),
-                format_datetime_opt(sunset_opt),
-            );
-
-            let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
-            let (civil_start, civil_end) = (
-                format_datetime_opt(civil_start_opt),
-                format_datetime_opt(civil_end_opt),
-            );
-
-            let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
-            let (nautical_start, nautical_end) = (
-                format_datetime_opt(nautical_start_opt),
-                format_datetime_opt(nautical_end_opt),
-            );
-
-            let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
-            let (astro_start, astro_end) = (
-                format_datetime_opt(astro_start_opt),
-                format_datetime_opt(astro_end_opt),
-            );
-
-            if show_inputs {
-                write!(
-                    writer,
-                    "{:.5},{:.5},{},{:.3},{},{},{},{},{},{},{},{},{},{}\r\n",
-                    lat,
-                    lon,
-                    date.to_rfc3339(),
-                    deltat,
-                    type_str,
-                    sunrise_str,
-                    transit_str,
-                    sunset_str,
-                    civil_start,
-                    civil_end,
-                    nautical_start,
-                    nautical_end,
-                    astro_start,
-                    astro_end
-                )?;
-            } else {
-                write!(
-                    writer,
-                    "{},{},{},{},{},{},{},{},{},{},{}\r\n",
-                    date.format("%Y-%m-%d"),
-                    type_str,
-                    sunrise_str,
-                    transit_str,
-                    sunset_str,
-                    civil_start,
-                    civil_end,
-                    nautical_start,
-                    nautical_end,
-                    astro_start,
-                    astro_end
-                )?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
     }
+
+    let (sunrise_str, transit_str, sunset_str) = (
+        format_datetime_opt(row.sunrise.as_ref()),
+        format_datetime(&row.transit),
+        format_datetime_opt(row.sunset.as_ref()),
+    );
+
+    let format_twilight = |dt: Option<&DateTime<FixedOffset>>| format_datetime_opt(dt);
+    let civil_start = format_twilight(row.civil_start.as_ref());
+    let civil_end = format_twilight(row.civil_end.as_ref());
+    let nautical_start = format_twilight(row.nautical_start.as_ref());
+    let nautical_end = format_twilight(row.nautical_end.as_ref());
+    let astro_start = format_twilight(row.astro_start.as_ref());
+    let astro_end = format_twilight(row.astro_end.as_ref());
+
+    if has_twilight {
+        if show_inputs {
+            write!(
+                writer,
+                "{:.5},{:.5},{},{:.3},{},{},{},{},{},{},{},{},{},{}\r\n",
+                row.lat,
+                row.lon,
+                format_datetime(&row.date_time),
+                row.deltat,
+                row.type_label,
+                sunrise_str,
+                transit_str,
+                sunset_str,
+                civil_start,
+                civil_end,
+                nautical_start,
+                nautical_end,
+                astro_start,
+                astro_end
+            )?;
+        } else {
+            write!(
+                writer,
+                "{},{},{},{},{},{},{},{},{},{},{}\r\n",
+                format_datetime(&row.date_time),
+                row.type_label,
+                sunrise_str,
+                transit_str,
+                sunset_str,
+                civil_start,
+                civil_end,
+                nautical_start,
+                nautical_end,
+                astro_start,
+                astro_end
+            )?;
+        }
+    } else if show_inputs {
+        write!(
+            writer,
+            "{:.5},{:.5},{},{:.3},{},{},{},{}\r\n",
+            row.lat,
+            row.lon,
+            format_datetime(&row.date_time),
+            row.deltat,
+            row.type_label,
+            sunrise_str,
+            transit_str,
+            sunset_str
+        )?;
+    } else {
+        write!(
+            writer,
+            "{},{},{},{},{}\r\n",
+            format_datetime(&row.date_time),
+            row.type_label,
+            sunrise_str,
+            transit_str,
+            sunset_str
+        )?;
+    }
+    Ok(())
 }
 
 fn write_json_position<W: std::io::Write>(
-    result: &CalculationResult,
+    row: &PositionRow,
     show_inputs: bool,
     params: &Parameters,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            position,
-            deltat,
-        } => {
-            let angle_label = if params.output.elevation_angle {
-                "elevation"
-            } else {
-                "zenith"
-            };
-            let angle_value = if params.output.elevation_angle {
-                90.0 - position.zenith_angle()
-            } else {
-                position.zenith_angle()
-            };
+    let angle_label = if params.output.elevation_angle {
+        "elevation"
+    } else {
+        "zenith"
+    };
+    let angle_value = row.angle(params.output.elevation_angle);
 
-            if show_inputs {
-                write!(
-                    writer,
-                    r#"{{"latitude":{},"longitude":{},"elevation":{}"#,
-                    lat, lon, params.environment.elevation
-                )?;
-                if params.environment.refraction {
-                    write!(
-                        writer,
-                        r#","pressure":{},"temperature":{}"#,
-                        params.environment.pressure, params.environment.temperature
-                    )?;
-                }
-                writeln!(
-                    writer,
-                    r#","dateTime":"{}","deltaT":{},"azimuth":{},"{}":{}}}"#,
-                    datetime.to_rfc3339(),
-                    deltat,
-                    position.azimuth(),
-                    angle_label,
-                    angle_value
-                )
-            } else {
-                writeln!(
-                    writer,
-                    r#"{{"dateTime":"{}","azimuth":{},"{}":{}}}"#,
-                    datetime.to_rfc3339(),
-                    position.azimuth(),
-                    angle_label,
-                    angle_value
-                )
-            }
+    if show_inputs {
+        write!(
+            writer,
+            r#"{{"latitude":{},"longitude":{},"elevation":{}"#,
+            row.lat, row.lon, params.environment.elevation
+        )?;
+        if params.environment.refraction {
+            write!(
+                writer,
+                r#","pressure":{},"temperature":{}"#,
+                params.environment.pressure, params.environment.temperature
+            )?;
         }
-        _ => Ok(()),
+        writeln!(
+            writer,
+            r#","dateTime":"{}","deltaT":{},"azimuth":{},"{}":{}}}"#,
+            row.datetime.to_rfc3339(),
+            row.deltat,
+            row.azimuth,
+            angle_label,
+            angle_value
+        )
+    } else {
+        writeln!(
+            writer,
+            r#"{{"dateTime":"{}","azimuth":{},"{}":{}}}"#,
+            row.datetime.to_rfc3339(),
+            row.azimuth,
+            angle_label,
+            angle_value
+        )
     }
 }
 
 fn write_json_sunrise<W: std::io::Write>(
-    result: &CalculationResult,
+    row: &SunriseRow,
     show_inputs: bool,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Sunrise {
-            lat,
-            lon,
-            date,
-            result: sunrise_result,
-            deltat,
-        } => {
-            let type_str = sunrise_type_str(sunrise_result);
-            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_result);
+    let has_twilight =
+        row.civil_start.is_some() || row.nautical_start.is_some() || row.astro_start.is_some();
 
-            if show_inputs {
-                writeln!(
-                    writer,
-                    r#"{{"latitude":{},"longitude":{},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
-                    lat,
-                    lon,
-                    date.to_rfc3339(),
-                    deltat,
-                    type_str,
-                    format_datetime_json_null(sunrise_opt),
-                    format_datetime(transit),
-                    format_datetime_json_null(sunset_opt)
-                )
-            } else {
-                writeln!(
-                    writer,
-                    r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
-                    type_str,
-                    format_datetime_json_null(sunrise_opt),
-                    format_datetime(transit),
-                    format_datetime_json_null(sunset_opt)
-                )
-            }
-        }
-        CalculationResult::SunriseWithTwilight {
-            lat,
-            lon,
-            date,
-            sunrise_sunset,
-            civil,
-            nautical,
-            astronomical,
-            deltat,
-        } => {
-            let type_str = sunrise_type_str(sunrise_sunset);
-            let (sunrise_opt, transit, sunset_opt) = extract_sunrise_times(sunrise_sunset);
-            let (civil_start_opt, _, civil_end_opt) = extract_sunrise_times(civil);
-            let (nautical_start_opt, _, nautical_end_opt) = extract_sunrise_times(nautical);
-            let (astro_start_opt, _, astro_end_opt) = extract_sunrise_times(astronomical);
+    let sunrise_str = format_datetime_json_null(row.sunrise.as_ref());
+    let transit_str = format_datetime(&row.transit);
+    let sunset_str = format_datetime_json_null(row.sunset.as_ref());
+    let civil_start = format_datetime_json_null(row.civil_start.as_ref());
+    let civil_end = format_datetime_json_null(row.civil_end.as_ref());
+    let nautical_start = format_datetime_json_null(row.nautical_start.as_ref());
+    let nautical_end = format_datetime_json_null(row.nautical_end.as_ref());
+    let astro_start = format_datetime_json_null(row.astro_start.as_ref());
+    let astro_end = format_datetime_json_null(row.astro_end.as_ref());
 
-            if show_inputs {
-                writeln!(
-                    writer,
-                    r#"{{"latitude":{:.5},"longitude":{:.5},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
-                    lat,
-                    lon,
-                    date.to_rfc3339(),
-                    deltat,
-                    type_str,
-                    format_datetime_json_null(sunrise_opt),
-                    format_datetime(transit),
-                    format_datetime_json_null(sunset_opt),
-                    format_datetime_json_null(civil_start_opt),
-                    format_datetime_json_null(civil_end_opt),
-                    format_datetime_json_null(nautical_start_opt),
-                    format_datetime_json_null(nautical_end_opt),
-                    format_datetime_json_null(astro_start_opt),
-                    format_datetime_json_null(astro_end_opt)
-                )
-            } else {
-                writeln!(
-                    writer,
-                    r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
-                    type_str,
-                    format_datetime_json_null(sunrise_opt),
-                    format_datetime(transit),
-                    format_datetime_json_null(sunset_opt),
-                    format_datetime_json_null(civil_start_opt),
-                    format_datetime_json_null(civil_end_opt),
-                    format_datetime_json_null(nautical_start_opt),
-                    format_datetime_json_null(nautical_end_opt),
-                    format_datetime_json_null(astro_start_opt),
-                    format_datetime_json_null(astro_end_opt)
-                )
-            }
+    if has_twilight {
+        if show_inputs {
+            writeln!(
+                writer,
+                r#"{{"latitude":{:.5},"longitude":{:.5},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
+                row.lat,
+                row.lon,
+                row.date_time.to_rfc3339(),
+                row.deltat,
+                row.type_label,
+                sunrise_str,
+                transit_str,
+                sunset_str,
+                civil_start,
+                civil_end,
+                nautical_start,
+                nautical_end,
+                astro_start,
+                astro_end
+            )
+        } else {
+            writeln!(
+                writer,
+                r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{},"civil_start":{},"civil_end":{},"nautical_start":{},"nautical_end":{},"astronomical_start":{},"astronomical_end":{}}}"#,
+                row.type_label,
+                sunrise_str,
+                transit_str,
+                sunset_str,
+                civil_start,
+                civil_end,
+                nautical_start,
+                nautical_end,
+                astro_start,
+                astro_end
+            )
         }
-        _ => Ok(()),
+    } else if show_inputs {
+        writeln!(
+            writer,
+            r#"{{"latitude":{},"longitude":{},"dateTime":"{}","deltaT":{:.3},"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
+            row.lat,
+            row.lon,
+            row.date_time.to_rfc3339(),
+            row.deltat,
+            row.type_label,
+            sunrise_str,
+            transit_str,
+            sunset_str
+        )
+    } else {
+        writeln!(
+            writer,
+            r#"{{"type":"{}","sunrise":{},"transit":"{}","sunset":{}}}"#,
+            row.type_label, sunrise_str, transit_str, sunset_str
+        )
     }
 }
 
 fn write_text_position<W: std::io::Write>(
-    result: &CalculationResult,
+    row: &PositionRow,
     show_inputs: bool,
     elevation_angle: bool,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            position,
-            ..
-        } => {
-            let mut lines = Vec::new();
+    let mut lines = Vec::new();
 
-            if show_inputs {
-                lines.push(format!("│ Location   {}, {}", lat, lon));
-            }
-            lines.push(format!(
-                "│ DateTime:    {}",
-                datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            ));
-            lines.push(format!("│ Azimuth    {:.5}°", position.azimuth()));
-
-            if elevation_angle {
-                lines.push(format!(
-                    "│ Elevation  {:.5}°",
-                    90.0 - position.zenith_angle()
-                ));
-            } else {
-                lines.push(format!("│ Zenith     {:.5}°", position.zenith_angle()));
-            }
-
-            let max_width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
-            let box_width = max_width + 2;
-
-            writeln!(writer, "┌{}┐", "─".repeat(box_width - 2))?;
-            for line in lines {
-                writeln!(writer, "{}", line)?;
-            }
-            writeln!(writer, "└{}┘", "─".repeat(box_width - 2))?;
-            Ok(())
-        }
-        _ => Ok(()),
+    if show_inputs {
+        lines.push(format!("│ Location   {}, {}", row.lat, row.lon));
+        lines.push(format!("│ Delta T    {:.1} s", row.deltat));
     }
+    lines.push(format!(
+        "│ DateTime:    {}",
+        row.datetime.format("%Y-%m-%d %H:%M:%S%:z")
+    ));
+    lines.push(format!("│ Azimuth    {:.5}°", row.azimuth));
+
+    if elevation_angle {
+        lines.push(format!("│ Elevation  {:.5}°", row.angle(true)));
+    } else {
+        lines.push(format!("│ Zenith     {:.5}°", row.angle(false)));
+    }
+
+    let max_width = lines
+        .iter()
+        .map(|line| UnicodeWidthStr::width(line.as_str()))
+        .max()
+        .unwrap_or(0);
+    let box_width = max_width + 2;
+
+    writeln!(writer, "┌{}┐", "─".repeat(box_width - 2))?;
+    for line in lines {
+        writeln!(writer, "{}", line)?;
+    }
+    writeln!(writer, "└{}┘", "─".repeat(box_width - 2))?;
+    Ok(())
 }
 
 fn write_text_sunrise<W: std::io::Write>(
-    result: &CalculationResult,
-    _show_inputs: bool,
+    row: &SunriseRow,
+    show_inputs: bool,
     writer: &mut W,
 ) -> std::io::Result<()> {
-    match result {
-        CalculationResult::Sunrise {
-            result: sunrise_result,
-            ..
-        } => {
-            use solar_positioning::SunriseResult;
-            match sunrise_result {
-                SunriseResult::RegularDay {
-                    sunrise,
-                    sunset,
-                    transit,
-                } => {
-                    writeln!(writer, "type   : normal")?;
-                    writeln!(writer, "sunrise: {}", format_datetime_text(sunrise))?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : {}", format_datetime_text(sunset))?;
-                }
-                SunriseResult::AllDay { transit } => {
-                    writeln!(writer, "type   : all day")?;
-                    writeln!(writer, "sunrise: ")?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : ")?;
-                }
-                SunriseResult::AllNight { transit } => {
-                    writeln!(writer, "type   : all night")?;
-                    writeln!(writer, "sunrise: ")?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : ")?;
-                }
-            }
-            Ok(())
-        }
-        CalculationResult::SunriseWithTwilight {
-            sunrise_sunset,
-            civil,
-            nautical,
-            astronomical,
-            ..
-        } => {
-            use solar_positioning::SunriseResult;
-            match sunrise_sunset {
-                SunriseResult::RegularDay {
-                    sunrise,
-                    sunset,
-                    transit,
-                } => {
-                    writeln!(writer, "type   : normal")?;
-                    writeln!(writer, "sunrise: {}", format_datetime_text(sunrise))?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : {}", format_datetime_text(sunset))?;
-                }
-                SunriseResult::AllDay { transit } => {
-                    writeln!(writer, "type   : all day")?;
-                    writeln!(writer, "sunrise: ")?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : ")?;
-                }
-                SunriseResult::AllNight { transit } => {
-                    writeln!(writer, "type   : all night")?;
-                    writeln!(writer, "sunrise: ")?;
-                    writeln!(writer, "transit: {}", format_datetime_text(transit))?;
-                    writeln!(writer, "sunset : ")?;
-                }
-            }
-
-            if let SunriseResult::RegularDay {
-                sunrise: civil_start,
-                sunset: civil_end,
-                ..
-            } = civil
-            {
-                writeln!(
-                    writer,
-                    "civil twilight start: {}",
-                    format_datetime_text(civil_start)
-                )?;
-                writeln!(
-                    writer,
-                    "civil twilight end  : {}",
-                    format_datetime_text(civil_end)
-                )?;
-            }
-
-            if let SunriseResult::RegularDay {
-                sunrise: naut_start,
-                sunset: naut_end,
-                ..
-            } = nautical
-            {
-                writeln!(
-                    writer,
-                    "nautical twilight start: {}",
-                    format_datetime_text(naut_start)
-                )?;
-                writeln!(
-                    writer,
-                    "nautical twilight end  : {}",
-                    format_datetime_text(naut_end)
-                )?;
-            }
-
-            if let SunriseResult::RegularDay {
-                sunrise: astro_start,
-                sunset: astro_end,
-                ..
-            } = astronomical
-            {
-                writeln!(
-                    writer,
-                    "astronomical twilight start: {}",
-                    format_datetime_text(astro_start)
-                )?;
-                writeln!(
-                    writer,
-                    "astronomical twilight end  : {}",
-                    format_datetime_text(astro_end)
-                )?;
-            }
-
-            Ok(())
-        }
-        _ => Ok(()),
+    if show_inputs {
+        writeln!(writer, "location: {:.5}, {:.5}", row.lat, row.lon)?;
+        writeln!(writer, "dateTime: {}", format_datetime_text(&row.date_time))?;
+        writeln!(writer, "deltaT : {:.1}", row.deltat)?;
     }
+
+    match row.type_label {
+        "NORMAL" => {
+            writeln!(writer, "type   : normal")?;
+            writeln!(
+                writer,
+                "sunrise: {}",
+                format_datetime_text(row.sunrise.as_ref().expect("sunrise must exist for normal"))
+            )?;
+            writeln!(writer, "transit: {}", format_datetime_text(&row.transit))?;
+            writeln!(
+                writer,
+                "sunset : {}",
+                format_datetime_text(row.sunset.as_ref().expect("sunset must exist for normal"))
+            )?;
+        }
+        "ALL_DAY" => {
+            writeln!(writer, "type   : all day")?;
+            writeln!(writer, "sunrise: ")?;
+            writeln!(writer, "transit: {}", format_datetime_text(&row.transit))?;
+            writeln!(writer, "sunset : ")?;
+        }
+        "ALL_NIGHT" => {
+            writeln!(writer, "type   : all night")?;
+            writeln!(writer, "sunrise: ")?;
+            writeln!(writer, "transit: {}", format_datetime_text(&row.transit))?;
+            writeln!(writer, "sunset : ")?;
+        }
+        _ => {}
+    }
+
+    if let (Some(start), Some(end)) = (row.civil_start.as_ref(), row.civil_end.as_ref()) {
+        writeln!(
+            writer,
+            "civil twilight start: {}",
+            format_datetime_text(start)
+        )?;
+        writeln!(
+            writer,
+            "civil twilight end  : {}",
+            format_datetime_text(end)
+        )?;
+    }
+
+    if let (Some(start), Some(end)) = (row.nautical_start.as_ref(), row.nautical_end.as_ref()) {
+        writeln!(
+            writer,
+            "nautical twilight start: {}",
+            format_datetime_text(start)
+        )?;
+        writeln!(
+            writer,
+            "nautical twilight end  : {}",
+            format_datetime_text(end)
+        )?;
+    }
+
+    if let (Some(start), Some(end)) = (row.astro_start.as_ref(), row.astro_end.as_ref()) {
+        writeln!(
+            writer,
+            "astronomical twilight start: {}",
+            format_datetime_text(start)
+        )?;
+        writeln!(
+            writer,
+            "astronomical twilight end  : {}",
+            format_datetime_text(end)
+        )?;
+    }
+
+    Ok(())
 }
 
 fn write_streaming_text_table<W: std::io::Write>(
@@ -729,8 +706,15 @@ fn format_streaming_text_table(
     use crate::data::{DataSource, LocationSource, TimeSource};
 
     // Peek at first result to get invariant values and determine table structure
-    let first = match results.next() {
-        Some(Ok(r)) => r,
+    let first_row = match results.next() {
+        Some(Ok(r)) => match normalize_position_result(&r) {
+            Some(row) => row,
+            None => {
+                return Box::new(std::iter::once(Err(
+                    "Unexpected calculation result for position output".to_string(),
+                )));
+            }
+        },
         Some(Err(e)) => return Box::new(std::iter::once(Err(e))),
         None => return Box::new(std::iter::empty()),
     };
@@ -753,16 +737,12 @@ fn format_streaming_text_table(
     };
 
     // Extract invariant values from first result
-    let (lat0, lon0, dt0, deltat0) = match &first {
-        CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            deltat,
-            ..
-        } => (*lat, *lon, *datetime, *deltat),
-        _ => return Box::new(std::iter::empty()),
-    };
+    let (lat0, lon0, dt0, deltat0) = (
+        first_row.lat,
+        first_row.lon,
+        first_row.datetime,
+        first_row.deltat,
+    );
 
     // Build header section
     let mut header = String::new();
@@ -867,69 +847,54 @@ fn format_streaming_text_table(
     // Format a single row
     let col_widths_clone = col_widths.clone();
     let elevation_angle = params.output.elevation_angle;
-    let format_row = move |result: &CalculationResult| -> String {
-        if let CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            position,
-            ..
-        } = result
-        {
-            let mut output = String::from('│');
-            let mut col_idx = 0;
+    let format_row = move |row: &PositionRow| -> String {
+        let mut output = String::from('│');
+        let mut col_idx = 0;
 
-            if lat_varies {
-                output.push_str(&format!(
-                    " {:>width$.5}° ",
-                    lat,
-                    width = col_widths_clone[col_idx] - 1
-                ));
-                output.push('│');
-                col_idx += 1;
-            }
-            if lon_varies {
-                output.push_str(&format!(
-                    " {:>width$.5}° ",
-                    lon,
-                    width = col_widths_clone[col_idx] - 1
-                ));
-                output.push('│');
-                col_idx += 1;
-            }
-            if time_varies {
-                let dt_str = datetime.format("%Y-%m-%d %H:%M%:z").to_string();
-                output.push_str(&format!(
-                    " {:<width$} ",
-                    dt_str,
-                    width = col_widths_clone[col_idx]
-                ));
-                output.push('│');
-                col_idx += 1;
-            }
+        if lat_varies {
             output.push_str(&format!(
                 " {:>width$.5}° ",
-                position.azimuth(),
+                row.lat,
                 width = col_widths_clone[col_idx] - 1
             ));
             output.push('│');
             col_idx += 1;
-
-            let angle = if elevation_angle {
-                90.0 - position.zenith_angle()
-            } else {
-                position.zenith_angle()
-            };
+        }
+        if lon_varies {
             output.push_str(&format!(
                 " {:>width$.5}° ",
-                angle,
+                row.lon,
                 width = col_widths_clone[col_idx] - 1
             ));
-            output.push_str("│\n");
-            output
-        } else {
-            String::new()
+            output.push('│');
+            col_idx += 1;
         }
+        if time_varies {
+            let dt_str = row.datetime.format("%Y-%m-%d %H:%M%:z").to_string();
+            output.push_str(&format!(
+                " {:<width$} ",
+                dt_str,
+                width = col_widths_clone[col_idx]
+            ));
+            output.push('│');
+            col_idx += 1;
+        }
+        output.push_str(&format!(
+            " {:>width$.5}° ",
+            row.azimuth,
+            width = col_widths_clone[col_idx] - 1
+        ));
+        output.push('│');
+        col_idx += 1;
+
+        let angle = row.angle(elevation_angle);
+        output.push_str(&format!(
+            " {:>width$.5}° ",
+            angle,
+            width = col_widths_clone[col_idx] - 1
+        ));
+        output.push_str("│\n");
+        output
     };
 
     // Bottom border
@@ -943,15 +908,17 @@ fn format_streaming_text_table(
     footer.push_str("┘\n");
 
     // Create streaming iterator: header + first_row + remaining_rows + footer
-    let first_row = format_row(&first);
+    let first_line = format_row(&first_row);
     let remaining_rows = results.map(move |r_or_err| match r_or_err {
-        Ok(r) => Ok(format_row(&r)),
+        Ok(r) => normalize_position_result(&r)
+            .ok_or_else(|| "Unexpected calculation result for position output".to_string())
+            .map(|row| format_row(&row)),
         Err(e) => Err(e),
     });
 
     Box::new(
         std::iter::once(Ok((header, false)))
-            .chain(std::iter::once(Ok((first_row, true))))
+            .chain(std::iter::once(Ok((first_line, true))))
             .chain(remaining_rows.map(|res| res.map(|line| (line, true))))
             .chain(std::iter::once(Ok((footer, false)))),
     )
