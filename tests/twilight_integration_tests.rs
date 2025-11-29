@@ -22,8 +22,8 @@ fn test_twilight_csv_output() {
     // Verify CSV header includes all twilight fields (no show-inputs for single values)
     assert!(stdout.contains("dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end"));
 
-    // Verify data row starts with date
-    assert!(stdout.contains("2024-06-21,NORMAL"));
+    // Verify data row starts with timestamp (RFC3339)
+    assert!(stdout.contains("2024-06-21T00:00:00+00:00,NORMAL"));
 
     // Verify all times are present (Berlin in summer - all twilight phases exist)
     assert!(stdout.contains("2024-06-21T02:46:15")); // sunrise

@@ -10,36 +10,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
-fn repeat_times(lat: f64, lon: f64, times: Arc<Vec<DateTime<FixedOffset>>>) -> CoordTimeStream {
-    let len = times.len();
-    Box::new((0..len).map(move |idx| Ok((lat, lon, times[idx]))))
-}
-
-struct CoordRepeat {
-    coords: Arc<Vec<(f64, f64)>>,
-    index: usize,
-    dt: DateTime<FixedOffset>,
-}
-
-impl CoordRepeat {
-    fn new(coords: Arc<Vec<(f64, f64)>>, dt: DateTime<FixedOffset>) -> Self {
-        Self {
-            coords,
-            index: 0,
-            dt,
-        }
-    }
-}
-
-impl Iterator for CoordRepeat {
-    type Item = CoordTimeResult;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (lat, lon) = self.coords.get(self.index).copied()?;
-        self.index += 1;
-        Some(Ok((lat, lon, self.dt)))
-    }
-}
+type TimeIter = Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>;
 
 struct TimeStepIter {
     tz: TimezoneInfo,
@@ -85,22 +56,16 @@ impl Iterator for TimeStepIter {
 
 pub struct TimeStream {
     iter: Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>,
-    bounded: bool,
 }
 
 impl TimeStream {
-    fn new<I>(iter: I, bounded: bool) -> Self
+    fn new<I>(iter: I) -> Self
     where
         I: Iterator<Item = Result<DateTime<FixedOffset>, String>> + 'static,
     {
         Self {
             iter: Box::new(iter),
-            bounded,
         }
-    }
-
-    fn is_bounded(&self) -> bool {
-        self.bounded
     }
 
     fn into_iter(self) -> Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>> {
@@ -304,7 +269,7 @@ pub fn expand_time_source(
             } else {
                 let dt =
                     parse_datetime_string(&dt_str, override_tz.as_ref().map(|tz| tz.as_str()))?;
-                Ok(TimeStream::new(std::iter::once(Ok(dt)), true))
+                Ok(TimeStream::new(std::iter::once(Ok(dt))))
             }
         }
         TimeSource::Range(partial_date, step_opt) => {
@@ -334,12 +299,11 @@ pub fn expand_time_source(
                     }
                     Some(Ok(convert_datetime_to_timezone(Utc::now(), &tz_clone)))
                 });
-                Ok(TimeStream::new(iter, false))
+                Ok(TimeStream::new(iter))
             } else {
-                Ok(TimeStream::new(
-                    std::iter::once(Ok(convert_datetime_to_timezone(Utc::now(), &tz_info))),
-                    true,
-                ))
+                Ok(TimeStream::new(std::iter::once(Ok(
+                    convert_datetime_to_timezone(Utc::now(), &tz_info),
+                ))))
             }
         }
     }
@@ -463,7 +427,7 @@ fn expand_partial_date(
 
     let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(Ok);
 
-    Ok(TimeStream::new(iter, true))
+    Ok(TimeStream::new(iter))
 }
 
 fn read_times_file(
@@ -509,7 +473,7 @@ fn read_times_file(
         None
     });
 
-    Ok(TimeStream::new(iter, true))
+    Ok(TimeStream::new(iter))
 }
 
 pub fn expand_cartesian_product(
@@ -519,84 +483,144 @@ pub fn expand_cartesian_product(
     override_tz: Option<TimezoneOverride>,
     command: Command,
 ) -> Result<CoordTimeStream, String> {
-    let is_time_single = matches!(time_source, TimeSource::Single(_))
-        || (matches!(time_source, TimeSource::Now) && step.is_none());
-    let location_from_stdin = matches!(loc_source, LocationSource::File(InputPath::Stdin));
-    let is_loc_single = matches!(loc_source, LocationSource::Single(_, _));
-
-    let time_stream = expand_time_source(time_source, step, override_tz, command)?;
-    let is_time_bounded = time_stream.is_bounded();
-
-    if is_time_single {
-        let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
-        let locations = expand_location_source(loc_source)?;
-        let iter = locations.flat_map(move |coord_res| match coord_res {
-            Ok((lat, lon)) => repeat_times(lat, lon, Arc::clone(&times)),
-            Err(err) => Box::new(std::iter::once(Err(err))),
-        });
-        return Ok(Box::new(iter));
+    #[derive(Clone)]
+    struct LocationGenerator {
+        source: LocationSource,
     }
 
-    if location_from_stdin {
-        if !is_time_bounded {
-            return Err(
-                "Cannot combine coordinate stdin input with unbounded time stream. Supply explicit times or use paired input."
-                    .to_string(),
-            );
+    impl LocationGenerator {
+        fn new(source: LocationSource) -> Self {
+            Self { source }
         }
 
-        let times = Arc::new(time_stream.into_iter().collect::<Result<Vec<_>, _>>()?);
-        let locations = expand_location_source(loc_source)?;
-        let iter = locations.flat_map(move |coord_res| match coord_res {
-            Ok((lat, lon)) => repeat_times(lat, lon, Arc::clone(&times)),
-            Err(err) => Box::new(std::iter::once(Err(err))),
-        });
-        return Ok(Box::new(iter));
+        fn iter(&self) -> Result<LocationStream, String> {
+            expand_location_source(self.source.clone())
+        }
+
+        fn is_single(&self) -> bool {
+            matches!(self.source, LocationSource::Single(_, _))
+        }
+
+        fn replayable(&self) -> bool {
+            !matches!(self.source, LocationSource::File(InputPath::Stdin))
+        }
     }
 
-    if !is_time_bounded && !is_loc_single {
+    #[derive(Clone)]
+    struct TimeGenerator {
+        source: TimeSource,
+        step: Option<Step>,
+        tz: Option<TimezoneOverride>,
+        command: Command,
+        bounded: bool,
+        replayable: bool,
+        is_single: bool,
+    }
+
+    impl TimeGenerator {
+        fn new(
+            source: TimeSource,
+            step: Option<Step>,
+            tz: Option<TimezoneOverride>,
+            command: Command,
+        ) -> Self {
+            let is_full_date = |s: &str| {
+                s.len() == 10 && s.matches('-').count() == 2 && !s.contains('T') && !s.contains(' ')
+            };
+            let is_single = match &source {
+                TimeSource::Single(s) if command == Command::Position && is_full_date(s) => false,
+                TimeSource::Single(_) => true,
+                TimeSource::Now => step.is_none(),
+                _ => false,
+            };
+            let replayable = !matches!(source, TimeSource::File(InputPath::Stdin))
+                && (!matches!(source, TimeSource::Now) || step.is_none());
+            let bounded = !matches!(source, TimeSource::Now) || step.is_none();
+
+            Self {
+                source,
+                step,
+                tz,
+                command,
+                bounded,
+                replayable,
+                is_single,
+            }
+        }
+
+        fn iter(&self) -> Result<TimeIter, String> {
+            expand_time_source(
+                self.source.clone(),
+                self.step,
+                self.tz.clone(),
+                self.command,
+            )
+            .map(TimeStream::into_iter)
+        }
+    }
+
+    let loc_gen = LocationGenerator::new(loc_source);
+    let time_gen = TimeGenerator::new(time_source, step, override_tz, command);
+
+    if !time_gen.bounded && !loc_gen.is_single() {
         return Err(
             "Cannot use an unbounded time stream with multiple locations. Drop --step or choose a single location when combining 'now' with streaming."
                 .to_string(),
         );
     }
 
-    let location_cache: Option<Arc<Vec<(f64, f64)>>> = match &loc_source {
-        LocationSource::Single(lat, lon) => Some(Arc::new(vec![(*lat, *lon)])),
-        LocationSource::File(InputPath::File(_)) => {
-            let coords_iter = expand_location_source(loc_source.clone())?;
-            let coords = coords_iter.collect::<Result<Vec<_>, _>>()?;
-            Some(Arc::new(coords))
-        }
-        _ => None,
-    };
+    if time_gen.is_single {
+        let mut time_iter = time_gen.iter()?;
+        let Some(first_time) = time_iter.next() else {
+            return Ok(Box::new(std::iter::empty()));
+        };
+        let dt = first_time?;
+        let iter = loc_gen
+            .iter()?
+            .map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt)));
+        return Ok(Box::new(iter));
+    }
 
-    let loc_source_for_iter = loc_source;
-    let iter =
-        time_stream
-            .into_iter()
-            .flat_map(move |time_result| match time_result {
-                Ok(dt) => {
-                    if let Some(cache) = location_cache.as_ref() {
-                        Box::new(CoordRepeat::new(Arc::clone(cache), dt))
-                            as Box<dyn Iterator<Item = CoordTimeResult>>
-                    } else {
-                        let dt_value = dt;
-                        match expand_location_source(loc_source_for_iter.clone()) {
-                            Ok(locations) => Box::new(locations.map(move |coord_res| {
-                                coord_res.map(|(lat, lon)| (lat, lon, dt_value))
-                            }))
-                                as Box<dyn Iterator<Item = CoordTimeResult>>,
-                            Err(err) => Box::new(std::iter::once(Err(err)))
-                                as Box<dyn Iterator<Item = CoordTimeResult>>,
-                        }
-                    }
-                }
-                Err(err) => {
-                    Box::new(std::iter::once(Err(err))) as Box<dyn Iterator<Item = CoordTimeResult>>
-                }
-            });
-    Ok(Box::new(iter))
+    if time_gen.replayable {
+        let time_gen_clone = time_gen.clone();
+        let iter = loc_gen.iter()?.flat_map(move |coord_res| match coord_res {
+            Ok((lat, lon)) => match time_gen_clone.iter() {
+                Ok(times) => Box::new(times.map(move |time_res| time_res.map(|dt| (lat, lon, dt))))
+                    as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            },
+            Err(err) => Box::new(std::iter::once(Err(err))),
+        });
+
+        return Ok(Box::new(iter));
+    }
+
+    if loc_gen.replayable() {
+        let loc_gen_clone = loc_gen.clone();
+        let iter = time_gen.iter()?.flat_map(move |time_res| match time_res {
+            Ok(dt) => match loc_gen_clone.iter() {
+                Ok(locations) => Box::new(
+                    locations.map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt))),
+                ) as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            },
+            Err(err) => Box::new(std::iter::once(Err(err))),
+        });
+
+        return Ok(Box::new(iter));
+    }
+
+    if loc_gen.is_single() {
+        let (lat, lon) = expand_location_source(loc_gen.source.clone())?
+            .next()
+            .unwrap_or(Err("No location provided".to_string()))?;
+        let iter = time_gen
+            .iter()?
+            .map(move |time_res| time_res.map(|dt| (lat, lon, dt)));
+        return Ok(Box::new(iter));
+    }
+
+    Err("Cannot combine non-replayable streams for both locations and times. Use files instead of stdin or provide bounded values.".to_string())
 }
 
 pub fn expand_paired_file(

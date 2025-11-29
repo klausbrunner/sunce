@@ -16,6 +16,92 @@ fn timezone_gap_error(dt_str: &str) -> String {
     )
 }
 
+enum ParsedDateTime {
+    Now,
+    Fixed(DateTime<FixedOffset>),
+    Naive(NaiveDateTime),
+    DateOnly(NaiveDate),
+    UnixTimestamp(i64),
+}
+
+fn parse_datetime_input(dt_str: &str) -> Result<ParsedDateTime, String> {
+    if dt_str == "now" {
+        return Ok(ParsedDateTime::Now);
+    }
+
+    let has_space_time = dt_str.contains(' ') && dt_str.matches(':').count() >= 1;
+    if dt_str.contains('T') || has_space_time {
+        if dt_str.ends_with('Z') {
+            let utc_dt = dt_str
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| format!("Failed to parse UTC datetime: {}", e))?;
+            return Ok(ParsedDateTime::Fixed(utc_dt.fixed_offset()));
+        } else if dt_str.contains('+') || dt_str.rfind('-').is_some_and(|i| i > 10) {
+            let fixed_dt = dt_str
+                .parse::<DateTime<FixedOffset>>()
+                .map_err(|e| format!("Failed to parse datetime with timezone: {}", e))?;
+            return Ok(ParsedDateTime::Fixed(fixed_dt));
+        } else {
+            let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
+                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M"))
+                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M"))
+                .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
+
+            return Ok(ParsedDateTime::Naive(naive_dt));
+        }
+    }
+
+    if let Ok(timestamp) = dt_str.parse::<i64>()
+        && timestamp.abs() >= 10000
+    {
+        return Ok(ParsedDateTime::UnixTimestamp(timestamp));
+    }
+
+    let naive_date = NaiveDate::parse_from_str(dt_str, "%Y-%m-%d")
+        .map_err(|e| format!("Failed to parse date: {}", e))?;
+    Ok(ParsedDateTime::DateOnly(naive_date))
+}
+
+fn resolve_datetime(
+    parsed: ParsedDateTime,
+    override_tz: Option<&str>,
+    original: &str,
+) -> Result<DateTime<FixedOffset>, String> {
+    let tz_info = get_timezone_info(override_tz);
+    match parsed {
+        ParsedDateTime::Now => Ok(convert_datetime_to_timezone(Utc::now(), &tz_info)),
+        ParsedDateTime::Fixed(dt) => {
+            if override_tz.is_some() {
+                Ok(convert_datetime_to_timezone(dt, &tz_info))
+            } else {
+                Ok(dt)
+            }
+        }
+        ParsedDateTime::Naive(naive_dt) => tz_info
+            .to_datetime_from_local(&naive_dt)
+            .ok_or_else(|| timezone_gap_error(original)),
+        ParsedDateTime::DateOnly(date) => {
+            let naive_dt = date
+                .and_hms_opt(0, 0, 0)
+                .expect("Midnight time creation cannot fail");
+            tz_info
+                .to_datetime_from_local(&naive_dt)
+                .ok_or_else(|| timezone_gap_error(original))
+        }
+        ParsedDateTime::UnixTimestamp(ts) => {
+            let utc_dt = DateTime::<Utc>::from_timestamp(ts, 0)
+                .ok_or_else(|| format!("Invalid unix timestamp: {}", ts))?;
+
+            if override_tz.is_some() {
+                Ok(convert_datetime_to_timezone(utc_dt, &tz_info))
+            } else {
+                Ok(utc_dt.fixed_offset())
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum TimezoneInfo {
     Fixed(FixedOffset),
@@ -64,67 +150,8 @@ pub fn parse_datetime_string(
     dt_str: &str,
     override_tz: Option<&str>,
 ) -> Result<DateTime<FixedOffset>, String> {
-    if dt_str == "now" {
-        let tz_info = get_timezone_info(override_tz);
-        return Ok(convert_datetime_to_timezone(Utc::now(), &tz_info));
-    }
-
-    let has_space_time = dt_str.contains(' ') && dt_str.matches(':').count() >= 1;
-    if dt_str.contains('T') || has_space_time {
-        if dt_str.ends_with('Z') {
-            let utc_dt = dt_str
-                .parse::<DateTime<Utc>>()
-                .map_err(|e| format!("Failed to parse UTC datetime: {}", e))?;
-            let tz_info = get_timezone_info(override_tz);
-            return Ok(convert_datetime_to_timezone(utc_dt, &tz_info));
-        } else if dt_str.contains('+') || dt_str.rfind('-').is_some_and(|i| i > 10) {
-            let fixed_dt = dt_str
-                .parse::<DateTime<FixedOffset>>()
-                .map_err(|e| format!("Failed to parse datetime with timezone: {}", e))?;
-
-            if override_tz.is_some() {
-                let tz_info = get_timezone_info(override_tz);
-                return Ok(convert_datetime_to_timezone(fixed_dt, &tz_info));
-            }
-
-            return Ok(fixed_dt);
-        } else {
-            let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M"))
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M"))
-                .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
-
-            let tz_info = get_timezone_info(override_tz);
-            return tz_info
-                .to_datetime_from_local(&naive_dt)
-                .ok_or_else(|| timezone_gap_error(dt_str));
-        }
-    }
-
-    if let Ok(timestamp) = dt_str.parse::<i64>()
-        && timestamp.abs() >= 10000
-    {
-        let utc_dt = DateTime::<Utc>::from_timestamp(timestamp, 0)
-            .ok_or_else(|| format!("Invalid unix timestamp: {}", timestamp))?;
-
-        if override_tz.is_some() {
-            let tz_info = get_timezone_info(override_tz);
-            return Ok(convert_datetime_to_timezone(utc_dt, &tz_info));
-        }
-
-        return Ok(utc_dt.fixed_offset());
-    }
-
-    let naive_date = NaiveDate::parse_from_str(dt_str, "%Y-%m-%d")
-        .map_err(|e| format!("Failed to parse date: {}", e))?;
-    let naive_dt = naive_date
-        .and_hms_opt(0, 0, 0)
-        .expect("Midnight time creation cannot fail");
-    let tz_info = get_timezone_info(override_tz);
-    tz_info
-        .to_datetime_from_local(&naive_dt)
-        .ok_or_else(|| timezone_gap_error(dt_str))
+    let parsed = parse_datetime_input(dt_str)?;
+    resolve_datetime(parsed, override_tz, dt_str)
 }
 
 pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {

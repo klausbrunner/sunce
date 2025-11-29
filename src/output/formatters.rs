@@ -50,17 +50,20 @@ impl<'a, W: Write> Formatter for CsvFormatter<'a, W> {
             let result = result_or_err?;
             let first = index == 0;
             match self.command {
-                Command::Position => write_csv_position(
-                    &result,
-                    self.show_inputs,
-                    self.headers,
-                    first,
-                    self.params,
-                    self.writer,
-                )
-                .map_err(|e| e.to_string())?,
+                Command::Position => {
+                    let row = super::normalize_position_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for position output".to_string()
+                    })?;
+                    let fields = super::position_fields(&row, self.params, self.show_inputs);
+                    write_csv_position(&fields, self.headers, first, self.writer)
+                        .map_err(|e| e.to_string())?
+                }
                 Command::Sunrise => {
-                    write_csv_sunrise(&result, self.show_inputs, self.headers, first, self.writer)
+                    let row = super::normalize_sunrise_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for sunrise output".to_string()
+                    })?;
+                    let fields = super::sunrise_fields(&row, self.show_inputs);
+                    write_csv_sunrise(&fields, self.headers, first, self.writer)
                         .map_err(|e| e.to_string())?
                 }
             }
@@ -108,11 +111,19 @@ impl<'a, W: Write> Formatter for JsonFormatter<'a, W> {
             let result = result_or_err?;
             match self.command {
                 Command::Position => {
-                    write_json_position(&result, self.show_inputs, self.params, self.writer)
-                        .map_err(|e| e.to_string())?
+                    let row = super::normalize_position_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for position output".to_string()
+                    })?;
+                    let fields = super::position_fields(&row, self.params, self.show_inputs);
+                    write_json_position(&fields, self.writer).map_err(|e| e.to_string())?
                 }
-                Command::Sunrise => write_json_sunrise(&result, self.show_inputs, self.writer)
-                    .map_err(|e| e.to_string())?,
+                Command::Sunrise => {
+                    let row = super::normalize_sunrise_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for sunrise output".to_string()
+                    })?;
+                    let fields = super::sunrise_fields(&row, self.show_inputs);
+                    write_json_sunrise(&fields, self.writer).map_err(|e| e.to_string())?
+                }
             }
             count += 1;
             if self.flush_each {
@@ -172,15 +183,20 @@ impl<'a, W: Write> Formatter for TextFormatter<'a, W> {
         for result_or_err in results {
             let result = result_or_err?;
             match self.command {
-                Command::Position => write_text_position(
-                    &result,
-                    show_inputs,
-                    self.params.output.elevation_angle,
-                    self.writer,
-                )
-                .map_err(|e| e.to_string())?,
-                Command::Sunrise => write_text_sunrise(&result, show_inputs, self.writer)
-                    .map_err(|e| e.to_string())?,
+                Command::Position => {
+                    let row = super::normalize_position_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for position output".to_string()
+                    })?;
+                    let fields = super::position_fields(&row, self.params, show_inputs);
+                    write_text_position(&fields, self.writer).map_err(|e| e.to_string())?
+                }
+                Command::Sunrise => {
+                    let row = super::normalize_sunrise_result(&result).ok_or_else(|| {
+                        "Unexpected calculation result for sunrise output".to_string()
+                    })?;
+                    let fields = super::sunrise_fields(&row, show_inputs);
+                    write_text_sunrise(&fields, self.writer).map_err(|e| e.to_string())?
+                }
             }
             if self.flush_each {
                 self.writer.flush().map_err(|e| e.to_string())?;

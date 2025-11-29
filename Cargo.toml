@@ -33,6 +33,7 @@ solar-positioning = "0.4"
 arrow = { version = "57", default-features = false, optional = true }
 parquet = { version = "57", features = ["arrow", "snap"], default-features = false, optional = true }
 iana-time-zone = "0.1"
+unicode-width = "0.2"
 
 [features]
 default = ["parquet"]

@@ -6,11 +6,11 @@ Sunce is a high-performance command-line solar position calculator written in Ru
 
 The codebase is organized into focused modules:
 
-- **cli.rs**: Manual command-line parsing/validation that produces `Parameters`, `Command`, and `DataSource`.
+- **cli.rs**: Manual command-line parsing/validation via a small option registry that produces `Parameters`, `Command`, and `DataSource`.
 - **planner.rs**: Converts parsed inputs into separate `ComputePlan` and `OutputPlan`, deriving metadata such as cache/flush policies.
 - **data.rs**: Input expansion (ranges, files, cartesian products), timezone handling, and iterator utilities used by planner and compute layers.
 - **compute.rs**: Solar calculations with streaming and SPA caching.
-- **output.rs**: CSV/JSON/text formatting plus dispatch logic that chooses the appropriate writer based on the plan.
+- **output.rs**: Normalizes calculation results into shared row structs and formats them (CSV/JSON/text), plus dispatch logic that chooses the appropriate writer based on the plan. Keeps field semantics aligned across formats.
 - **parquet.rs**: Parquet writer (optional feature gated by `parquet` flag).
 - **main.rs**: Entry point that wires the stages together (parse → plan → compute → output) and handles error reporting/perf logging.
 
@@ -84,7 +84,7 @@ The `output.rs` module provides four output formats:
 
 **Parquet format** (optional feature): Apache Parquet columnar format with Snappy compression. Nullable fields for sunrise times that may be absent (polar day/night).
 
-All formats support the `--show-inputs` flag to include input parameters in output. This is auto-enabled when inputs could produce multiple values (ranges, time series, files) and can be explicitly controlled with `--show-inputs` or `--no-show-inputs`.
+All formats support the `--show-inputs` flag to include input parameters in output. This is auto-enabled when inputs could produce multiple values (ranges, time series, files) and can be explicitly controlled with `--show-inputs` or `--no-show-inputs`. Timestamps are emitted consistently as RFC3339 across all formats.
 
 ## Timezone Handling
 
