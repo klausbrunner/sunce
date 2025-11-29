@@ -2,6 +2,7 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
+use crate::output::{normalize_position_result, normalize_sunrise_result};
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -12,15 +13,6 @@ use std::io::Write;
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
-
-fn sunrise_type_label<T>(result: &solar_positioning::SunriseResult<T>) -> &'static str {
-    use solar_positioning::SunriseResult;
-    match result {
-        SunriseResult::RegularDay { .. } => "NORMAL",
-        SunriseResult::AllDay { .. } => "ALL_DAY",
-        SunriseResult::AllNight { .. } => "ALL_NIGHT",
-    }
-}
 
 // Helper to create optional Float64Builder
 fn opt_f64_builder(condition: bool) -> Option<Float64Builder> {
@@ -95,63 +87,51 @@ fn write_position_parquet<W: Write + Send>(
 
     for result_or_err in results {
         let result = result_or_err.map_err(std::io::Error::other)?;
+        let row = normalize_position_result(&result)
+            .ok_or_else(|| std::io::Error::other("Unexpected calculation result for position"))?;
 
-        if let CalculationResult::Position {
-            lat,
-            lon,
-            datetime,
-            position,
-            deltat,
-        } = result
-        {
-            if show_inputs {
-                lat_builder.as_mut().unwrap().append_value(lat);
-                lon_builder.as_mut().unwrap().append_value(lon);
-                elev_builder
+        if show_inputs {
+            lat_builder.as_mut().unwrap().append_value(row.lat);
+            lon_builder.as_mut().unwrap().append_value(row.lon);
+            elev_builder
+                .as_mut()
+                .unwrap()
+                .append_value(params.environment.elevation);
+            if params.environment.refraction {
+                press_builder
                     .as_mut()
                     .unwrap()
-                    .append_value(params.environment.elevation);
-                if params.environment.refraction {
-                    press_builder
-                        .as_mut()
-                        .unwrap()
-                        .append_value(params.environment.pressure);
-                    temp_builder
-                        .as_mut()
-                        .unwrap()
-                        .append_value(params.environment.temperature);
-                }
-                deltat_builder.as_mut().unwrap().append_value(deltat);
+                    .append_value(params.environment.pressure);
+                temp_builder
+                    .as_mut()
+                    .unwrap()
+                    .append_value(params.environment.temperature);
             }
+            deltat_builder.as_mut().unwrap().append_value(row.deltat);
+        }
 
-            dt_builder.append_value(datetime.to_rfc3339());
-            az_builder.append_value(position.azimuth());
-            let angle = if elevation_angle {
-                90.0 - position.zenith_angle()
-            } else {
-                position.zenith_angle()
-            };
-            angle_builder.append_value(angle);
+        dt_builder.append_value(row.datetime.to_rfc3339());
+        az_builder.append_value(row.azimuth);
+        angle_builder.append_value(row.angle(elevation_angle));
 
-            batch_count += 1;
-            total_count += 1;
+        batch_count += 1;
+        total_count += 1;
 
-            if batch_count >= BATCH_SIZE {
-                flush_position_batch(
-                    &mut parquet_writer,
-                    &schema,
-                    &mut lat_builder,
-                    &mut lon_builder,
-                    &mut elev_builder,
-                    &mut press_builder,
-                    &mut temp_builder,
-                    &mut dt_builder,
-                    &mut deltat_builder,
-                    &mut az_builder,
-                    &mut angle_builder,
-                )?;
-                batch_count = 0;
-            }
+        if batch_count >= BATCH_SIZE {
+            flush_position_batch(
+                &mut parquet_writer,
+                &schema,
+                &mut lat_builder,
+                &mut lon_builder,
+                &mut elev_builder,
+                &mut press_builder,
+                &mut temp_builder,
+                &mut dt_builder,
+                &mut deltat_builder,
+                &mut az_builder,
+                &mut angle_builder,
+            )?;
+            batch_count = 0;
         }
     }
 
@@ -291,147 +271,71 @@ fn write_sunrise_parquet<W: Write + Send>(
     let mut batch_count = 0;
     let mut total_count = 0;
 
+    let append_opt_time =
+        |builder: &mut Option<StringBuilder>,
+         time: Option<&chrono::DateTime<chrono::FixedOffset>>| {
+            if let Some(b) = builder {
+                match time {
+                    Some(t) => append_time(b, t),
+                    None => b.append_null(),
+                }
+            }
+        };
+
     for result_or_err in results {
         let result = result_or_err.map_err(std::io::Error::other)?;
-        use solar_positioning::SunriseResult;
+        let row = normalize_sunrise_result(&result)
+            .ok_or_else(|| std::io::Error::other("Unexpected calculation result for sunrise"))?;
 
-        match result {
-            CalculationResult::Sunrise {
-                lat,
-                lon,
-                date,
-                result: sunrise_result,
-                deltat,
-            } => {
-                if show_inputs {
-                    lat_builder.as_mut().unwrap().append_value(lat);
-                    lon_builder.as_mut().unwrap().append_value(lon);
-                }
-
-                date_builder.append_value(date.to_rfc3339());
-
-                if show_inputs {
-                    deltat_builder.as_mut().unwrap().append_value(deltat);
-                }
-
-                let type_str = sunrise_type_label(&sunrise_result);
-                type_builder.append_value(type_str);
-
-                match &sunrise_result {
-                    SunriseResult::RegularDay {
-                        sunrise,
-                        transit,
-                        sunset,
-                    } => {
-                        append_time(&mut sunrise_builder, sunrise);
-                        append_time(&mut transit_builder, transit);
-                        append_time(&mut sunset_builder, sunset);
-                    }
-                    SunriseResult::AllDay { transit } => {
-                        sunrise_builder.append_null();
-                        append_time(&mut transit_builder, transit);
-                        sunset_builder.append_null();
-                    }
-                    SunriseResult::AllNight { transit } => {
-                        sunrise_builder.append_null();
-                        append_time(&mut transit_builder, transit);
-                        sunset_builder.append_null();
-                    }
-                }
-
-                batch_count += 1;
-                total_count += 1;
-            }
-            CalculationResult::SunriseWithTwilight {
-                lat,
-                lon,
-                date,
-                sunrise_sunset,
-                civil,
-                nautical,
-                astronomical,
-                deltat,
-            } => {
-                if show_inputs {
-                    lat_builder.as_mut().unwrap().append_value(lat);
-                    lon_builder.as_mut().unwrap().append_value(lon);
-                }
-
-                date_builder.append_value(date.to_rfc3339());
-
-                if show_inputs {
-                    deltat_builder.as_mut().unwrap().append_value(deltat);
-                }
-
-                let type_str = sunrise_type_label(&sunrise_sunset);
-                type_builder.append_value(type_str);
-
-                match &sunrise_sunset {
-                    SunriseResult::RegularDay {
-                        sunrise,
-                        transit,
-                        sunset,
-                    } => {
-                        append_time(&mut sunrise_builder, sunrise);
-                        append_time(&mut transit_builder, transit);
-                        append_time(&mut sunset_builder, sunset);
-                    }
-                    SunriseResult::AllDay { transit } => {
-                        sunrise_builder.append_null();
-                        append_time(&mut transit_builder, transit);
-                        sunset_builder.append_null();
-                    }
-                    SunriseResult::AllNight { transit } => {
-                        sunrise_builder.append_null();
-                        append_time(&mut transit_builder, transit);
-                        sunset_builder.append_null();
-                    }
-                }
-
-                match &civil {
-                    SunriseResult::RegularDay {
-                        sunrise, sunset, ..
-                    } => {
-                        append_time(civil_start_builder.as_mut().unwrap(), sunrise);
-                        append_time(civil_end_builder.as_mut().unwrap(), sunset);
-                    }
-                    _ => {
-                        civil_start_builder.as_mut().unwrap().append_null();
-                        civil_end_builder.as_mut().unwrap().append_null();
-                    }
-                }
-
-                match &nautical {
-                    SunriseResult::RegularDay {
-                        sunrise, sunset, ..
-                    } => {
-                        append_time(nautical_start_builder.as_mut().unwrap(), sunrise);
-                        append_time(nautical_end_builder.as_mut().unwrap(), sunset);
-                    }
-                    _ => {
-                        nautical_start_builder.as_mut().unwrap().append_null();
-                        nautical_end_builder.as_mut().unwrap().append_null();
-                    }
-                }
-
-                match &astronomical {
-                    SunriseResult::RegularDay {
-                        sunrise, sunset, ..
-                    } => {
-                        append_time(astro_start_builder.as_mut().unwrap(), sunrise);
-                        append_time(astro_end_builder.as_mut().unwrap(), sunset);
-                    }
-                    _ => {
-                        astro_start_builder.as_mut().unwrap().append_null();
-                        astro_end_builder.as_mut().unwrap().append_null();
-                    }
-                }
-
-                batch_count += 1;
-                total_count += 1;
-            }
-            _ => continue,
+        if show_inputs {
+            lat_builder.as_mut().unwrap().append_value(row.lat);
+            lon_builder.as_mut().unwrap().append_value(row.lon);
         }
+
+        date_builder.append_value(row.date_time.to_rfc3339());
+
+        if show_inputs {
+            deltat_builder.as_mut().unwrap().append_value(row.deltat);
+        }
+
+        type_builder.append_value(row.type_label);
+
+        match row.type_label {
+            "NORMAL" => {
+                append_time(
+                    &mut sunrise_builder,
+                    row.sunrise.as_ref().expect("sunrise expected"),
+                );
+                append_time(&mut transit_builder, &row.transit);
+                append_time(
+                    &mut sunset_builder,
+                    row.sunset.as_ref().expect("sunset expected"),
+                );
+            }
+            "ALL_DAY" => {
+                sunrise_builder.append_null();
+                append_time(&mut transit_builder, &row.transit);
+                sunset_builder.append_null();
+            }
+            "ALL_NIGHT" => {
+                sunrise_builder.append_null();
+                append_time(&mut transit_builder, &row.transit);
+                sunset_builder.append_null();
+            }
+            _ => return Err(std::io::Error::other("Unknown sunrise type")),
+        }
+
+        if show_twilight {
+            append_opt_time(&mut civil_start_builder, row.civil_start.as_ref());
+            append_opt_time(&mut civil_end_builder, row.civil_end.as_ref());
+            append_opt_time(&mut nautical_start_builder, row.nautical_start.as_ref());
+            append_opt_time(&mut nautical_end_builder, row.nautical_end.as_ref());
+            append_opt_time(&mut astro_start_builder, row.astro_start.as_ref());
+            append_opt_time(&mut astro_end_builder, row.astro_end.as_ref());
+        }
+
+        batch_count += 1;
+        total_count += 1;
 
         if batch_count >= BATCH_SIZE {
             flush_sunrise_batch(
