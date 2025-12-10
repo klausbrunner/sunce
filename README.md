@@ -104,7 +104,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `--[no-]show-inputs` – include input parameters in the output.
 - `--step=<seconds>` – time step for `position` time series sampling.
 
-Run `sunce help` or `sunce help <command>` for the full reference.
+Run `sunce --help` for a brief usage summary.
 
 ## Performance
 

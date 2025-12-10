@@ -46,7 +46,7 @@ fn test_output_formats() {
         let output = position_test_with_format("PARQUET").get_output();
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("PARQUET format not available in minimal build"));
+        assert!(stderr.contains("PARQUET format not available in this build"));
     }
 }
 

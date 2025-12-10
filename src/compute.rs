@@ -111,31 +111,37 @@ pub fn calculate_sunrise(
     let deltat = resolve_deltat(dt, params);
 
     if params.calculation.twilight {
-        let horizons = vec![
+        const HORIZONS: [Horizon; 4] = [
             Horizon::SunriseSunset,
             Horizon::CivilTwilight,
             Horizon::NauticalTwilight,
             Horizon::AstronomicalTwilight,
         ];
 
-        let results =
-            solar_positioning::spa::sunrise_sunset_multiple(dt, lat, lon, deltat, horizons)
-                .map(|r| r.map_err(|e| format!("Failed to calculate twilight: {}", e)))
-                .collect::<Result<Vec<_>, _>>()?;
+        let mut results = solar_positioning::spa::sunrise_sunset_multiple(
+            dt, lat, lon, deltat, HORIZONS,
+        )
+        .map(|res| {
+            res.map(|(_, r)| r)
+                .map_err(|e| format!("Failed to calculate twilight: {}", e))
+        });
 
-        let mut iter = results.into_iter().map(|(_, result)| result);
-        let Some(sunrise_sunset) = iter.next() else {
-            return Err("Failed to calculate twilight: incomplete result set".to_string());
-        };
-        let Some(civil) = iter.next() else {
-            return Err("Failed to calculate twilight: incomplete result set".to_string());
-        };
-        let Some(nautical) = iter.next() else {
-            return Err("Failed to calculate twilight: incomplete result set".to_string());
-        };
-        let Some(astronomical) = iter.next() else {
-            return Err("Failed to calculate twilight: incomplete result set".to_string());
-        };
+        let sunrise_sunset = results
+            .next()
+            .transpose()?
+            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?;
+        let civil = results
+            .next()
+            .transpose()?
+            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?;
+        let nautical = results
+            .next()
+            .transpose()?
+            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?;
+        let astronomical = results
+            .next()
+            .transpose()?
+            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?;
 
         Ok(CalculationResult::SunriseWithTwilight {
             lat,
@@ -176,31 +182,25 @@ fn time_cache_get(
     params: &Parameters,
 ) -> Result<(SpaTimeParts, f64), String> {
     if let Some(existing) = cache.get(&dt) {
-        if let Some(pos) = order.iter().position(|entry| entry == &dt) {
-            order.remove(pos);
+        if order.back().is_none_or(|back| *back != dt) {
+            if let Some(pos) = order.iter().position(|key| *key == dt) {
+                order.remove(pos);
+            }
+            order.push_back(dt);
         }
-        order.push_back(dt);
         return match existing {
             Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
             Err(err) => Err(err.clone()),
         };
     }
 
-    if let Some(pos) = order.iter().position(|entry| entry == &dt) {
-        order.remove(pos);
-    }
-
     while cache.len() >= capacity {
-        if let Some(oldest) = order.pop_front()
-            && cache.remove(&oldest).is_some()
-        {
-            continue;
+        match order.pop_front() {
+            Some(oldest) => {
+                cache.remove(&oldest);
+            }
+            None => break,
         }
-        // Fallback: remove an arbitrary entry if order is out of sync
-        if let Some(key) = cache.keys().next().cloned() {
-            cache.remove(&key);
-        }
-        break;
     }
 
     let entry = cache.entry(dt).or_insert_with(|| {
@@ -331,12 +331,30 @@ mod tests {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
-        // Repeated hits should not accumulate duplicates in the order queue
-        for _ in 0..10 {
-            let _ = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
-        }
+        time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
 
-        assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
+    }
+
+    #[test]
+    fn spa_time_cache_eviction_is_lru() {
+        let mut cache: SpaCache = HashMap::new();
+        let mut order = VecDeque::new();
+        let params = Parameters::default();
+        let tz = FixedOffset::east_opt(0).unwrap();
+
+        let dt1 = tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let dt2 = tz.with_ymd_and_hms(2024, 1, 1, 0, 1, 0).unwrap();
+        let dt3 = tz.with_ymd_and_hms(2024, 1, 1, 0, 2, 0).unwrap();
+
+        time_cache_get(&mut cache, &mut order, 2, dt1, &params).unwrap();
+        time_cache_get(&mut cache, &mut order, 2, dt2, &params).unwrap();
+        time_cache_get(&mut cache, &mut order, 2, dt1, &params).unwrap(); // bump dt1
+        time_cache_get(&mut cache, &mut order, 2, dt3, &params).unwrap(); // evict dt2
+
+        assert!(cache.contains_key(&dt1));
+        assert!(!cache.contains_key(&dt2));
+        assert!(cache.contains_key(&dt3));
     }
 }

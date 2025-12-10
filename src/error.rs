@@ -1,97 +1,69 @@
 use std::fmt;
 
+macro_rules! simple_error {
+    ($name:ident) => {
+        #[derive(Debug)]
+        pub struct $name(pub String);
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl From<std::io::Error> for $name {
+            fn from(value: std::io::Error) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+}
+
 #[derive(Debug)]
 pub enum CliError {
-    Validation(String),
-    Io(String),
+    /// Print message to stdout and exit with code 0 (help/version/usage).
+    Exit(String),
+    /// Print message to stderr and exit with code 1.
+    Message(String),
 }
 
 impl From<String> for CliError {
     fn from(value: String) -> Self {
-        CliError::Validation(value)
+        Self::Message(value)
     }
 }
 
 impl From<&str> for CliError {
     fn from(value: &str) -> Self {
-        CliError::Validation(value.to_string())
+        Self::Message(value.to_string())
+    }
+}
+
+impl From<std::io::Error> for CliError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Message(value.to_string())
     }
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CliError::Validation(msg) | CliError::Io(msg) => write!(f, "{}", msg),
+            CliError::Exit(msg) | CliError::Message(msg) => write!(f, "{}", msg),
         }
     }
 }
 
-impl From<std::io::Error> for CliError {
-    fn from(value: std::io::Error) -> Self {
-        CliError::Io(value.to_string())
-    }
-}
-
-#[derive(Debug)]
-pub enum PlannerError {
-    Validation(String),
-    Io(String),
-}
-
-impl From<String> for PlannerError {
-    fn from(value: String) -> Self {
-        PlannerError::Validation(value)
-    }
-}
-
-impl From<&str> for PlannerError {
-    fn from(value: &str) -> Self {
-        PlannerError::Validation(value.to_string())
-    }
-}
-
-impl fmt::Display for PlannerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PlannerError::Validation(msg) | PlannerError::Io(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl From<std::io::Error> for PlannerError {
-    fn from(value: std::io::Error) -> Self {
-        PlannerError::Io(value.to_string())
-    }
-}
-
-#[derive(Debug)]
-pub enum OutputError {
-    Io(String),
-    Format(String),
-}
-
-impl From<String> for OutputError {
-    fn from(value: String) -> Self {
-        OutputError::Format(value)
-    }
-}
-
-impl From<&str> for OutputError {
-    fn from(value: &str) -> Self {
-        OutputError::Format(value.to_string())
-    }
-}
-
-impl fmt::Display for OutputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OutputError::Io(msg) | OutputError::Format(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl From<std::io::Error> for OutputError {
-    fn from(value: std::io::Error) -> Self {
-        OutputError::Io(value.to_string())
-    }
-}
+simple_error!(PlannerError);
+simple_error!(OutputError);

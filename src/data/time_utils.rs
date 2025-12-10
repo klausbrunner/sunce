@@ -29,33 +29,28 @@ fn parse_datetime_input(dt_str: &str) -> Result<ParsedDateTime, String> {
         return Ok(ParsedDateTime::Now);
     }
 
-    let has_space_time = dt_str.contains(' ') && dt_str.matches(':').count() >= 1;
-    if dt_str.contains('T') || has_space_time {
-        if dt_str.ends_with('Z') {
-            let utc_dt = dt_str
-                .parse::<DateTime<Utc>>()
-                .map_err(|e| format!("Failed to parse UTC datetime: {}", e))?;
-            return Ok(ParsedDateTime::Fixed(utc_dt.fixed_offset()));
-        } else if dt_str.contains('+') || dt_str.rfind('-').is_some_and(|i| i > 10) {
-            let fixed_dt = dt_str
-                .parse::<DateTime<FixedOffset>>()
-                .map_err(|e| format!("Failed to parse datetime with timezone: {}", e))?;
-            return Ok(ParsedDateTime::Fixed(fixed_dt));
-        } else {
-            let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M"))
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M"))
-                .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
-
-            return Ok(ParsedDateTime::Naive(naive_dt));
-        }
-    }
-
     if let Ok(timestamp) = dt_str.parse::<i64>()
         && timestamp.abs() >= 10000
     {
         return Ok(ParsedDateTime::UnixTimestamp(timestamp));
+    }
+
+    if dt_str.contains('T') {
+        if let Ok(fixed_dt) = DateTime::parse_from_rfc3339(dt_str) {
+            return Ok(ParsedDateTime::Fixed(fixed_dt));
+        }
+
+        let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
+            .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M"))
+            .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
+        return Ok(ParsedDateTime::Naive(naive_dt));
+    }
+
+    if dt_str.contains(' ') && dt_str.contains(':') {
+        let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S")
+            .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M"))
+            .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
+        return Ok(ParsedDateTime::Naive(naive_dt));
     }
 
     let naive_date = NaiveDate::parse_from_str(dt_str, "%Y-%m-%d")
@@ -198,6 +193,16 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
     };
 
     Ok(duration)
+}
+
+pub fn is_date_without_time(s: &str) -> bool {
+    s.len() == 10
+        && s.matches('-').count() == 2
+        && !s.contains('T')
+        && !s.contains(' ')
+        && s.chars()
+            .enumerate()
+            .all(|(idx, c)| matches!(idx, 4 | 7) || c.is_ascii_digit())
 }
 
 pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {

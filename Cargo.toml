@@ -2,7 +2,7 @@
 name = "sunce"
 version = "0.3.6-dev"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.91"
 description = "High-performance command-line solar position calculator"
 license = "MIT"
 repository = "https://github.com/klausbrunner/sunce"
@@ -33,12 +33,12 @@ solar-positioning = "0.4"
 arrow = { version = "57", default-features = false, optional = true }
 parquet = { version = "57", features = ["arrow", "snap"], default-features = false, optional = true }
 iana-time-zone = "0.1"
-unicode-width = "0.2"
+serde = "1"
+serde_json = "1"
 
 [features]
 default = ["parquet"]
 parquet = ["dep:arrow", "dep:parquet"]
-minimal = []
 
 [build-dependencies]
 chrono = "0.4"

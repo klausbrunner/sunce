@@ -54,25 +54,6 @@ impl Iterator for TimeStepIter {
     }
 }
 
-pub struct TimeStream {
-    iter: Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>,
-}
-
-impl TimeStream {
-    fn new<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Result<DateTime<FixedOffset>, String>> + 'static,
-    {
-        Self {
-            iter: Box::new(iter),
-        }
-    }
-
-    fn into_iter(self) -> Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>> {
-        self.iter
-    }
-}
-
 fn parse_delimited_line(line: &str) -> Vec<&str> {
     if line.contains(',') {
         line.split(',').collect()
@@ -89,6 +70,49 @@ fn open_input(input_path: &InputPath) -> io::Result<Box<dyn BufRead>> {
             Ok(Box::new(BufReader::new(file)))
         }
     }
+}
+
+struct Line {
+    number: usize,
+    content: String,
+    ctx: String,
+}
+
+fn read_non_comment_lines(
+    input_path: &InputPath,
+) -> Result<Box<dyn Iterator<Item = Result<Line, String>>>, String> {
+    let ctx = match input_path {
+        InputPath::Stdin => "stdin".to_string(),
+        InputPath::File(p) => p.display().to_string(),
+    };
+
+    let reader = open_input(input_path).map_err(|e| format!("Error opening {}: {}", ctx, e))?;
+    let mut lines = reader.lines().enumerate();
+
+    Ok(Box::new(std::iter::from_fn(move || {
+        for (idx, line_result) in lines.by_ref() {
+            let number = idx + 1;
+            let line = match line_result {
+                Ok(value) => value,
+                Err(err) => {
+                    return Some(Err(format!(
+                        "{}:{}: failed to read line: {}",
+                        ctx, number, err
+                    )));
+                }
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            return Some(Ok(Line {
+                number,
+                content: trimmed.to_string(),
+                ctx: ctx.clone(),
+            }));
+        }
+        None
+    })))
 }
 
 fn coord_range_iter(start: f64, end: f64, step: f64) -> Box<dyn Iterator<Item = f64>> {
@@ -110,6 +134,15 @@ fn range_point_count(start: f64, end: f64, step: f64) -> usize {
         let span = (end - start).abs().max(0.0);
         (span / step).floor() as usize + 1
     }
+}
+
+fn arc_values(values: Arc<Vec<f64>>) -> impl Iterator<Item = f64> {
+    let mut idx = 0usize;
+    std::iter::from_fn(move || {
+        let value = values.get(idx).copied();
+        idx += 1;
+        value
+    })
 }
 
 pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, String> {
@@ -135,8 +168,7 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
                 Ok(Box::new(
                     coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
                         let lat_coords = Arc::clone(&lat_coords);
-                        (0..lat_coords.len())
-                            .map(move |idx| Ok::<(f64, f64), String>((lat_coords[idx], lon)))
+                        arc_values(lat_coords).map(move |lat| Ok::<(f64, f64), String>((lat, lon)))
                     }),
                 ))
             } else {
@@ -145,107 +177,50 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
                     Arc::new(coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<f64>>());
                 Ok(Box::new(lat_iter.flat_map(move |lat| {
                     let lon_coords = Arc::clone(&lon_coords);
-                    (0..lon_coords.len())
-                        .map(move |idx| Ok::<(f64, f64), String>((lat, lon_coords[idx])))
+                    arc_values(lon_coords).map(move |lon| Ok::<(f64, f64), String>((lat, lon)))
                 })))
             }
         }
         LocationSource::File(input_path) => {
-            let path_display = match &input_path {
-                InputPath::Stdin => "stdin".to_string(),
-                InputPath::File(p) => p.display().to_string(),
-            };
-
-            let reader = open_input(&input_path)
-                .map_err(|e| format!("Error opening {}: {}", path_display, e))?;
-
-            let mut lines = reader.lines().enumerate();
-            let mut finished = false;
-
-            let iter = std::iter::from_fn(move || {
-                if finished {
-                    return None;
+            let iter = read_non_comment_lines(&input_path)?.map(|line_res| {
+                let line = line_res?;
+                let parts = parse_delimited_line(&line.content);
+                if parts.len() < 2 {
+                    return Err(format!(
+                        "{}:{}: expected 2 fields (lat lon), found {}",
+                        line.ctx,
+                        line.number,
+                        parts.len()
+                    ));
+                }
+                if parts.len() > 2 {
+                    return Err(format!(
+                        "{}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
+                        line.ctx,
+                        line.number,
+                        parts.len()
+                    ));
                 }
 
-                for (idx, line_result) in lines.by_ref() {
-                    let line_number = idx + 1;
-                    let line = match line_result {
-                        Ok(l) => l,
-                        Err(e) => {
-                            finished = true;
-                            return Some(Err(format!(
-                                "{}:{}: failed to read line: {}",
-                                path_display, line_number, e
-                            )));
-                        }
-                    };
+                let lat_raw: f64 = parts[0].trim().parse().map_err(|_| {
+                    format!(
+                        "{}:{}: invalid latitude '{}'",
+                        line.ctx, line.number, parts[0]
+                    )
+                })?;
+                let lat = validate_latitude(lat_raw)
+                    .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
 
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() || trimmed.starts_with('#') {
-                        continue;
-                    }
+                let lon_raw: f64 = parts[1].trim().parse().map_err(|_| {
+                    format!(
+                        "{}:{}: invalid longitude '{}'",
+                        line.ctx, line.number, parts[1]
+                    )
+                })?;
+                let lon = validate_longitude(lon_raw)
+                    .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
 
-                    let parts = parse_delimited_line(trimmed);
-                    if parts.len() < 2 {
-                        finished = true;
-                        return Some(Err(format!(
-                            "{}:{}: expected 2 fields (lat lon), found {}",
-                            path_display,
-                            line_number,
-                            parts.len()
-                        )));
-                    }
-                    if parts.len() > 2 {
-                        finished = true;
-                        return Some(Err(format!(
-                            "{}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
-                            path_display,
-                            line_number,
-                            parts.len()
-                        )));
-                    }
-
-                    let lat_raw: f64 = match parts[0].trim().parse() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            finished = true;
-                            return Some(Err(format!(
-                                "{}:{}: invalid latitude '{}'",
-                                path_display, line_number, parts[0]
-                            )));
-                        }
-                    };
-                    let lat = match validate_latitude(lat_raw) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            finished = true;
-                            return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                        }
-                    };
-
-                    let lon_raw: f64 = match parts[1].trim().parse() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            finished = true;
-                            return Some(Err(format!(
-                                "{}:{}: invalid longitude '{}'",
-                                path_display, line_number, parts[1]
-                            )));
-                        }
-                    };
-                    let lon = match validate_longitude(lon_raw) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            finished = true;
-                            return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                        }
-                    };
-
-                    return Some(Ok((lat, lon)));
-                }
-
-                finished = true;
-                None
+                Ok((lat, lon))
             });
 
             Ok(Box::new(iter))
@@ -258,18 +233,16 @@ pub fn expand_time_source(
     step_override: Option<Step>,
     override_tz: Option<TimezoneOverride>,
     command: Command,
-) -> Result<TimeStream, String> {
+) -> Result<TimeIter, String> {
     match source {
         TimeSource::Single(dt_str) => {
-            let is_date_only =
-                dt_str.len() == 10 && dt_str.matches('-').count() == 2 && !dt_str.contains('T');
-            if command == Command::Position && is_date_only {
+            if command == Command::Position && super::time_utils::is_date_without_time(&dt_str) {
                 let step = step_override.unwrap_or_else(|| Step(chrono::Duration::hours(1)));
                 expand_partial_date(dt_str, step, override_tz)
             } else {
                 let dt =
                     parse_datetime_string(&dt_str, override_tz.as_ref().map(|tz| tz.as_str()))?;
-                Ok(TimeStream::new(std::iter::once(Ok(dt))))
+                Ok(Box::new(std::iter::once(Ok(dt))))
             }
         }
         TimeSource::Range(partial_date, step_opt) => {
@@ -299,11 +272,12 @@ pub fn expand_time_source(
                     }
                     Some(Ok(convert_datetime_to_timezone(Utc::now(), &tz_clone)))
                 });
-                Ok(TimeStream::new(iter))
+                Ok(Box::new(iter))
             } else {
-                Ok(TimeStream::new(std::iter::once(Ok(
-                    convert_datetime_to_timezone(Utc::now(), &tz_info),
-                ))))
+                Ok(Box::new(std::iter::once(Ok(convert_datetime_to_timezone(
+                    Utc::now(),
+                    &tz_info,
+                )))))
             }
         }
     }
@@ -417,7 +391,7 @@ fn expand_partial_date(
     date_str: String,
     step: Step,
     override_tz: Option<TimezoneOverride>,
-) -> Result<TimeStream, String> {
+) -> Result<TimeIter, String> {
     let step_duration: chrono::Duration = step.into();
     let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
     let bounds = naive_bounds_from_partial(&date_str)?;
@@ -427,53 +401,22 @@ fn expand_partial_date(
 
     let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(Ok);
 
-    Ok(TimeStream::new(iter))
+    Ok(Box::new(iter))
 }
 
 fn read_times_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
-) -> Result<TimeStream, String> {
-    let path_display = match &input_path {
-        InputPath::Stdin => "stdin".to_string(),
-        InputPath::File(p) => p.display().to_string(),
-    };
-
-    let reader =
-        open_input(&input_path).map_err(|e| format!("Error opening {}: {}", path_display, e))?;
-
-    let mut lines = reader.lines().enumerate();
+) -> Result<TimeIter, String> {
     let tz_override = override_tz.clone();
 
-    let iter = std::iter::from_fn(move || {
-        for (idx, line_result) in lines.by_ref() {
-            let line_number = idx + 1;
-            let line = match line_result {
-                Ok(value) => value,
-                Err(err) => {
-                    return Some(Err(format!(
-                        "{}:{}: failed to read line: {}",
-                        path_display, line_number, err
-                    )));
-                }
-            };
-
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            match parse_datetime_string(trimmed, tz_override.as_ref().map(|tz| tz.as_str())) {
-                Ok(dt) => return Some(Ok(dt)),
-                Err(err) => {
-                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                }
-            }
-        }
-        None
+    let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
+        let line = line_res?;
+        parse_datetime_string(&line.content, tz_override.as_ref().map(|tz| tz.as_str()))
+            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))
     });
 
-    Ok(TimeStream::new(iter))
+    Ok(Box::new(iter))
 }
 
 pub fn expand_cartesian_product(
@@ -555,7 +498,6 @@ pub fn expand_cartesian_product(
                 self.tz.clone(),
                 self.command,
             )
-            .map(TimeStream::into_iter)
         }
     }
 
@@ -581,21 +523,9 @@ pub fn expand_cartesian_product(
         return Ok(Box::new(iter));
     }
 
-    if time_gen.replayable {
-        let time_gen_clone = time_gen.clone();
-        let iter = loc_gen.iter()?.flat_map(move |coord_res| match coord_res {
-            Ok((lat, lon)) => match time_gen_clone.iter() {
-                Ok(times) => Box::new(times.map(move |time_res| time_res.map(|dt| (lat, lon, dt))))
-                    as Box<dyn Iterator<Item = CoordTimeResult>>,
-                Err(err) => Box::new(std::iter::once(Err(err))),
-            },
-            Err(err) => Box::new(std::iter::once(Err(err))),
-        });
-
-        return Ok(Box::new(iter));
-    }
-
-    if loc_gen.replayable() {
+    let time_first = |time_gen: &TimeGenerator,
+                      loc_gen: &LocationGenerator|
+     -> Result<CoordTimeStream, String> {
         let loc_gen_clone = loc_gen.clone();
         let iter = time_gen.iter()?.flat_map(move |time_res| match time_res {
             Ok(dt) => match loc_gen_clone.iter() {
@@ -606,8 +536,35 @@ pub fn expand_cartesian_product(
             },
             Err(err) => Box::new(std::iter::once(Err(err))),
         });
+        Ok(Box::new(iter))
+    };
 
-        return Ok(Box::new(iter));
+    let loc_first = |time_gen: &TimeGenerator,
+                     loc_gen: &LocationGenerator|
+     -> Result<CoordTimeStream, String> {
+        let time_gen_clone = time_gen.clone();
+        let iter = loc_gen.iter()?.flat_map(move |coord_res| match coord_res {
+            Ok((lat, lon)) => match time_gen_clone.iter() {
+                Ok(times) => Box::new(times.map(move |time_res| time_res.map(|dt| (lat, lon, dt))))
+                    as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            },
+            Err(err) => Box::new(std::iter::once(Err(err))),
+        });
+        Ok(Box::new(iter))
+    };
+
+    if time_gen.replayable {
+        if loc_gen.replayable() {
+            // Iterate times outermost to maximize reuse of cached time-dependent SPA parts.
+            return time_first(&time_gen, &loc_gen);
+        }
+        // Time is replayable but locations are not (e.g., stdin) - iterate locations first.
+        return loc_first(&time_gen, &loc_gen);
+    }
+
+    if loc_gen.replayable() {
+        return time_first(&time_gen, &loc_gen);
     }
 
     if loc_gen.is_single() {
@@ -627,86 +584,42 @@ pub fn expand_paired_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
 ) -> Result<CoordTimeStream, String> {
-    let path_display = match &input_path {
-        InputPath::Stdin => "stdin".to_string(),
-        InputPath::File(p) => p.display().to_string(),
-    };
-
-    let reader =
-        open_input(&input_path).map_err(|e| format!("Error opening {}: {}", path_display, e))?;
-
-    let mut lines = reader.lines().enumerate();
     let tz_override = override_tz.clone();
 
-    let iter = std::iter::from_fn(move || {
-        for (idx, line_result) in lines.by_ref() {
-            let line_number = idx + 1;
-            let line = match line_result {
-                Ok(value) => value,
-                Err(err) => {
-                    return Some(Err(format!(
-                        "{}:{}: failed to read line: {}",
-                        path_display, line_number, err
-                    )));
-                }
-            };
-
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            let parts = parse_delimited_line(&line);
-            if parts.len() < 3 {
-                return Some(Err(format!(
-                    "{}:{}: expected 3 fields (lat lon datetime), found {}",
-                    path_display,
-                    line_number,
-                    parts.len()
-                )));
-            }
-
-            let lat_raw = match parts[0].trim().parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => {
-                    return Some(Err(format!(
-                        "{}:{}: invalid latitude '{}'",
-                        path_display, line_number, parts[0]
-                    )));
-                }
-            };
-            let lat = match validate_latitude(lat_raw) {
-                Ok(value) => value,
-                Err(err) => {
-                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                }
-            };
-
-            let lon_raw = match parts[1].trim().parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => {
-                    return Some(Err(format!(
-                        "{}:{}: invalid longitude '{}'",
-                        path_display, line_number, parts[1]
-                    )));
-                }
-            };
-            let lon = match validate_longitude(lon_raw) {
-                Ok(value) => value,
-                Err(err) => {
-                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                }
-            };
-
-            let dt_str = parts[2..].join(" ");
-            match parse_datetime_string(dt_str.trim(), tz_override.as_ref().map(|tz| tz.as_str())) {
-                Ok(dt) => return Some(Ok((lat, lon, dt))),
-                Err(err) => {
-                    return Some(Err(format!("{}:{}: {}", path_display, line_number, err)));
-                }
-            }
+    let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
+        let line = line_res?;
+        let parts = parse_delimited_line(&line.content);
+        if parts.len() < 3 {
+            return Err(format!(
+                "{}:{}: expected 3 fields (lat lon datetime), found {}",
+                line.ctx,
+                line.number,
+                parts.len()
+            ));
         }
-        None
+
+        let lat_raw = parts[0].trim().parse::<f64>().map_err(|_| {
+            format!(
+                "{}:{}: invalid latitude '{}'",
+                line.ctx, line.number, parts[0]
+            )
+        })?;
+        let lat = validate_latitude(lat_raw)
+            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
+
+        let lon_raw = parts[1].trim().parse::<f64>().map_err(|_| {
+            format!(
+                "{}:{}: invalid longitude '{}'",
+                line.ctx, line.number, parts[1]
+            )
+        })?;
+        let lon = validate_longitude(lon_raw)
+            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
+
+        let dt_str = parts[2..].join(" ");
+        let dt = parse_datetime_string(dt_str.trim(), tz_override.as_ref().map(|tz| tz.as_str()))
+            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
+        Ok((lat, lon, dt))
     });
 
     Ok(Box::new(iter))

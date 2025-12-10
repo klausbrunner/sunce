@@ -59,15 +59,13 @@ fn main() {
                 );
             }
         }
-        Err(e) => {
-            let message = e.to_string();
-            if message.starts_with("sunce ") || message.starts_with("Usage: ") {
-                println!("{}", message);
-                std::process::exit(0);
-            } else {
-                eprintln!("Error: {}", message);
-                std::process::exit(1);
-            }
+        Err(crate::error::CliError::Exit(message)) => {
+            println!("{}", message);
+            std::process::exit(0);
+        }
+        Err(crate::error::CliError::Message(message)) => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
         }
     }
 }

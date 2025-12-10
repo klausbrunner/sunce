@@ -13,11 +13,8 @@ fn main() {
     #[cfg(feature = "parquet")]
     features.push("parquet");
 
-    #[cfg(feature = "minimal")]
-    features.push("minimal");
-
     if features.is_empty() {
-        features.push("default");
+        features.push("none");
     }
 
     let features_str = features.join(", ");

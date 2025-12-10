@@ -46,6 +46,10 @@ impl FromStr for OutputFormat {
             "json" => Ok(OutputFormat::Json),
             #[cfg(feature = "parquet")]
             "parquet" => Ok(OutputFormat::Parquet),
+            #[cfg(not(feature = "parquet"))]
+            "parquet" => Err(
+                "PARQUET format not available in this build (enable feature 'parquet')".to_string(),
+            ),
             _ => Err(format!(
                 "Invalid format: '{}'. Supported formats: {}",
                 s,

@@ -123,7 +123,7 @@ The entire pipeline maintains lazy evaluation. Nothing is materialized into memo
 
 - `default`: Includes Parquet support
 - `parquet`: Enables Apache Parquet output format (arrow + parquet dependencies)
-- `minimal`: No optional dependencies
+- Minimal build: use `--no-default-features` to exclude Parquet dependencies
 
 **Profile settings**:
 
