@@ -19,10 +19,8 @@ fn test_dst_spring_forward_single_datetime() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "DateTime:    2024-03-31 02:00:00+01:00",
-        ))
-        .stdout(predicate::str::contains("31.64778°"));
+        .stdout(predicate::str::contains("2024-03-31T02:00:00+01:00"))
+        .stdout(predicate::str::contains("31.6478"));
 }
 
 #[test]
@@ -64,9 +62,9 @@ fn test_dst_fall_back_single_datetime() {
         "position",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "DateTime:    2024-10-27 02:00:00+01:00",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("2024-10-27T02:00:00+01:00"));
 }
 
 #[test]
@@ -105,9 +103,9 @@ fn test_dst_normal_summer_time() {
         "position",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "DateTime:    2024-07-15 12:00:00+02:00",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("2024-07-15T12:00:00+02:00"));
 }
 
 #[test]
@@ -123,9 +121,9 @@ fn test_dst_normal_winter_time() {
         "position",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "DateTime:    2024-01-15 12:00:00+01:00",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("2024-01-15T12:00:00+01:00"));
 }
 
 #[test]
@@ -141,9 +139,9 @@ fn test_dst_different_timezone_us_eastern() {
         "position",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "DateTime:    2024-03-10 02:00:00-05:00",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("2024-03-10T02:00:00-05:00"));
 }
 
 #[test]
@@ -160,9 +158,9 @@ fn test_dst_timezone_override() {
     ]);
 
     // With fixed offset +02:00, there's no DST transition - 02:00:00 should be valid
-    cmd.assert().success().stdout(predicate::str::contains(
-        "DateTime:    2024-03-31 02:00:00+02:00",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("2024-03-31T02:00:00+02:00"));
 }
 
 #[test]
@@ -445,10 +443,10 @@ fn test_system_timezone_detection() {
     // The output should contain a valid timezone offset
     // We can't assert the exact timezone since it depends on the system, but we can verify
     // that it produces a valid datetime with timezone information
-    assert!(output_str.contains("DateTime:    2024-01-15 12:00:00"));
+    assert!(output_str.contains("2024-01-15T12:00:00"));
 
-    // Should contain some timezone offset (either + or -)
-    let has_timezone = output_str.contains("+") || output_str.contains("-");
+    // Should contain a timezone offset (either +HH:MM or -HH:MM)
+    let has_timezone = output_str.contains("T12:00:00+") || output_str.contains("T12:00:00-");
     assert!(
         has_timezone,
         "Output should contain timezone information: {}",
@@ -522,7 +520,7 @@ fn test_now_respects_tz_env_fixed_offset() {
 
 #[test]
 fn test_now_table_format_shows_timezone() {
-    // Test that text table format shows timezone in DateTime column
+    // Test that text format shows timezone in the dateTime column
     let mut cmd = sunce_command();
     cmd.env("TZ", "Europe/Paris");
     cmd.args(["48.8", "2.3", "now", "position"]);
@@ -538,9 +536,8 @@ fn test_now_table_format_shows_timezone() {
         output_str
     );
 
-    // DateTime column should have proper width (22 chars for datetime with timezone)
     assert!(
-        output_str.contains("DateTime"),
-        "Should have DateTime column header"
+        output_str.contains("dateTime"),
+        "Should have dateTime column header"
     );
 }

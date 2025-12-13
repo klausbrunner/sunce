@@ -49,14 +49,14 @@ fn test_sunrise_edge_cases() {
     cmd.args(["80.0", "0.0", "2024-06-21", "sunrise"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("all day"));
+        .stdout(predicate::str::contains("ALL_DAY"));
 
     // Test Arctic winter (polar night)
     let mut cmd = sunce_command();
     cmd.args(["80.0", "0.0", "2024-12-21", "sunrise"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("all night"));
+        .stdout(predicate::str::contains("ALL_NIGHT"));
 }
 
 /// Test sunrise time series

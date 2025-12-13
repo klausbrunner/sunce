@@ -20,8 +20,8 @@ fn test_solar_position_reference_accuracy() {
     let output_str = String::from_utf8(output).unwrap();
 
     // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("179.06396")); // Azimuth
-    assert!(output_str.contains("28.03577")); // Zenith
+    assert!(output_str.contains("179.0640")); // Azimuth
+    assert!(output_str.contains("28.0358")); // Zenith
 }
 
 #[test]
@@ -41,8 +41,8 @@ fn test_winter_solstice_reference_accuracy() {
     let output_str = String::from_utf8(output).unwrap();
 
     // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("180.41256")); // Azimuth
-    assert!(output_str.contains("63.40827")); // Zenith
+    assert!(output_str.contains("180.4126")); // Azimuth
+    assert!(output_str.contains("63.4083")); // Zenith
 }
 
 #[test]
@@ -62,8 +62,8 @@ fn test_equinox_reference_accuracy() {
     let output_str = String::from_utf8(output).unwrap();
 
     // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("85.42251")); // Azimuth
-    assert!(output_str.contains("1.83187")); // Zenith (very close to overhead)
+    assert!(output_str.contains("85.4225")); // Azimuth
+    assert!(output_str.contains("1.8319")); // Zenith (very close to overhead)
 }
 
 #[test]
@@ -83,6 +83,6 @@ fn test_southern_hemisphere_reference_accuracy() {
     let output_str = String::from_utf8(output).unwrap();
 
     // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("52.43465")); // Azimuth
-    assert!(output_str.contains("18.97288")); // Zenith
+    assert!(output_str.contains("52.4346")); // Azimuth
+    assert!(output_str.contains("18.9729")); // Zenith
 }

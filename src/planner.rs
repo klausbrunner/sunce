@@ -10,9 +10,7 @@ pub struct ComputePlan {
     pub allow_time_cache: bool,
 }
 
-#[derive(Clone)]
 pub struct OutputPlan {
-    pub data_source: DataSource,
     pub flush_each_record: bool,
 }
 
@@ -43,9 +41,6 @@ pub fn build_job(
         params,
         allow_time_cache,
     };
-    let output_plan = OutputPlan {
-        data_source: source,
-        flush_each_record,
-    };
+    let output_plan = OutputPlan { flush_each_record };
     Ok((compute_plan, output_plan))
 }

@@ -359,12 +359,12 @@ fn test_extreme_latitude_values() {
     SunceTest::new()
         .args(["89.9", "0", "2024-06-21", "position"])
         .assert_success()
-        .stdout(predicate::str::contains("Azimuth"));
+        .stdout(predicate::str::contains("azimuth"));
 
     SunceTest::new()
         .args(["-89.9", "0", "2024-12-21", "position"])
         .assert_success()
-        .stdout(predicate::str::contains("Azimuth"));
+        .stdout(predicate::str::contains("azimuth"));
 
     // Test polar day/night
     SunceTest::new()
