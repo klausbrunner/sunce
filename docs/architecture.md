@@ -76,11 +76,11 @@ All calculations return `Result` values, allowing iterator consumers to surface 
 
 The `output.rs` module provides four output formats:
 
-**Text format**: Human-readable tables with automatic column layout. Shows all input parameters in header section. Uses Unicode box-drawing characters.
+**Text format**: Whitespace-aligned columns (a “pretty CSV”) using the same fields/precision as CSV. Streaming-friendly, with optional headers.
 
-**CSV format**: Comma-separated values with optional headers. Controlled precision (5 decimal places for coordinates, 3 for other values).
+**CSV format**: Comma-separated values with optional headers. Controlled precision (5 decimal places for coordinates, 4 for angles, 3 for most other numeric values).
 
-**JSON format**: JSON Lines format (one JSON object per line). Full floating-point precision (15+ digits).
+**JSON format**: JSON Lines format (one JSON object per line). Angles rounded to 4 decimals.
 
 **Parquet format** (optional feature): Apache Parquet columnar format with Snappy compression. Nullable fields for sunrise times that may be absent (polar day/night).
 

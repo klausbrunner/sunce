@@ -22,11 +22,19 @@ Download the latest release binary from the [releases page](https://github.com/k
 brew install klausbrunner/tap/sunce
 ```
 
-Alternatively, install from source if you have a Rust toolchain:
+Alternatively, install from crates.io if you have a Rust toolchain:
 
 ```shell
 cargo install sunce
 ```
+
+To install from a checked-out copy of this repository:
+
+```shell
+cargo install --path .
+```
+
+`sunce` currently requires Rust 1.91+ (see `rust-toolchain.toml`).
 
 Native executables are provided for Linux, macOS, and Windows.
 
@@ -95,6 +103,11 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `json` – JSON Lines (one JSON object per line), great for post-processing with `jq` or similar tools.
 - `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics (opt-out feature).
 
+## Commands
+
+- `position` – sun position (azimuth/zenith) for the given timestamp or a generated time series.
+- `sunrise` – sunrise/transit/sunset for the given date or date range; add `--twilight` to also emit civil/nautical/astronomical twilight times.
+
 ## Key options
 
 - `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or a TZ database name (e.g., `Europe/Berlin`).
@@ -102,7 +115,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
 - `--[no-]headers` – include/omit header row for CSV output (default: headers on).
 - `--[no-]show-inputs` – include input parameters in the output.
-- `--step=<seconds>` – time step for `position` time series sampling.
+- `--step=<duration>` – time step for `position` time series sampling (integer seconds or a suffix like `10m`, `1h`, `1d`).
 
 Run `sunce --help` for a brief usage summary.
 

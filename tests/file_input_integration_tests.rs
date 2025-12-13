@@ -504,9 +504,9 @@ fn test_solarpos_compatibility_coordinate_file() {
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
 
-    // Verify key values are present (these should match solarpos exactly)
-    assert!(sunce_str.contains("204.04406,30.22402")); // Berlin coordinates
-    assert!(sunce_str.contains("206.76827,37.97019")); // Stockholm coordinates
+    // Verify key values are present (angles are rounded to 4 decimals)
+    assert!(sunce_str.contains("204.0441,30.2240")); // Berlin coordinates
+    assert!(sunce_str.contains("206.7683,37.9702")); // Stockholm coordinates
     assert!(sunce_str.contains("52.00000,13.40000"));
     assert!(sunce_str.contains("59.33400,18.06300"));
 }
@@ -533,9 +533,9 @@ fn test_solarpos_compatibility_time_file() {
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
 
-    // Verify exact values that should match solarpos
-    assert!(sunce_str.contains("204.04406,30.22402")); // 12:00 position
-    assert!(sunce_str.contains("294.43563,79.12831")); // 18:00 position
+    // Verify expected values (angles are rounded to 4 decimals)
+    assert!(sunce_str.contains("204.0441,30.2240")); // 12:00 position
+    assert!(sunce_str.contains("294.4356,79.1283")); // 18:00 position
 }
 
 /// Test solarpos compatibility with paired file input
@@ -558,9 +558,9 @@ fn test_solarpos_compatibility_paired_file() {
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
 
-    // Verify exact values that should match solarpos
-    assert!(sunce_str.contains("204.04406,30.22402")); // Berlin summer
-    assert!(sunce_str.contains("176.65798,63.89946")); // Madrid winter
+    // Verify expected values (angles are rounded to 4 decimals)
+    assert!(sunce_str.contains("204.0441,30.2240")); // Berlin summer
+    assert!(sunce_str.contains("176.6580,63.8995")); // Madrid winter
 }
 
 /// Test solarpos compatibility with sunrise coordinate file
@@ -603,8 +603,8 @@ fn test_solarpos_compatibility_stdin() {
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
 
-    // Should match exact solarpos values
-    assert!(sunce_str.contains("204.04406,30.22402"));
+    // Should match expected values (angles are rounded to 4 decimals)
+    assert!(sunce_str.contains("204.0441,30.2240"));
     assert!(sunce_str.contains("52.00000,13.40000"));
 }
 

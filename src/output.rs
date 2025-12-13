@@ -6,9 +6,9 @@ use crate::error::OutputError;
 use chrono::{DateTime, FixedOffset};
 use serde::{Serializer, ser::SerializeMap};
 use solar_positioning::SunriseResult;
+use std::io::Write;
 
 // Helper functions for time formatting
-const RFC3339_NO_MILLIS_SPACE: &str = "%Y-%m-%d %H:%M:%S%:z";
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
 
 fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
@@ -19,8 +19,24 @@ fn format_datetime_opt(dt: Option<&DateTime<FixedOffset>>) -> String {
     dt.map_or(String::new(), format_rfc3339)
 }
 
-fn format_datetime_text(dt: &DateTime<FixedOffset>) -> String {
-    dt.format(RFC3339_NO_MILLIS_SPACE).to_string()
+fn round_f64(value: f64, decimals: u32) -> f64 {
+    let factor = 10_f64.powi(decimals as i32);
+    (value * factor).round() / factor
+}
+
+fn write_f64_fixed_4<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
+    if !value.is_finite() {
+        return write!(writer, "{}", value);
+    }
+    let scaled = (value * 10_000.0).round() as i64;
+    let abs = scaled.abs();
+    let int_part = abs / 10_000;
+    let frac_part = abs % 10_000;
+    if scaled < 0 {
+        write!(writer, "-{}.{:04}", int_part, frac_part)
+    } else {
+        write!(writer, "{}.{:04}", int_part, frac_part)
+    }
 }
 
 // Helper function to extract times from SunriseResult
@@ -155,8 +171,10 @@ impl PositionFields {
         }
         map.serialize_entry("dateTime", &self.datetime.to_rfc3339())?;
         map.serialize_entry("deltaT", &self.deltat)?;
-        map.serialize_entry("azimuth", &self.azimuth)?;
-        map.serialize_entry(self.angle_kind.field_key(), &self.angle_value)?;
+        let azimuth = round_f64(self.azimuth, 4);
+        let angle = round_f64(self.angle_value, 4);
+        map.serialize_entry("azimuth", &azimuth)?;
+        map.serialize_entry(self.angle_kind.field_key(), &angle)?;
         Ok(())
     }
 }
@@ -276,17 +294,6 @@ impl OutputRow {
         writeln!(writer).map_err(|e| e.to_string())
     }
 
-    fn write_text(&self, writer: &mut dyn std::io::Write) -> Result<(), String> {
-        match self {
-            OutputRow::Sunrise(fields) => {
-                write_text_sunrise(fields, writer).map_err(|e| e.to_string())
-            }
-            OutputRow::Position(_) => {
-                Err("Text output for position is handled by the streaming text table".to_string())
-            }
-        }
-    }
-
     fn write_csv(
         &self,
         writer: &mut dyn std::io::Write,
@@ -308,22 +315,20 @@ impl OutputRow {
                     let dt = datetime_cache
                         .entry(fields.datetime)
                         .or_insert_with(|| fields.datetime.format("%+").to_string());
-                    writeln!(
-                        writer,
-                        "{},{:.3},{:.5},{:.5}",
-                        dt, fields.deltat, fields.azimuth, fields.angle_value
-                    )
-                    .map_err(|e| e.to_string())
+                    write!(writer, "{},{:.3},", dt, fields.deltat).map_err(|e| e.to_string())?;
+                    write_f64_fixed_4(writer, fields.azimuth).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write_f64_fixed_4(writer, fields.angle_value).map_err(|e| e.to_string())?;
+                    writeln!(writer).map_err(|e| e.to_string())
                 } else {
                     let dt = datetime_cache
                         .entry(fields.datetime)
                         .or_insert_with(|| fields.datetime.format("%+").to_string());
-                    writeln!(
-                        writer,
-                        "{},{:.5},{:.5}",
-                        dt, fields.azimuth, fields.angle_value
-                    )
-                    .map_err(|e| e.to_string())
+                    write!(writer, "{},", dt).map_err(|e| e.to_string())?;
+                    write_f64_fixed_4(writer, fields.azimuth).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write_f64_fixed_4(writer, fields.angle_value).map_err(|e| e.to_string())?;
+                    writeln!(writer).map_err(|e| e.to_string())
                 }
             }
             OutputRow::Sunrise(fields) => {
@@ -582,63 +587,91 @@ where
     writeln!(writer).map_err(|e| e.to_string())
 }
 
-fn write_text_sunrise<W: std::io::Write + ?Sized>(
-    fields: &SunriseFields,
-    writer: &mut W,
-) -> std::io::Result<()> {
-    if fields.show_inputs {
-        writeln!(writer, "location: {:.5}, {:.5}", fields.lat, fields.lon)?;
-        writeln!(
-            writer,
-            "dateTime: {}",
-            format_datetime_text(&fields.date_time)
-        )?;
-        writeln!(writer, "deltaT : {:.1}", fields.deltat)?;
+fn is_numeric_column(name: &str) -> bool {
+    matches!(
+        name,
+        "latitude"
+            | "longitude"
+            | "elevation"
+            | "pressure"
+            | "temperature"
+            | "deltaT"
+            | "azimuth"
+            | "zenith"
+            | "elevation-angle"
+    )
+}
+
+fn suggested_column_width(name: &str) -> usize {
+    match name {
+        "latitude" | "longitude" => 10,
+        "elevation" => 9,
+        "pressure" | "temperature" | "deltaT" => 10,
+        "dateTime" => 25,
+        "azimuth" | "zenith" | "elevation-angle" => 10,
+        "type" => 8,
+        "sunrise" | "transit" | "sunset" | "civil_start" | "civil_end" | "nautical_start"
+        | "nautical_end" | "astronomical_start" | "astronomical_end" => 25,
+        _ => name.len(),
     }
+}
 
-    let type_label = match fields.type_label {
-        "ALL_DAY" => "all day",
-        "ALL_NIGHT" => "all night",
-        _ => "normal",
-    };
-    writeln!(writer, "type   : {}", type_label)?;
+fn csv_values_for_row(
+    row: &OutputRow,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+) -> Result<Vec<String>, OutputError> {
+    let mut buf = Vec::new();
+    row.write_csv(&mut buf, datetime_cache)
+        .map_err(OutputError::from)?;
+    let line = String::from_utf8(buf).map_err(|e| OutputError(e.to_string()))?;
+    Ok(line
+        .trim_end_matches('\n')
+        .split(',')
+        .map(|v| v.to_string())
+        .collect())
+}
 
-    let write_opt =
-        |label: &str, value: Option<&DateTime<FixedOffset>>, out: &mut W| -> std::io::Result<()> {
-            if let Some(v) = value {
-                writeln!(out, "{}: {}", label, format_datetime_text(v))
-            } else {
-                writeln!(out, "{}: ", label)
-            }
-        };
+fn write_pretty_header<W: std::io::Write>(
+    writer: &mut W,
+    headers: &[&str],
+    widths: &[usize],
+) -> Result<(), OutputError> {
+    for (idx, (header, width)) in headers.iter().zip(widths).enumerate() {
+        if idx > 0 {
+            write!(writer, "  ").map_err(OutputError::from)?;
+        }
+        write!(writer, "{:<width$}", header, width = *width).map_err(OutputError::from)?;
+    }
+    writeln!(writer).map_err(OutputError::from)?;
 
-    write_opt("sunrise", fields.sunrise.as_ref(), writer)?;
-    writeln!(writer, "transit: {}", format_datetime_text(&fields.transit))?;
-    write_opt("sunset ", fields.sunset.as_ref(), writer)?;
+    for (idx, width) in widths.iter().enumerate() {
+        if idx > 0 {
+            write!(writer, "  ").map_err(OutputError::from)?;
+        }
+        write!(writer, "{}", "-".repeat(*width)).map_err(OutputError::from)?;
+    }
+    writeln!(writer).map_err(OutputError::from)?;
+    Ok(())
+}
 
-    for (label, start, end) in [
-        (
-            "civil twilight",
-            fields.civil_start.as_ref(),
-            fields.civil_end.as_ref(),
-        ),
-        (
-            "nautical twilight",
-            fields.nautical_start.as_ref(),
-            fields.nautical_end.as_ref(),
-        ),
-        (
-            "astronomical twilight",
-            fields.astro_start.as_ref(),
-            fields.astro_end.as_ref(),
-        ),
-    ] {
-        if let (Some(s), Some(e)) = (start, end) {
-            writeln!(writer, "{} start: {}", label, format_datetime_text(s))?;
-            writeln!(writer, "{} end  : {}", label, format_datetime_text(e))?;
+fn write_pretty_row<W: std::io::Write>(
+    writer: &mut W,
+    headers: &[&str],
+    widths: &[usize],
+    values: &[String],
+) -> Result<(), OutputError> {
+    for (idx, ((header, width), value)) in headers.iter().zip(widths).zip(values.iter()).enumerate()
+    {
+        if idx > 0 {
+            write!(writer, "  ").map_err(OutputError::from)?;
+        }
+        if is_numeric_column(header) {
+            write!(writer, "{:>width$}", value, width = *width).map_err(OutputError::from)?;
+        } else {
+            write!(writer, "{:<width$}", value, width = *width).map_err(OutputError::from)?;
         }
     }
-    Ok(())
+    writeln!(writer).map_err(OutputError::from)
 }
 
 pub fn dispatch_output(
@@ -664,7 +697,6 @@ pub fn dispatch_output(
         results,
         command,
         params,
-        output_plan.data_source.clone(),
         &mut writer,
         output_plan.flush_each_record,
     );
@@ -676,25 +708,57 @@ fn write_rows<W: std::io::Write>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
     params: &Parameters,
-    data_source: crate::data::DataSource,
     writer: &mut W,
     flush_each: bool,
 ) -> Result<usize, OutputError> {
-    if matches!(command, Command::Position) && params.output.format == OutputFormat::Text {
-        return text_table::write_streaming_text_table(
-            results,
-            params,
-            data_source,
-            writer,
-            flush_each,
-        )
-        .map_err(OutputError::from);
-    }
-
     let mut count = 0;
     let mut csv_header_written = false;
-    let mut csv_datetime_cache: std::collections::HashMap<DateTime<FixedOffset>, String> =
+    let mut datetime_cache: std::collections::HashMap<DateTime<FixedOffset>, String> =
         std::collections::HashMap::with_capacity(2048);
+
+    if params.output.format == OutputFormat::Text {
+        let mut iter = results;
+        let Some(first) = iter.next() else {
+            return Ok(0);
+        };
+
+        let first_result = first.map_err(OutputError::from)?;
+        let first_row = to_output_row(&first_result, params, command).map_err(OutputError::from)?;
+        let headers: Vec<&'static str> = first_row.csv_headers();
+        let first_values = csv_values_for_row(&first_row, &mut datetime_cache)?;
+
+        let mut widths: Vec<usize> = headers
+            .iter()
+            .map(|h| h.len().max(suggested_column_width(h)))
+            .collect();
+        for (w, v) in widths.iter_mut().zip(first_values.iter()) {
+            *w = (*w).max(v.len());
+        }
+
+        let header_strs = headers.clone();
+        if params.output.headers {
+            write_pretty_header(writer, &header_strs, &widths)?;
+        }
+
+        write_pretty_row(writer, &header_strs, &widths, &first_values)?;
+        count += 1;
+        if flush_each {
+            writer.flush().map_err(OutputError::from)?;
+        }
+
+        for result_or_err in iter {
+            let result = result_or_err.map_err(OutputError::from)?;
+            let row = to_output_row(&result, params, command).map_err(OutputError::from)?;
+            let values = csv_values_for_row(&row, &mut datetime_cache)?;
+            write_pretty_row(writer, &header_strs, &widths, &values)?;
+            count += 1;
+            if flush_each {
+                writer.flush().map_err(OutputError::from)?;
+            }
+        }
+
+        return Ok(count);
+    }
 
     for result_or_err in results {
         let result = result_or_err.map_err(OutputError::from)?;
@@ -706,11 +770,11 @@ fn write_rows<W: std::io::Write>(
                     write_csv_line(writer, row.csv_headers()).map_err(OutputError::from)?;
                     csv_header_written = true;
                 }
-                row.write_csv(writer, &mut csv_datetime_cache)
+                row.write_csv(writer, &mut datetime_cache)
                     .map_err(OutputError::from)?;
             }
             OutputFormat::Json => row.write_json(writer).map_err(OutputError::from)?,
-            OutputFormat::Text => row.write_text(writer).map_err(OutputError::from)?,
+            OutputFormat::Text => unreachable!("handled above"),
             #[cfg(feature = "parquet")]
             OutputFormat::Parquet => return Err(OutputError::from("Unsupported format")),
         }
@@ -723,311 +787,12 @@ fn write_rows<W: std::io::Write>(
     Ok(count)
 }
 
-mod text_table {
-    use super::*;
-    use crate::data::{DataSource, LocationSource, TimeSource};
-
-    #[derive(Clone)]
-    struct TableInvariants {
-        lat_varies: bool,
-        lon_varies: bool,
-        time_varies: bool,
-    }
-
-    #[derive(Clone)]
-    struct TableLayout {
-        headers: Vec<&'static str>,
-        col_widths: Vec<usize>,
-        elevation_angle: bool,
-    }
-
-    fn detect_invariants(source: &DataSource) -> TableInvariants {
-        match source {
-            DataSource::Separate(loc, time) => {
-                let (lat_varies, lon_varies) = match loc {
-                    LocationSource::Single(_, _) => (false, false),
-                    LocationSource::Range { lat, lon } => {
-                        let lat_varies = lat.0 != lat.1;
-                        let lon_varies = lon.map(|(s, e, _)| s != e).unwrap_or(false);
-                        (lat_varies, lon_varies)
-                    }
-                    LocationSource::File(_) => (true, true),
-                };
-                let time_varies = !matches!(time, TimeSource::Single(_));
-                TableInvariants {
-                    lat_varies,
-                    lon_varies,
-                    time_varies,
-                }
-            }
-            DataSource::Paired(_) => TableInvariants {
-                lat_varies: true,
-                lon_varies: true,
-                time_varies: true,
-            },
-        }
-    }
-
-    fn invariants_header(
-        params: &Parameters,
-        source: &DataSource,
-        invariants: &TableInvariants,
-        first_row: &PositionRow,
-    ) -> String {
-        let mut header = String::new();
-        if !invariants.lat_varies {
-            header.push_str(&format!("  Latitude:    {:.6}°\n", first_row.lat));
-        }
-        if !invariants.lon_varies {
-            header.push_str(&format!("  Longitude:   {:.6}°\n", first_row.lon));
-        }
-        header.push_str(&format!(
-            "  Elevation:   {:.1} m\n",
-            params.environment.elevation
-        ));
-        if params.environment.refraction {
-            header.push_str(&format!(
-                "  Pressure:    {:.1} hPa\n",
-                params.environment.pressure
-            ));
-            header.push_str(&format!(
-                "  Temperature: {:.1}°C\n",
-                params.environment.temperature
-            ));
-        }
-        if !invariants.time_varies {
-            header.push_str(&format!(
-                "  DateTime:    {}\n",
-                first_row.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            ));
-        } else if invariants.lat_varies
-            && let DataSource::Separate(_, TimeSource::Range(date_str, _)) = source
-            && date_str.len() == 10
-        {
-            header.push_str(&format!(
-                "  DateTime:    {}\n",
-                first_row.datetime.format("%Y-%m-%d %H:%M:%S%:z")
-            ));
-        }
-        header.push_str(&format!("  Delta T:     {:.1} s\n", first_row.deltat));
-        header.push('\n');
-        header
-    }
-
-    fn build_table_layout(invariants: &TableInvariants, elevation_angle: bool) -> TableLayout {
-        let mut headers = Vec::new();
-        if invariants.lat_varies {
-            headers.push("Latitude");
-        }
-        if invariants.lon_varies {
-            headers.push("Longitude");
-        }
-        if invariants.time_varies {
-            headers.push("DateTime");
-        }
-        headers.push("Azimuth");
-        headers.push(if elevation_angle {
-            "Elevation"
-        } else {
-            "Zenith"
-        });
-
-        let col_widths: Vec<usize> = headers
-            .iter()
-            .map(|h| {
-                if invariants.time_varies && *h == "DateTime" {
-                    22 // "YYYY-MM-DD HH:MM±HH:MM"
-                } else {
-                    h.len().max(14)
-                }
-            })
-            .collect();
-
-        TableLayout {
-            headers,
-            col_widths,
-            elevation_angle,
-        }
-    }
-
-    fn render_table_header(layout: &TableLayout) -> String {
-        let mut header = String::new();
-
-        header.push('┌');
-        for (i, width) in layout.col_widths.iter().enumerate() {
-            header.push_str(&"─".repeat(width + 2));
-            if i < layout.col_widths.len() - 1 {
-                header.push('┬');
-            }
-        }
-        header.push_str("┐\n");
-
-        header.push('│');
-        for (h, width) in layout.headers.iter().zip(&layout.col_widths) {
-            header.push_str(&format!(" {:<width$} ", h, width = width));
-            header.push('│');
-        }
-        header.push('\n');
-
-        header.push('├');
-        for (i, width) in layout.col_widths.iter().enumerate() {
-            header.push_str(&"─".repeat(width + 2));
-            if i < layout.col_widths.len() - 1 {
-                header.push('┼');
-            }
-        }
-        header.push_str("┤\n");
-
-        header
-    }
-
-    fn render_table_footer(layout: &TableLayout) -> String {
-        let mut footer = String::from('└');
-        for (i, width) in layout.col_widths.iter().enumerate() {
-            footer.push_str(&"─".repeat(width + 2));
-            if i < layout.col_widths.len() - 1 {
-                footer.push('┴');
-            }
-        }
-        footer.push_str("┘\n");
-        footer
-    }
-
-    fn format_position_row(
-        row: &PositionRow,
-        invariants: &TableInvariants,
-        layout: &TableLayout,
-    ) -> String {
-        let mut output = String::from('│');
-        let mut col_idx = 0;
-
-        if invariants.lat_varies {
-            output.push_str(&format!(
-                " {:>width$.5}° ",
-                row.lat,
-                width = layout.col_widths[col_idx] - 1
-            ));
-            output.push('│');
-            col_idx += 1;
-        }
-        if invariants.lon_varies {
-            output.push_str(&format!(
-                " {:>width$.5}° ",
-                row.lon,
-                width = layout.col_widths[col_idx] - 1
-            ));
-            output.push('│');
-            col_idx += 1;
-        }
-        if invariants.time_varies {
-            let dt_str = row.datetime.format("%Y-%m-%d %H:%M%:z").to_string();
-            output.push_str(&format!(
-                " {:<width$} ",
-                dt_str,
-                width = layout.col_widths[col_idx]
-            ));
-            output.push('│');
-            col_idx += 1;
-        }
-        output.push_str(&format!(
-            " {:>width$.5}° ",
-            row.azimuth,
-            width = layout.col_widths[col_idx] - 1
-        ));
-        output.push('│');
-        col_idx += 1;
-
-        let angle = row.angle(layout.elevation_angle);
-        output.push_str(&format!(
-            " {:>width$.5}° ",
-            angle,
-            width = layout.col_widths[col_idx] - 1
-        ));
-        output.push_str("│\n");
-        output
-    }
-
-    fn format_streaming_text_table(
-        mut results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-        params: &Parameters,
-        source: DataSource,
-    ) -> Box<dyn Iterator<Item = Result<(String, bool), String>>> {
-        // Peek at first result to get invariant values and determine table structure
-        let first_row = match results.next() {
-            Some(Ok(r)) => match normalize_position_result(&r) {
-                Some(row) => row,
-                None => {
-                    return Box::new(std::iter::once(Err(
-                        "Unexpected calculation result for position output".to_string(),
-                    )));
-                }
-            },
-            Some(Err(e)) => return Box::new(std::iter::once(Err(e))),
-            None => return Box::new(std::iter::empty()),
-        };
-
-        let invariants = detect_invariants(&source);
-        let layout = build_table_layout(&invariants, params.output.elevation_angle);
-        let mut header = invariants_header(params, &source, &invariants, &first_row);
-        header.push_str(&render_table_header(&layout));
-
-        let invariants_for_rows = invariants.clone();
-        let layout_for_rows = layout.clone();
-        let format_row = move |row: &PositionRow| -> String {
-            format_position_row(row, &invariants_for_rows, &layout_for_rows)
-        };
-        let footer = render_table_footer(&layout);
-
-        // Create streaming iterator: header + first_row + remaining_rows + footer
-        let first_line = format_row(&first_row);
-        let remaining_rows = results.map(move |r_or_err| match r_or_err {
-            Ok(r) => normalize_position_result(&r)
-                .ok_or_else(|| "Unexpected calculation result for position output".to_string())
-                .map(|row| format_row(&row)),
-            Err(e) => Err(e),
-        });
-
-        Box::new(
-            std::iter::once(Ok((header, false)))
-                .chain(std::iter::once(Ok((first_line, true))))
-                .chain(remaining_rows.map(|res| res.map(|line| (line, true))))
-                .chain(std::iter::once(Ok((footer, false)))),
-        )
-    }
-
-    pub fn write_streaming_text_table<W: std::io::Write>(
-        results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-        params: &Parameters,
-        source: DataSource,
-        writer: &mut W,
-        flush_each: bool,
-    ) -> std::io::Result<usize> {
-        let formatted = format_streaming_text_table(results, params, source);
-        let mut record_count = 0;
-        for line_result in formatted {
-            match line_result {
-                Ok((line, is_record)) => {
-                    write!(writer, "{}", line)?;
-                    if is_record {
-                        record_count += 1;
-                        if flush_each {
-                            std::io::Write::flush(writer)?;
-                        }
-                    }
-                }
-                Err(e) => return Err(std::io::Error::other(e)),
-            }
-        }
-        Ok(record_count)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compute;
+    use crate::data::OutputFormat;
     use crate::data::config::OutputOptions;
-    use crate::data::{DataSource, LocationSource, OutputFormat, TimeSource};
     use chrono::{FixedOffset, TimeZone};
     use std::io::Write;
 
@@ -1066,22 +831,9 @@ mod tests {
         let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
             Box::new(vec![Ok(calc)].into_iter());
 
-        let source = DataSource::Separate(
-            LocationSource::Single(52.0, 13.4),
-            TimeSource::Single(dt.to_rfc3339()),
-        );
-
         let mut writer = MockWriter::default();
 
-        write_rows(
-            results,
-            Command::Position,
-            &params,
-            source,
-            &mut writer,
-            true,
-        )
-        .expect("write succeeds");
+        write_rows(results, Command::Position, &params, &mut writer, true).expect("write succeeds");
 
         assert_eq!(writer.flushes, 1);
         assert!(!writer.buf.is_empty());

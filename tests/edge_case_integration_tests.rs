@@ -1,5 +1,5 @@
 mod common;
-use common::{SunceTest, sunce_command};
+use common::{SunceTest, sunce_command, sunce_exe_path};
 use predicates::prelude::*;
 use std::io::Write;
 use std::process::{Command as StdCommand, Stdio};
@@ -111,10 +111,8 @@ fn test_unbounded_watch_requires_single_location() {
 #[test]
 fn test_streaming_with_head_command() {
     // Test that output streams properly and can be interrupted with head
-    let mut child = StdCommand::new("cargo")
+    let mut child = StdCommand::new(sunce_exe_path())
         .args([
-            "run",
-            "--",
             "--format=csv",
             "--no-headers",
             "50:90:0.01",
@@ -154,15 +152,8 @@ fn test_streaming_with_head_command() {
 #[test]
 fn test_stdin_streaming_paired_data() {
     // Test streaming paired data through stdin
-    let mut child = StdCommand::new("cargo")
-        .args([
-            "run",
-            "--",
-            "--format=csv",
-            "--no-headers",
-            "@-",
-            "position",
-        ])
+    let mut child = StdCommand::new(sunce_exe_path())
+        .args(["--format=csv", "--no-headers", "@-", "position"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -233,16 +224,8 @@ fn test_partial_line_handling_in_file() {
 #[test]
 fn test_sigpipe_handling() {
     // Test that SIGPIPE is handled gracefully
-    let mut child = StdCommand::new("cargo")
-        .args([
-            "run",
-            "--",
-            "--format=csv",
-            "50:90:0.1",
-            "10:50:0.1",
-            "2024",
-            "position",
-        ])
+    let mut child = StdCommand::new(sunce_exe_path())
+        .args(["--format=csv", "50:90:0.1", "10:50:0.1", "2024", "position"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -359,12 +342,12 @@ fn test_extreme_latitude_values() {
     SunceTest::new()
         .args(["89.9", "0", "2024-06-21", "position"])
         .assert_success()
-        .stdout(predicate::str::contains("Azimuth"));
+        .stdout(predicate::str::contains("azimuth"));
 
     SunceTest::new()
         .args(["-89.9", "0", "2024-12-21", "position"])
         .assert_success()
-        .stdout(predicate::str::contains("Azimuth"));
+        .stdout(predicate::str::contains("azimuth"));
 
     // Test polar day/night
     SunceTest::new()

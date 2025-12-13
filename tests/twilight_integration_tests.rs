@@ -114,15 +114,17 @@ fn test_twilight_text_output() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     // Verify text format includes all twilight information
-    assert!(stdout.contains("type   : normal"));
-    assert!(stdout.contains("sunrise:"));
-    assert!(stdout.contains("transit:"));
-    assert!(stdout.contains("sunset :"));
-    assert!(stdout.contains("civil twilight start:"));
-    assert!(stdout.contains("civil twilight end  :"));
-    assert!(stdout.contains("nautical twilight start:"));
-    assert!(stdout.contains("nautical twilight end  :"));
-    // Astronomical may not appear at this latitude in summer
+    assert!(stdout.contains("dateTime"));
+    assert!(stdout.contains("type"));
+    assert!(stdout.contains("NORMAL"));
+    assert!(stdout.contains("sunrise"));
+    assert!(stdout.contains("transit"));
+    assert!(stdout.contains("sunset"));
+    assert!(stdout.contains("civil_start"));
+    assert!(stdout.contains("civil_end"));
+    assert!(stdout.contains("nautical_start"));
+    assert!(stdout.contains("nautical_end"));
+    // Astronomical may not appear at this latitude in summer (empty fields are allowed)
 }
 
 #[cfg(feature = "parquet")]

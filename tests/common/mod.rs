@@ -2,14 +2,24 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::path::{Path, PathBuf};
 
 /// Test helper for running sunce commands with less boilerplate
 pub struct SunceTest {
     cmd: Command,
 }
 
+pub fn sunce_exe_path() -> PathBuf {
+    let exe = assert_cmd::cargo::cargo_bin!("sunce");
+    if exe.is_absolute() {
+        exe.to_path_buf()
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(exe)
+    }
+}
+
 pub fn sunce_command() -> Command {
-    Command::new(assert_cmd::cargo::cargo_bin!("sunce"))
+    Command::new(sunce_exe_path())
 }
 
 impl SunceTest {
