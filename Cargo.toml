@@ -1,8 +1,8 @@
 [package]
 name = "sunce"
-version = "0.3.6-dev"
+version = "0.3.6"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.92"
 description = "High-performance command-line solar position calculator"
 license = "MIT"
 repository = "https://github.com/klausbrunner/sunce"
