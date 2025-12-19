@@ -88,6 +88,14 @@ enum AngleKind {
     Elevation,
 }
 
+pub(crate) fn position_angle_label(elevation_angle: bool) -> &'static str {
+    if elevation_angle {
+        "elevation-angle"
+    } else {
+        "zenith"
+    }
+}
+
 impl AngleKind {
     fn from_params(params: &Parameters) -> Self {
         if params.output.elevation_angle {
@@ -98,17 +106,7 @@ impl AngleKind {
     }
 
     fn label(&self) -> &'static str {
-        match self {
-            AngleKind::Zenith => "zenith",
-            AngleKind::Elevation => "elevation-angle",
-        }
-    }
-
-    fn field_key(&self) -> &'static str {
-        match self {
-            AngleKind::Zenith => "zenith",
-            AngleKind::Elevation => "elevation",
-        }
+        position_angle_label(matches!(self, AngleKind::Elevation))
     }
 }
 
@@ -149,9 +147,9 @@ fn position_fields(row: &PositionRow, params: &Parameters, show_inputs: bool) ->
 
 impl PositionFields {
     fn map_len(&self) -> usize {
-        let mut len = 4; // dateTime, deltaT, azimuth, angle
+        let mut len = 3; // dateTime, azimuth, angle
         if self.show_inputs {
-            len += 3; // latitude, longitude, elevation
+            len += 4; // latitude, longitude, elevation, deltaT
             if self.include_refraction {
                 len += 2; // pressure, temperature
             }
@@ -170,11 +168,13 @@ impl PositionFields {
             }
         }
         map.serialize_entry("dateTime", &self.datetime.to_rfc3339())?;
-        map.serialize_entry("deltaT", &self.deltat)?;
+        if self.show_inputs {
+            map.serialize_entry("deltaT", &self.deltat)?;
+        }
         let azimuth = round_f64(self.azimuth, 4);
         let angle = round_f64(self.angle_value, 4);
         map.serialize_entry("azimuth", &azimuth)?;
-        map.serialize_entry(self.angle_kind.field_key(), &angle)?;
+        map.serialize_entry(self.angle_kind.label(), &angle)?;
         Ok(())
     }
 }

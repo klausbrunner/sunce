@@ -2,7 +2,7 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
-use crate::output::{normalize_position_result, normalize_sunrise_result};
+use crate::output::{normalize_position_result, normalize_sunrise_result, position_angle_label};
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -226,11 +226,7 @@ fn build_position_schema(
 
     fields.push(Field::new("azimuth", DataType::Float64, false));
 
-    let angle_name = if elevation_angle {
-        "elevation-angle"
-    } else {
-        "zenith"
-    };
+    let angle_name = position_angle_label(elevation_angle);
     fields.push(Field::new(angle_name, DataType::Float64, false));
 
     Arc::new(Schema::new(fields))
