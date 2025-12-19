@@ -177,7 +177,7 @@ const OPTION_SPECS: &[OptionSpec] = &[
 pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameters)> {
     if args.len() < 2 {
         return Err(CliError::Exit(
-            "Usage: sunce [options] <lat> <lon> <datetime> <command>".to_string(),
+            "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|sunrise>".to_string(),
         ));
     }
 
@@ -202,6 +202,16 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
         } else {
             positional.push(arg);
         }
+    }
+
+    if let Some(first) = positional.first()
+        && first == "help"
+    {
+        let message = positional
+            .get(1)
+            .map(|command| get_command_help(command))
+            .unwrap_or_else(get_help_text);
+        return Err(CliError::Exit(message));
     }
 
     let (command, data_source) = parse_positional_args(&positional, &params)?;
@@ -556,8 +566,139 @@ fn validate_command_options(
 }
 
 fn get_help_text() -> String {
-    "sunce - calculate solar position or sunrise/sunset times\n\
-Usage: sunce [OPTIONS] <lat> <lon> <datetime> <position|sunrise>\n\
-Use --version for build info."
-        .to_string()
+    let defaults = Parameters::default();
+    let formats = OutputFormat::all().join(", ");
+    format!(
+        r#"sunce {}
+Calculates topocentric solar coordinates or sunrise/sunset times.
+
+Usage:
+  sunce [OPTIONS] <latitude> <longitude> <dateTime> <position|sunrise>
+  sunce [OPTIONS] @data.txt <position|sunrise>
+  sunce [OPTIONS] @coords.txt @times.txt <position|sunrise>
+  sunce [OPTIONS] @coords.txt <dateTime> <position|sunrise>
+
+Examples:
+  sunce 52.0 13.4 2024-01-01 position
+  sunce 52:53:0.1 13:14:0.1 2024 position --format=csv
+  sunce @coords.txt @times.txt position
+  sunce @data.txt position
+  echo "52.0 13.4 2024-01-01T12:00:00" | sunce @- position
+
+Arguments:
+  <latitude>         Latitude: decimal degrees, range, or file.
+                       Range: -90 to +90
+                       52.5            single coordinate
+                       52:53:0.1       range from 52 to 53 in 0.1 steps
+                       @coords.txt     file with coordinates (or @- for stdin)
+
+  <longitude>        Longitude: decimal degrees, range, or file.
+                       Range: -180 to +180
+                       13.4            single coordinate
+                       13:14:0.1       range from 13 to 14 in 0.1 steps
+                       @coords.txt     file with coordinates (or @- for stdin)
+
+  <dateTime>         Date/time: ISO, partial dates, unix timestamp, or file.
+                       2024-01-01           date only (position: hourly series)
+                       2024-01-01T12:00:00  date and time
+                       2024-01-01 12:00     date and time (space separator)
+                       2024                 entire year (daily by default)
+                       2024-06              entire month (position: hourly, sunrise: daily)
+                       now                  current time (position repeats with --step
+                                              for a single lat/lon only)
+                       1704067200           unix timestamp (seconds)
+                       @times.txt           file with times (or @- for stdin)
+
+  File inputs:
+    - Coordinates files contain lat lon per line.
+    - Time files contain one datetime per line.
+    - Paired data files contain lat lon datetime per line.
+    - Files accept comma- or whitespace-separated fields.
+    - Blank lines and lines starting with # are ignored.
+    - Stdin (@-) can be used for only one input parameter.
+
+Options:
+  --deltat[=<seconds>]  Delta T in seconds. Default: 0 when omitted. Use
+                        --deltat=<seconds> for an explicit value, or
+                        --deltat (no value) to estimate from the date
+                        (falls back to 0 if unavailable).
+  --format=<format>     Output format: {}. Default: {}
+  --timezone=<tz>       Timezone offset (+01:00) or IANA name (Europe/Berlin).
+                        Overrides timezone for parsing and output.
+  --[no-]headers        Include headers in CSV output. Default: {}
+  --[no-]show-inputs    Include inputs in output. Auto-enabled for ranges,
+                        files, and position date-only inputs unless
+                        --no-show-inputs is used.
+  --perf                Print performance statistics to stderr.
+  --help                Show this help message and exit.
+  --version             Print version information and exit.
+
+Commands:
+  position              Calculate topocentric solar coordinates.
+  sunrise               Calculate sunrise, transit, sunset, and optional twilight.
+
+Run 'sunce help <command>' for command-specific options.
+"#,
+        env!("CARGO_PKG_VERSION"),
+        formats,
+        defaults.output.format,
+        defaults.output.headers
+    )
+}
+
+fn get_command_help(command: &str) -> String {
+    let defaults = Parameters::default();
+    match command {
+        "position" => format!(
+            r#"Usage:
+  sunce [OPTIONS] <latitude> <longitude> <dateTime> position
+  sunce [OPTIONS] @data.txt position
+  sunce [OPTIONS] @coords.txt @times.txt position
+  sunce [OPTIONS] @coords.txt <dateTime> position
+
+Calculates topocentric solar coordinates.
+
+Options:
+  --algorithm=<alg>         Algorithm: spa, grena3. Default: {}
+  --elevation=<meters>      Elevation above sea level in meters. Default: {}
+  --elevation-angle         Output elevation angle instead of zenith angle.
+  --no-refraction           Disable refraction correction.
+  --pressure=<hPa>          Air pressure in hPa (refraction). Default: {}
+  --temperature=<celsius>   Air temperature in C (refraction). Default: {}
+  --step=<interval>         Time step for ranges and date-only inputs.
+                            Examples: 30s, 15m, 2h, 1d
+
+Examples:
+  sunce 52.0 13.4 2024-06-21T12:00:00 position
+  sunce 52.0 13.4 2024-06-21 position --step=10m
+  sunce 50:55:0.5 10:15:0.5 2024-06-21T12:00:00 position --algorithm=grena3
+"#,
+            defaults.calculation.algorithm,
+            defaults.environment.elevation,
+            defaults.environment.pressure,
+            defaults.environment.temperature
+        ),
+        "sunrise" => r#"Usage:
+  sunce [OPTIONS] <latitude> <longitude> <dateTime> sunrise
+  sunce [OPTIONS] @data.txt sunrise
+  sunce [OPTIONS] @coords.txt @times.txt sunrise
+  sunce [OPTIONS] @coords.txt <dateTime> sunrise
+
+Calculates sunrise, transit, sunset and (optionally) twilight times.
+
+Options:
+  --twilight                Include civil, nautical, and astronomical twilight times.
+  --horizon=<degrees>       Custom horizon angle in degrees (ignored with --twilight).
+
+Examples:
+  sunce 52.0 13.4 2024-06-21 sunrise
+  sunce 52.0 13.4 2024-06 sunrise --twilight
+  sunce 52.0 13.4 2024-06-21 sunrise --horizon=-6.0
+"#
+        .to_string(),
+        _ => format!(
+            "Unknown command: {}\n\nRun 'sunce --help' for usage.",
+            command
+        ),
+    }
 }

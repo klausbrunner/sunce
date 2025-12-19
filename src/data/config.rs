@@ -12,7 +12,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    const fn all() -> &'static [&'static str] {
+    pub(crate) const fn all() -> &'static [&'static str] {
         &[
             "text",
             "csv",
