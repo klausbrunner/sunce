@@ -22,19 +22,13 @@ Download the latest release binary from the [releases page](https://github.com/k
 brew install klausbrunner/tap/sunce
 ```
 
-Alternatively, install from crates.io if you have a Rust toolchain:
-
-```shell
-cargo install sunce
-```
-
 To install from a checked-out copy of this repository:
 
 ```shell
 cargo install --path .
 ```
 
-`sunce` currently requires Rust 1.91+ (see `rust-toolchain.toml`).
+`sunce` currently requires Rust 1.92+ (see `rust-toolchain.toml`).
 
 Native executables are provided for Linux, macOS, and Windows.
 
