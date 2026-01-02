@@ -8,8 +8,7 @@ use crate::error::CliError;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-const DELTAT_MULTIPLE_ERROR: &str =
-    "error: the argument '--deltat <DELTAT>' cannot be used multiple times";
+const DELTAT_MULTIPLE_ERROR: &str = "Option --deltat cannot be used multiple times";
 
 type CliResult<T> = Result<T, CliError>;
 
@@ -216,7 +215,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
 
     let (command, data_source) = parse_positional_args(&positional, &params)?;
 
-    validate_command_options(command, &params, &applied_options)?;
+    validate_command_options(command, &applied_options)?;
 
     if params.output.show_inputs.is_none() {
         params.output.show_inputs = Some(should_auto_show_inputs(&data_source, command));
@@ -506,11 +505,7 @@ fn get_version_text() -> String {
     )
 }
 
-fn validate_command_options(
-    command: Command,
-    params: &Parameters,
-    applied: &HashSet<&'static str>,
-) -> CliResult<()> {
+fn validate_command_options(command: Command, applied: &HashSet<&'static str>) -> CliResult<()> {
     if command == Command::Position {
         if applied.contains("horizon") {
             return Err("Option --horizon not valid for position command".into());
@@ -541,24 +536,6 @@ fn validate_command_options(
         }
         if applied.contains("algorithm") {
             return Err("Option --algorithm not valid for sunrise command".into());
-        }
-        if params.calculation.algorithm != CalculationAlgorithm::Spa {
-            return Err("Option --algorithm not valid for sunrise command".into());
-        }
-        if !params.environment.refraction {
-            return Err("Option --no-refraction not valid for sunrise command".into());
-        }
-        if params.environment.elevation != 0.0 {
-            return Err("Option --elevation not valid for sunrise command".into());
-        }
-        if params.environment.temperature != 15.0 {
-            return Err("Option --temperature not valid for sunrise command".into());
-        }
-        if params.environment.pressure != 1013.0 {
-            return Err("Option --pressure not valid for sunrise command".into());
-        }
-        if params.output.elevation_angle {
-            return Err("Option --elevation-angle not valid for sunrise command".into());
         }
     }
 
@@ -601,7 +578,7 @@ Arguments:
   <dateTime>         Date/time: ISO, partial dates, unix timestamp, or file.
                        2024-01-01           date only (position: hourly series)
                        2024-01-01T12:00:00  date and time
-                       2024-01-01 12:00     date and time (space separator)
+                       "2024-01-01 12:00"   date and time (space separator; quote it)
                        2024                 entire year (daily by default)
                        2024-06              entire month (position: hourly, sunrise: daily)
                        now                  current time (position repeats with --step
