@@ -39,6 +39,36 @@ fn write_f64_fixed_4<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::
     }
 }
 
+fn write_f64_fixed_3<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
+    if !value.is_finite() {
+        return write!(writer, "{}", value);
+    }
+    let scaled = (value * 1_000.0).round() as i64;
+    let abs = scaled.abs();
+    let int_part = abs / 1_000;
+    let frac_part = abs % 1_000;
+    if scaled < 0 {
+        write!(writer, "-{}.{:03}", int_part, frac_part)
+    } else {
+        write!(writer, "{}.{:03}", int_part, frac_part)
+    }
+}
+
+fn write_f64_fixed_5<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
+    if !value.is_finite() {
+        return write!(writer, "{}", value);
+    }
+    let scaled = (value * 100_000.0).round() as i64;
+    let abs = scaled.abs();
+    let int_part = abs / 100_000;
+    let frac_part = abs % 100_000;
+    if scaled < 0 {
+        write!(writer, "-{}.{:05}", int_part, frac_part)
+    } else {
+        write!(writer, "{}.{:05}", int_part, frac_part)
+    }
+}
+
 // Helper function to extract times from SunriseResult
 fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Option<&T>) {
     match result {
@@ -302,20 +332,24 @@ impl OutputRow {
         match self {
             OutputRow::Position(fields) => {
                 if fields.show_inputs {
-                    write!(
-                        writer,
-                        "{:.5},{:.5},{:.3},",
-                        fields.lat, fields.lon, fields.elevation
-                    )
-                    .map_err(|e| e.to_string())?;
+                    write_f64_fixed_5(writer, fields.lat).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write_f64_fixed_5(writer, fields.lon).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write_f64_fixed_3(writer, fields.elevation).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
                     if let (Some(pressure), Some(temp)) = (fields.pressure, fields.temperature) {
-                        write!(writer, "{:.3},{:.3},", pressure, temp)
-                            .map_err(|e| e.to_string())?;
+                        write_f64_fixed_3(writer, pressure).map_err(|e| e.to_string())?;
+                        write!(writer, ",").map_err(|e| e.to_string())?;
+                        write_f64_fixed_3(writer, temp).map_err(|e| e.to_string())?;
+                        write!(writer, ",").map_err(|e| e.to_string())?;
                     }
                     let dt = datetime_cache
                         .entry(fields.datetime)
                         .or_insert_with(|| fields.datetime.format("%+").to_string());
-                    write!(writer, "{},{:.3},", dt, fields.deltat).map_err(|e| e.to_string())?;
+                    write!(writer, "{},", dt).map_err(|e| e.to_string())?;
+                    write_f64_fixed_3(writer, fields.deltat).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
                     write_f64_fixed_4(writer, fields.azimuth).map_err(|e| e.to_string())?;
                     write!(writer, ",").map_err(|e| e.to_string())?;
                     write_f64_fixed_4(writer, fields.angle_value).map_err(|e| e.to_string())?;
@@ -337,17 +371,17 @@ impl OutputRow {
                 let sunset_str = format_datetime_opt(fields.sunset.as_ref());
 
                 if fields.show_inputs {
+                    write_f64_fixed_5(writer, fields.lat).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write_f64_fixed_5(writer, fields.lon).map_err(|e| e.to_string())?;
+                    write!(writer, ",").map_err(|e| e.to_string())?;
+                    write!(writer, "{},", fields.date_time.format("%+"))
+                        .map_err(|e| e.to_string())?;
+                    write_f64_fixed_3(writer, fields.deltat).map_err(|e| e.to_string())?;
                     write!(
                         writer,
-                        "{:.5},{:.5},{},{:.3},{},{},{},{}",
-                        fields.lat,
-                        fields.lon,
-                        fields.date_time.format("%+"),
-                        fields.deltat,
-                        fields.type_label,
-                        sunrise_str,
-                        transit_str,
-                        sunset_str
+                        ",{},{},{},{}",
+                        fields.type_label, sunrise_str, transit_str, sunset_str
                     )
                     .map_err(|e| e.to_string())?;
                 } else {
