@@ -282,16 +282,11 @@ fn parse_file_arg(arg: &str) -> CliResult<InputPath> {
 }
 
 fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource> {
-    if lat_str.starts_with('@') && lon_str.starts_with('@') {
-        return Err("Cannot have both lat and lon as files".into());
-    }
-
-    if lat_str.starts_with('@') {
-        return Ok(LocationSource::File(parse_file_arg(lat_str)?));
-    }
-
-    if lon_str.starts_with('@') {
-        return Ok(LocationSource::File(parse_file_arg(lon_str)?));
+    if lat_str.starts_with('@') || lon_str.starts_with('@') {
+        return Err(
+            "Coordinate files must be provided as a single @file argument (use @coords.txt <dateTime>)"
+                .into(),
+        );
     }
 
     let lat_range = match parse_range(lat_str)? {
@@ -304,10 +299,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
     };
 
     match (lat_range, lon_range) {
-        (Some(lat), Some(lon)) => Ok(LocationSource::Range {
-            lat,
-            lon: Some(lon),
-        }),
+        (Some(lat), Some(lon)) => Ok(LocationSource::Range { lat, lon }),
         (Some(lat), None) => {
             let lon_val = lon_str
                 .parse::<f64>()
@@ -315,7 +307,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
             let lon_valid = data::validate_longitude(lon_val).map_err(CliError::from)?;
             Ok(LocationSource::Range {
                 lat,
-                lon: Some((lon_valid, lon_valid, 0.0)),
+                lon: (lon_valid, lon_valid, 0.0),
             })
         }
         (None, Some(lon)) => {
@@ -325,7 +317,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
             let lat_valid = data::validate_latitude(lat_val).map_err(CliError::from)?;
             Ok(LocationSource::Range {
                 lat: (lat_valid, lat_valid, 0.0),
-                lon: Some(lon),
+                lon,
             })
         }
         (None, None) => {
@@ -464,8 +456,14 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
             .map_err(|_| CliError::from(format!("Invalid range step: {}", step_str)))?,
     );
 
-    if step <= 0.0 {
-        return Err("Range step must be positive".into());
+    if step == 0.0 {
+        return Err("Range step must be non-zero".into());
+    }
+    if start < end && step < 0.0 {
+        return Err("Range step must be positive for ascending ranges".into());
+    }
+    if start > end && step > 0.0 {
+        return Err("Range step must be negative for descending ranges".into());
     }
 
     Ok(Some((start, end, step)))
@@ -563,17 +561,19 @@ Examples:
   echo "52.0 13.4 2024-01-01T12:00:00" | sunce @- position
 
 Arguments:
-  <latitude>         Latitude: decimal degrees, range, or file.
+  <latitude>         Latitude: decimal degrees or range.
                        Range: -90 to +90
                        52.5            single coordinate
                        52:53:0.1       range from 52 to 53 in 0.1 steps
-                       @coords.txt     file with coordinates (or @- for stdin)
+                       52:51:-0.5      descending range (negative step)
+                       Coordinate files are passed as @coords.txt (see Usage).
 
-  <longitude>        Longitude: decimal degrees, range, or file.
+  <longitude>        Longitude: decimal degrees or range.
                        Range: -180 to +180
                        13.4            single coordinate
                        13:14:0.1       range from 13 to 14 in 0.1 steps
-                       @coords.txt     file with coordinates (or @- for stdin)
+                       13:11:-1.0      descending range (negative step)
+                       Coordinate files are passed as @coords.txt (see Usage).
 
   <dateTime>         Date/time: ISO, partial dates, unix timestamp, or file.
                        2024-01-01           date only (position: hourly series)

@@ -64,7 +64,7 @@ sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.
 
 Input modes:
 
-- **Coordinate files:** pass `@coords.txt` as the latitude parameter to read coordinates from a file. Each line contains a latitude and longitude (space- or comma-separated).
+- **Coordinate files:** pass `@coords.txt` in place of the lat/lon pair (e.g., `sunce @coords.txt <dateTime> position`). Each line contains a latitude and longitude (space- or comma-separated).
 - **Time files:** pass `@times.txt` as the date/time parameter to read timestamps from a file, one timestamp per line.
 - **Paired data files:** pass `@data.txt` to provide explicit `latitude longitude datetime` records on each line; paired input is treated as one record per line with no cartesian expansion.
 - **Stdin:** use `@-` in place of a filename to read the corresponding parameter from standard input. Only one parameter may read from stdin at a time.

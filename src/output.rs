@@ -199,7 +199,7 @@ pub(crate) struct SunriseRow {
 
 struct SunriseFields {
     show_inputs: bool,
-    has_twilight: bool,
+    include_twilight: bool,
     lat: f64,
     lon: f64,
     date_time: DateTime<FixedOffset>,
@@ -252,7 +252,7 @@ impl OutputRow {
                 header.push("sunrise");
                 header.push("transit");
                 header.push("sunset");
-                if fields.has_twilight {
+                if fields.include_twilight {
                     header.extend([
                         "civil_start",
                         "civil_end",
@@ -363,7 +363,7 @@ impl OutputRow {
                     .map_err(|e| e.to_string())?;
                 }
 
-                if fields.has_twilight {
+                if fields.include_twilight {
                     let format_twilight = |dt: Option<&DateTime<FixedOffset>>| {
                         dt.map(|d| d.format("%+").to_string()).unwrap_or_default()
                     };
@@ -385,13 +385,10 @@ impl OutputRow {
     }
 }
 
-fn sunrise_fields(row: &SunriseRow, show_inputs: bool) -> SunriseFields {
-    let has_twilight =
-        row.civil_start.is_some() || row.nautical_start.is_some() || row.astro_start.is_some();
-
+fn sunrise_fields(row: &SunriseRow, show_inputs: bool, include_twilight: bool) -> SunriseFields {
     SunriseFields {
         show_inputs,
-        has_twilight,
+        include_twilight,
         lat: row.lat,
         lon: row.lon,
         date_time: row.date_time,
@@ -412,7 +409,7 @@ fn sunrise_fields(row: &SunriseRow, show_inputs: bool) -> SunriseFields {
 impl SunriseFields {
     fn map_len(&self) -> usize {
         let mut len = if self.show_inputs { 8 } else { 5 }; // base fields
-        if self.has_twilight {
+        if self.include_twilight {
             len += 6;
         }
         len
@@ -433,7 +430,7 @@ impl SunriseFields {
         map.serialize_entry("transit", &format_rfc3339(&self.transit))?;
         map.serialize_entry("sunset", &self.sunset.as_ref().map(format_rfc3339))?;
 
-        if self.has_twilight {
+        if self.include_twilight {
             map.serialize_entry(
                 "civil_start",
                 &self.civil_start.as_ref().map(format_rfc3339),
@@ -552,13 +549,14 @@ fn to_output_row(
     command: Command,
 ) -> Result<OutputRow, String> {
     let show_inputs = params.output.should_show_inputs();
+    let include_twilight = params.calculation.twilight;
     match command {
         Command::Position => normalize_position_result(result)
             .ok_or_else(|| "Unexpected calculation result for position output".to_string())
             .map(|row| OutputRow::Position(position_fields(&row, params, show_inputs))),
         Command::Sunrise => normalize_sunrise_result(result)
             .ok_or_else(|| "Unexpected calculation result for sunrise output".to_string())
-            .map(|row| OutputRow::Sunrise(sunrise_fields(&row, show_inputs))),
+            .map(|row| OutputRow::Sunrise(sunrise_fields(&row, show_inputs, include_twilight))),
     }
 }
 

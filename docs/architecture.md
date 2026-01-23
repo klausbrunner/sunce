@@ -28,7 +28,7 @@ Both commands share the same input processing pipeline and support identical inp
 
 CLI parsing in `cli.rs` delegates to `data.rs` helpers and supports three modes:
 
-**Separate inputs**: Latitude, longitude, and datetime specified as separate arguments. Each can be a single value, a range (start:end:step), or a file (`@file.txt` or `@-` for stdin).
+**Separate inputs**: Latitude, longitude, and datetime specified as separate arguments. Latitude/longitude are values or ranges (`start:end:step`); coordinate files are passed as a single `@coords.txt` argument (or `@-` for stdin). Datetime can be a single value, a partial date range, or a time file.
 
 **Paired file input**: Single file containing latitude, longitude, and datetime on each line. Uses `@file.txt` or `@-` for stdin.
 
@@ -40,7 +40,7 @@ CLI parsing in `cli.rs` delegates to `data.rs` helpers and supports three modes:
 - Unix timestamps: integer values interpreted as seconds since epoch
 - Keyword `now`: current system time
 
-All step values must be strictly positive. When combining `now` with `--step`, only a single location may be supplied so the iterator remains bounded per location.
+Coordinate range steps may be positive or negative; time steps (e.g., `--step`) must be strictly positive. When combining `now` with `--step`, only a single location may be supplied so the iterator remains bounded per location.
 
 Parsing uses manual option dispatch (no external CLI framework) and outputs strongly typed structures (enums for format/algorithm, etc.) consumed by the planner. All subsequent stages operate on lazy iterators.
 

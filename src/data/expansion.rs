@@ -119,10 +119,15 @@ fn coord_range_iter(start: f64, end: f64, step: f64) -> Box<dyn Iterator<Item = 
     if step == 0.0 || start == end {
         // Single value case
         Box::new(std::iter::once(start))
-    } else {
+    } else if step > 0.0 {
         Box::new(std::iter::successors(Some(start), move |&x| {
             let next = x + step;
             (next <= end + step * 0.5).then_some(next)
+        }))
+    } else {
+        Box::new(std::iter::successors(Some(start), move |&x| {
+            let next = x + step;
+            (next >= end + step * 0.5).then_some(next)
         }))
     }
 }
@@ -131,8 +136,9 @@ fn range_point_count(start: f64, end: f64, step: f64) -> usize {
     if step == 0.0 || (end - start).abs() < f64::EPSILON {
         1
     } else {
+        let step_abs = step.abs();
         let span = (end - start).abs().max(0.0);
-        (span / step).floor() as usize + 1
+        (span / step_abs).floor() as usize + 1
     }
 }
 
@@ -151,11 +157,7 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
         LocationSource::Range { lat, lon } => {
             let lat_iter = coord_range_iter(lat.0, lat.1, lat.2);
 
-            let Some((lon_start, lon_end, lon_step)) = lon else {
-                unreachable!(
-                    "Range without longitude range - should be prevented by parse_cli validation"
-                );
-            };
+            let (lon_start, lon_end, lon_step) = lon;
 
             // Create a vector for one dimension to allow repeated iteration
             // Choose the smaller dimension to minimize memory usage
@@ -640,7 +642,7 @@ mod tests {
     fn range_with_fixed_longitude_handles_single_step() {
         let source = LocationSource::Range {
             lat: (52.0, 53.0, 1.0),
-            lon: Some((13.4, 13.4, 0.0)),
+            lon: (13.4, 13.4, 0.0),
         };
 
         let coords = expand_location_source(source).expect("expand range");
@@ -654,5 +656,22 @@ mod tests {
                 .iter()
                 .all(|(_, lon)| (*lon - 13.4).abs() < f64::EPSILON)
         );
+    }
+
+    #[test]
+    fn range_supports_descending_steps() {
+        let source = LocationSource::Range {
+            lat: (53.0, 52.0, -1.0),
+            lon: (13.0, 11.0, -1.0),
+        };
+
+        let coords = expand_location_source(source).expect("expand range");
+        let collected = coords
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect coords");
+
+        assert_eq!(collected.len(), 6);
+        assert_eq!(collected.first().copied(), Some((53.0, 13.0)));
+        assert_eq!(collected.last().copied(), Some((52.0, 11.0)));
     }
 }

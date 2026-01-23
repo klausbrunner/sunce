@@ -13,7 +13,7 @@ pub enum LocationSource {
     Single(f64, f64),
     Range {
         lat: (f64, f64, f64),
-        lon: Option<(f64, f64, f64)>,
+        lon: (f64, f64, f64),
     },
     File(InputPath),
 }
