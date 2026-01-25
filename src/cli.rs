@@ -417,7 +417,7 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> 
         return Ok(TimeSource::Now);
     }
 
-    if is_partial_date(time_str) {
+    if crate::data::time_utils::is_partial_date(time_str) {
         return Ok(TimeSource::Range(time_str.to_string(), params.step));
     }
 
@@ -467,17 +467,6 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
     }
 
     Ok(Some((start, end, step)))
-}
-
-fn is_partial_date(s: &str) -> bool {
-    match s.len() {
-        4 => s.chars().all(|c| c.is_ascii_digit()),
-        7 if s.as_bytes().get(4) == Some(&b'-') => s
-            .chars()
-            .enumerate()
-            .all(|(idx, c)| idx == 4 || c.is_ascii_digit()),
-        _ => false,
-    }
 }
 
 fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {

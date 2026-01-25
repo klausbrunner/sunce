@@ -44,6 +44,20 @@ fn finish_and_reset_string(
     }
 }
 
+fn finish_and_reset_f64_required(builder: &mut Float64Builder, arrays: &mut Vec<ArrayRef>) {
+    arrays.push(Arc::new(builder.finish()) as ArrayRef);
+    *builder = Float64Builder::with_capacity(BATCH_SIZE);
+}
+
+fn finish_and_reset_string_required(
+    builder: &mut StringBuilder,
+    arrays: &mut Vec<ArrayRef>,
+    capacity: usize,
+) {
+    arrays.push(Arc::new(builder.finish()) as ArrayRef);
+    *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
+}
+
 pub fn write_parquet<W: Write + Send>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
@@ -180,16 +194,11 @@ fn flush_position_batch<W: Write + Send>(
     finish_and_reset_f64(press_builder, &mut arrays);
     finish_and_reset_f64(temp_builder, &mut arrays);
 
-    arrays.push(Arc::new(dt_builder.finish()) as ArrayRef);
-    *dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
-
+    finish_and_reset_string_required(dt_builder, &mut arrays, 30);
     finish_and_reset_f64(deltat_builder, &mut arrays);
 
-    arrays.push(Arc::new(az_builder.finish()) as ArrayRef);
-    *az_builder = Float64Builder::with_capacity(BATCH_SIZE);
-
-    arrays.push(Arc::new(angle_builder.finish()) as ArrayRef);
-    *angle_builder = Float64Builder::with_capacity(BATCH_SIZE);
+    finish_and_reset_f64_required(az_builder, &mut arrays);
+    finish_and_reset_f64_required(angle_builder, &mut arrays);
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)
         .map_err(|e| std::io::Error::other(format!("Failed to create batch: {}", e)))?;
@@ -308,12 +317,7 @@ fn write_sunrise_parquet<W: Write + Send>(
                     row.sunset.as_ref().expect("sunset expected"),
                 );
             }
-            "ALL_DAY" => {
-                sunrise_builder.append_null();
-                append_time(&mut transit_builder, &row.transit);
-                sunset_builder.append_null();
-            }
-            "ALL_NIGHT" => {
+            "ALL_DAY" | "ALL_NIGHT" => {
                 sunrise_builder.append_null();
                 append_time(&mut transit_builder, &row.transit);
                 sunset_builder.append_null();
@@ -412,22 +416,13 @@ fn flush_sunrise_batch<W: Write + Send>(
     finish_and_reset_f64(lat_builder, &mut arrays);
     finish_and_reset_f64(lon_builder, &mut arrays);
 
-    arrays.push(Arc::new(date_builder.finish()) as ArrayRef);
-    *date_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-
+    finish_and_reset_string_required(date_builder, &mut arrays, BATCH_SIZE * 10);
     finish_and_reset_f64(deltat_builder, &mut arrays);
 
-    arrays.push(Arc::new(type_builder.finish()) as ArrayRef);
-    *type_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-
-    arrays.push(Arc::new(sunrise_builder.finish()) as ArrayRef);
-    *sunrise_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-
-    arrays.push(Arc::new(transit_builder.finish()) as ArrayRef);
-    *transit_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-
-    arrays.push(Arc::new(sunset_builder.finish()) as ArrayRef);
-    *sunset_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
+    finish_and_reset_string_required(type_builder, &mut arrays, BATCH_SIZE * 10);
+    finish_and_reset_string_required(sunrise_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string_required(transit_builder, &mut arrays, BATCH_SIZE * 25);
+    finish_and_reset_string_required(sunset_builder, &mut arrays, BATCH_SIZE * 25);
 
     finish_and_reset_string(civil_start_builder, &mut arrays, BATCH_SIZE * 25);
     finish_and_reset_string(civil_end_builder, &mut arrays, BATCH_SIZE * 25);

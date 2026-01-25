@@ -205,6 +205,17 @@ pub fn is_date_without_time(s: &str) -> bool {
             .all(|(idx, c)| matches!(idx, 4 | 7) || c.is_ascii_digit())
 }
 
+pub fn is_partial_date(s: &str) -> bool {
+    match s.len() {
+        4 => s.chars().all(|c| c.is_ascii_digit()),
+        7 if s.as_bytes().get(4) == Some(&b'-') => s
+            .chars()
+            .enumerate()
+            .all(|(idx, c)| idx == 4 || c.is_ascii_digit()),
+        _ => false,
+    }
+}
+
 pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
     if spec.is_empty() {
         return None;

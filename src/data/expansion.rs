@@ -62,6 +62,27 @@ fn parse_delimited_line(line: &str) -> Vec<&str> {
     }
 }
 
+fn parse_lat_lon(
+    lat_str: &str,
+    lon_str: &str,
+    ctx: &str,
+    line: usize,
+) -> Result<(f64, f64), String> {
+    let lat_raw: f64 = lat_str
+        .trim()
+        .parse()
+        .map_err(|_| format!("{}:{}: invalid latitude '{}'", ctx, line, lat_str))?;
+    let lat = validate_latitude(lat_raw).map_err(|err| format!("{}:{}: {}", ctx, line, err))?;
+
+    let lon_raw: f64 = lon_str
+        .trim()
+        .parse()
+        .map_err(|_| format!("{}:{}: invalid longitude '{}'", ctx, line, lon_str))?;
+    let lon = validate_longitude(lon_raw).map_err(|err| format!("{}:{}: {}", ctx, line, err))?;
+
+    Ok((lat, lon))
+}
+
 fn open_input(input_path: &InputPath) -> io::Result<Box<dyn BufRead>> {
     match input_path {
         InputPath::Stdin => Ok(Box::new(BufReader::new(io::stdin()))),
@@ -204,24 +225,7 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
                     ));
                 }
 
-                let lat_raw: f64 = parts[0].trim().parse().map_err(|_| {
-                    format!(
-                        "{}:{}: invalid latitude '{}'",
-                        line.ctx, line.number, parts[0]
-                    )
-                })?;
-                let lat = validate_latitude(lat_raw)
-                    .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
-
-                let lon_raw: f64 = parts[1].trim().parse().map_err(|_| {
-                    format!(
-                        "{}:{}: invalid longitude '{}'",
-                        line.ctx, line.number, parts[1]
-                    )
-                })?;
-                let lon = validate_longitude(lon_raw)
-                    .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
-
+                let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
                 Ok((lat, lon))
             });
 
@@ -469,11 +473,13 @@ pub fn expand_cartesian_product(
             tz: Option<TimezoneOverride>,
             command: Command,
         ) -> Self {
-            let is_full_date = |s: &str| {
-                s.len() == 10 && s.matches('-').count() == 2 && !s.contains('T') && !s.contains(' ')
-            };
             let is_single = match &source {
-                TimeSource::Single(s) if command == Command::Position && is_full_date(s) => false,
+                TimeSource::Single(s)
+                    if command == Command::Position
+                        && super::time_utils::is_date_without_time(s) =>
+                {
+                    false
+                }
                 TimeSource::Single(_) => true,
                 TimeSource::Now => step.is_none(),
                 _ => false,
@@ -600,23 +606,7 @@ pub fn expand_paired_file(
             ));
         }
 
-        let lat_raw = parts[0].trim().parse::<f64>().map_err(|_| {
-            format!(
-                "{}:{}: invalid latitude '{}'",
-                line.ctx, line.number, parts[0]
-            )
-        })?;
-        let lat = validate_latitude(lat_raw)
-            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
-
-        let lon_raw = parts[1].trim().parse::<f64>().map_err(|_| {
-            format!(
-                "{}:{}: invalid longitude '{}'",
-                line.ctx, line.number, parts[1]
-            )
-        })?;
-        let lon = validate_longitude(lon_raw)
-            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
+        let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
 
         let dt_str = parts[2..].join(" ");
         let dt = parse_datetime_string(dt_str.trim(), tz_override.as_ref().map(|tz| tz.as_str()))

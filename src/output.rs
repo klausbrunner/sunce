@@ -6,7 +6,6 @@ use crate::error::OutputError;
 use chrono::{DateTime, FixedOffset};
 use serde::{Serializer, ser::SerializeMap};
 use solar_positioning::SunriseResult;
-use std::io::Write;
 
 // Helper functions for time formatting
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
@@ -24,48 +23,28 @@ fn round_f64(value: f64, decimals: u32) -> f64 {
     (value * factor).round() / factor
 }
 
-fn write_f64_fixed_4<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
+fn format_f64_fixed(value: f64, decimals: u32) -> String {
     if !value.is_finite() {
-        return write!(writer, "{}", value);
+        return value.to_string();
     }
-    let scaled = (value * 10_000.0).round() as i64;
+    let factor = 10_f64.powi(decimals as i32);
+    let scaled = (value * factor).round() as i64;
     let abs = scaled.abs();
-    let int_part = abs / 10_000;
-    let frac_part = abs % 10_000;
-    if scaled < 0 {
-        write!(writer, "-{}.{:04}", int_part, frac_part)
-    } else {
-        write!(writer, "{}.{:04}", int_part, frac_part)
-    }
-}
+    let denom = 10_i64.pow(decimals);
+    let int_part = abs / denom;
+    let frac_part = abs % denom;
+    let width = decimals as usize;
 
-fn write_f64_fixed_3<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
-    if !value.is_finite() {
-        return write!(writer, "{}", value);
-    }
-    let scaled = (value * 1_000.0).round() as i64;
-    let abs = scaled.abs();
-    let int_part = abs / 1_000;
-    let frac_part = abs % 1_000;
-    if scaled < 0 {
-        write!(writer, "-{}.{:03}", int_part, frac_part)
+    if decimals == 0 {
+        if scaled < 0 {
+            format!("-{}", int_part)
+        } else {
+            int_part.to_string()
+        }
+    } else if scaled < 0 {
+        format!("-{}.{:0width$}", int_part, frac_part, width = width)
     } else {
-        write!(writer, "{}.{:03}", int_part, frac_part)
-    }
-}
-
-fn write_f64_fixed_5<W: Write + ?Sized>(writer: &mut W, value: f64) -> std::io::Result<()> {
-    if !value.is_finite() {
-        return write!(writer, "{}", value);
-    }
-    let scaled = (value * 100_000.0).round() as i64;
-    let abs = scaled.abs();
-    let int_part = abs / 100_000;
-    let frac_part = abs % 100_000;
-    if scaled < 0 {
-        write!(writer, "-{}.{:05}", int_part, frac_part)
-    } else {
-        write!(writer, "{}.{:05}", int_part, frac_part)
+        format!("{}.{:0width$}", int_part, frac_part, width = width)
     }
 }
 
@@ -175,7 +154,7 @@ fn position_fields(row: &PositionRow, params: &Parameters, show_inputs: bool) ->
     }
 }
 
-impl PositionFields {
+impl JsonFields for PositionFields {
     fn map_len(&self) -> usize {
         let mut len = 3; // dateTime, azimuth, angle
         if self.show_inputs {
@@ -246,6 +225,26 @@ struct SunriseFields {
     astro_end: Option<DateTime<FixedOffset>>,
 }
 
+trait JsonFields {
+    fn map_len(&self) -> usize;
+    fn serialize_into_map<S: SerializeMap>(&self, map: &mut S) -> Result<(), S::Error>;
+}
+
+fn write_json_fields(
+    fields: &impl JsonFields,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), String> {
+    let mut serializer = serde_json::Serializer::new(&mut *writer);
+    let mut map = serializer
+        .serialize_map(Some(fields.map_len()))
+        .map_err(|e| e.to_string())?;
+    fields
+        .serialize_into_map(&mut map)
+        .map_err(|e| e.to_string())?;
+    map.end().map_err(|e| e.to_string())?;
+    writeln!(writer).map_err(|e| e.to_string())
+}
+
 enum OutputRow {
     Position(PositionFields),
     Sunrise(SunriseFields),
@@ -298,125 +297,112 @@ impl OutputRow {
     }
 
     fn write_json(&self, writer: &mut dyn std::io::Write) -> Result<(), String> {
-        {
-            let mut serializer = serde_json::Serializer::new(&mut *writer);
-            match self {
-                OutputRow::Position(fields) => {
-                    let mut map = serializer
-                        .serialize_map(Some(fields.map_len()))
-                        .map_err(|e| e.to_string())?;
-                    fields
-                        .serialize_into_map(&mut map)
-                        .map_err(|e| e.to_string())?;
-                    map.end().map_err(|e| e.to_string())?;
-                }
-                OutputRow::Sunrise(fields) => {
-                    let mut map = serializer
-                        .serialize_map(Some(fields.map_len()))
-                        .map_err(|e| e.to_string())?;
-                    fields
-                        .serialize_into_map(&mut map)
-                        .map_err(|e| e.to_string())?;
-                    map.end().map_err(|e| e.to_string())?;
-                }
-            }
-        }
-        writeln!(writer).map_err(|e| e.to_string())
-    }
-
-    fn write_csv(
-        &self,
-        writer: &mut dyn std::io::Write,
-        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-    ) -> Result<(), String> {
         match self {
-            OutputRow::Position(fields) => {
-                if fields.show_inputs {
-                    write_f64_fixed_5(writer, fields.lat).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_5(writer, fields.lon).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_3(writer, fields.elevation).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    if let (Some(pressure), Some(temp)) = (fields.pressure, fields.temperature) {
-                        write_f64_fixed_3(writer, pressure).map_err(|e| e.to_string())?;
-                        write!(writer, ",").map_err(|e| e.to_string())?;
-                        write_f64_fixed_3(writer, temp).map_err(|e| e.to_string())?;
-                        write!(writer, ",").map_err(|e| e.to_string())?;
-                    }
-                    let dt = datetime_cache
-                        .entry(fields.datetime)
-                        .or_insert_with(|| fields.datetime.format("%+").to_string());
-                    write!(writer, "{},", dt).map_err(|e| e.to_string())?;
-                    write_f64_fixed_3(writer, fields.deltat).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_4(writer, fields.azimuth).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_4(writer, fields.angle_value).map_err(|e| e.to_string())?;
-                    writeln!(writer).map_err(|e| e.to_string())
-                } else {
-                    let dt = datetime_cache
-                        .entry(fields.datetime)
-                        .or_insert_with(|| fields.datetime.format("%+").to_string());
-                    write!(writer, "{},", dt).map_err(|e| e.to_string())?;
-                    write_f64_fixed_4(writer, fields.azimuth).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_4(writer, fields.angle_value).map_err(|e| e.to_string())?;
-                    writeln!(writer).map_err(|e| e.to_string())
-                }
-            }
-            OutputRow::Sunrise(fields) => {
-                let sunrise_str = format_datetime_opt(fields.sunrise.as_ref());
-                let transit_str = fields.transit.format("%+").to_string();
-                let sunset_str = format_datetime_opt(fields.sunset.as_ref());
-
-                if fields.show_inputs {
-                    write_f64_fixed_5(writer, fields.lat).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write_f64_fixed_5(writer, fields.lon).map_err(|e| e.to_string())?;
-                    write!(writer, ",").map_err(|e| e.to_string())?;
-                    write!(writer, "{},", fields.date_time.format("%+"))
-                        .map_err(|e| e.to_string())?;
-                    write_f64_fixed_3(writer, fields.deltat).map_err(|e| e.to_string())?;
-                    write!(
-                        writer,
-                        ",{},{},{},{}",
-                        fields.type_label, sunrise_str, transit_str, sunset_str
-                    )
-                    .map_err(|e| e.to_string())?;
-                } else {
-                    write!(
-                        writer,
-                        "{},{},{},{},{}",
-                        fields.date_time.format("%+"),
-                        fields.type_label,
-                        sunrise_str,
-                        transit_str,
-                        sunset_str
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-
-                if fields.include_twilight {
-                    let format_twilight = |dt: Option<&DateTime<FixedOffset>>| {
-                        dt.map(|d| d.format("%+").to_string()).unwrap_or_default()
-                    };
-                    write!(
-                        writer,
-                        ",{},{},{},{},{},{}",
-                        format_twilight(fields.civil_start.as_ref()),
-                        format_twilight(fields.civil_end.as_ref()),
-                        format_twilight(fields.nautical_start.as_ref()),
-                        format_twilight(fields.nautical_end.as_ref()),
-                        format_twilight(fields.astro_start.as_ref()),
-                        format_twilight(fields.astro_end.as_ref())
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-                writeln!(writer).map_err(|e| e.to_string())
-            }
+            OutputRow::Position(fields) => write_json_fields(fields, writer),
+            OutputRow::Sunrise(fields) => write_json_fields(fields, writer),
         }
     }
+
+    fn csv_values(
+        &self,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    ) -> Vec<String> {
+        match self {
+            OutputRow::Position(fields) => position_csv_values(fields, datetime_cache),
+            OutputRow::Sunrise(fields) => sunrise_csv_values(fields),
+        }
+    }
+}
+
+fn cached_datetime(
+    cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    dt: &DateTime<FixedOffset>,
+) -> String {
+    cache
+        .entry(*dt)
+        .or_insert_with(|| dt.format("%+").to_string())
+        .clone()
+}
+
+fn position_csv_values(
+    fields: &PositionFields,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+) -> Vec<String> {
+    let capacity = if fields.show_inputs {
+        if fields.include_refraction { 9 } else { 7 }
+    } else {
+        3
+    };
+    let mut values = Vec::with_capacity(capacity);
+
+    if fields.show_inputs {
+        values.push(format_f64_fixed(fields.lat, 5));
+        values.push(format_f64_fixed(fields.lon, 5));
+        values.push(format_f64_fixed(fields.elevation, 3));
+        if fields.include_refraction {
+            values.push(format_f64_fixed(
+                fields.pressure.expect("pressure required"),
+                3,
+            ));
+            values.push(format_f64_fixed(
+                fields.temperature.expect("temperature required"),
+                3,
+            ));
+        }
+    }
+
+    values.push(cached_datetime(datetime_cache, &fields.datetime));
+
+    if fields.show_inputs {
+        values.push(format_f64_fixed(fields.deltat, 3));
+    }
+
+    values.push(format_f64_fixed(fields.azimuth, 4));
+    values.push(format_f64_fixed(fields.angle_value, 4));
+    values
+}
+
+fn sunrise_csv_values(fields: &SunriseFields) -> Vec<String> {
+    let capacity = if fields.show_inputs {
+        if fields.include_twilight { 14 } else { 8 }
+    } else if fields.include_twilight {
+        11
+    } else {
+        5
+    };
+    let mut values = Vec::with_capacity(capacity);
+
+    if fields.show_inputs {
+        values.push(format_f64_fixed(fields.lat, 5));
+        values.push(format_f64_fixed(fields.lon, 5));
+        values.push(fields.date_time.format("%+").to_string());
+        values.push(format_f64_fixed(fields.deltat, 3));
+    } else {
+        values.push(fields.date_time.format("%+").to_string());
+    }
+
+    let sunrise_str = format_datetime_opt(fields.sunrise.as_ref());
+    let transit_str = fields.transit.format("%+").to_string();
+    let sunset_str = format_datetime_opt(fields.sunset.as_ref());
+
+    values.push(fields.type_label.to_string());
+    values.push(sunrise_str);
+    values.push(transit_str);
+    values.push(sunset_str);
+
+    if fields.include_twilight {
+        let format_twilight = |dt: Option<&DateTime<FixedOffset>>| {
+            dt.map(|d| d.format("%+").to_string()).unwrap_or_default()
+        };
+        values.push(format_twilight(fields.civil_start.as_ref()));
+        values.push(format_twilight(fields.civil_end.as_ref()));
+        values.push(format_twilight(fields.nautical_start.as_ref()));
+        values.push(format_twilight(fields.nautical_end.as_ref()));
+        values.push(format_twilight(fields.astro_start.as_ref()));
+        values.push(format_twilight(fields.astro_end.as_ref()));
+    }
+
+    values
 }
 
 fn sunrise_fields(row: &SunriseRow, show_inputs: bool, include_twilight: bool) -> SunriseFields {
@@ -440,7 +426,7 @@ fn sunrise_fields(row: &SunriseRow, show_inputs: bool, include_twilight: bool) -
     }
 }
 
-impl SunriseFields {
+impl JsonFields for SunriseFields {
     fn map_len(&self) -> usize {
         let mut len = if self.show_inputs { 8 } else { 5 }; // base fields
         if self.include_twilight {
@@ -648,21 +634,6 @@ fn suggested_column_width(name: &str) -> usize {
     }
 }
 
-fn csv_values_for_row(
-    row: &OutputRow,
-    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-) -> Result<Vec<String>, OutputError> {
-    let mut buf = Vec::new();
-    row.write_csv(&mut buf, datetime_cache)
-        .map_err(OutputError::from)?;
-    let line = String::from_utf8(buf).map_err(|e| OutputError(e.to_string()))?;
-    Ok(line
-        .trim_end_matches('\n')
-        .split(',')
-        .map(|v| v.to_string())
-        .collect())
-}
-
 fn write_pretty_header<W: std::io::Write>(
     writer: &mut W,
     headers: &[&str],
@@ -757,7 +728,7 @@ fn write_rows<W: std::io::Write>(
         let first_result = first.map_err(OutputError::from)?;
         let first_row = to_output_row(&first_result, params, command).map_err(OutputError::from)?;
         let headers: Vec<&'static str> = first_row.csv_headers();
-        let first_values = csv_values_for_row(&first_row, &mut datetime_cache)?;
+        let first_values = first_row.csv_values(&mut datetime_cache);
 
         let mut widths: Vec<usize> = headers
             .iter()
@@ -781,7 +752,7 @@ fn write_rows<W: std::io::Write>(
         for result_or_err in iter {
             let result = result_or_err.map_err(OutputError::from)?;
             let row = to_output_row(&result, params, command).map_err(OutputError::from)?;
-            let values = csv_values_for_row(&row, &mut datetime_cache)?;
+            let values = row.csv_values(&mut datetime_cache);
             write_pretty_row(writer, &header_strs, &widths, &values)?;
             count += 1;
             if flush_each {
@@ -802,8 +773,8 @@ fn write_rows<W: std::io::Write>(
                     write_csv_line(writer, row.csv_headers()).map_err(OutputError::from)?;
                     csv_header_written = true;
                 }
-                row.write_csv(writer, &mut datetime_cache)
-                    .map_err(OutputError::from)?;
+                let values = row.csv_values(&mut datetime_cache);
+                write_csv_line(writer, values).map_err(OutputError::from)?;
             }
             OutputFormat::Json => row.write_json(writer).map_err(OutputError::from)?,
             OutputFormat::Text => unreachable!("handled above"),
