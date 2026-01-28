@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Sunce is a high-performance command-line solar position calculator written in Rust. The application calculates solar coordinates and sunrise/sunset times using a streaming architecture that maintains constant memory usage regardless of input size.
+Sunce is a high-performance command-line solar position calculator written in Rust. The application calculates solar coordinates and sunrise/sunset times using a streaming architecture with bounded buffering.
 
 ## Module Structure
 
@@ -8,7 +8,7 @@ The codebase is organized into focused modules:
 
 - **cli.rs**: Manual command-line parsing/validation via a small option registry that produces `Parameters`, `Command`, and `DataSource`.
 - **planner.rs**: Converts parsed inputs into separate `ComputePlan` and `OutputPlan`, deriving metadata such as cache/flush policies.
-- **data.rs**: Input expansion (ranges, files, cartesian products), timezone handling, and iterator utilities used by planner and compute layers.
+- **data/**: Input expansion (ranges, files, cartesian products), timezone handling, and iterator utilities used by planner and compute layers.
 - **compute.rs**: Solar calculations with streaming and SPA caching.
 - **output.rs**: Normalizes calculation results into shared row structs and formats them (CSV/JSON/text), plus dispatch logic that chooses the appropriate writer based on the plan. Keeps field semantics aligned across formats.
 - **parquet.rs**: Parquet writer (optional feature gated by `parquet` flag).
@@ -46,17 +46,17 @@ Parsing uses manual option dispatch (no external CLI framework) and outputs stro
 
 ## Streaming Architecture
 
-The application implements true streaming with constant memory usage:
+The application implements true streaming with bounded buffering:
 
 **Lazy iterators**: Input expansion creates iterators that yield values on-demand. Coordinates, time series, and file reads all use iterator chains.
 
-**Cartesian products**: When both coordinates and times are ranges, the application materializes the smaller dimension into a Vec and streams the larger dimension, minimizing memory usage.
+**Cartesian products**: When both coordinates and times are ranges, the application materializes the smaller dimension into a Vec and streams the larger dimension (memory scales with the smaller range size).
 
-**Zero intermediate buffers**: Results flow directly from calculation to output without intermediate collection.
+**No full-result buffering**: Results flow directly from calculation to output without collecting the full dataset; small bounded caches/batches are used.
 
 **Immediate output**: First result appears as soon as first calculation completes, not after processing all inputs.
 
-This design handles large coordinate ranges and long-running time series without memory growth. Watch mode (`now` + `--step`) streams indefinitely for a single location; attempts to combine it with multiple locations are rejected up front to prevent unbounded buffering. Performance exceeds 1 million calculations per second on modern hardware.
+This design handles large coordinate ranges and long-running time series without collecting all results in memory. Memory is bounded by the smaller range dimension plus caches/batches. Watch mode (`now` + `--step`) streams indefinitely for a single location; attempts to combine it with multiple locations are rejected up front to prevent unbounded buffering.
 
 ## Calculation Layer
 
@@ -153,11 +153,8 @@ Tests run with explicit `TZ` environment variable to ensure timezone consistency
 
 ## Performance Characteristics
 
-**Throughput**: Over 1 million calculations/second (single-core) on standard smoke test
-**Memory**: Constant usage independent of input size
-**Streaming**: Zero memory leaks with infinite inputs
-
-Standard smoke test: `sunce --perf --format=CSV --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null`
+**Streaming**: Results are emitted as they are computed; no full-result buffering.
+**Memory**: Bounded by input expansion (smaller range dimension), SPA time cache, and output buffering/batching.
 
 ## Compatibility Notes
 

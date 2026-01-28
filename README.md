@@ -28,7 +28,7 @@ To install from a checked-out copy of this repository:
 cargo install --path .
 ```
 
-`sunce` currently requires Rust 1.92+ (see `rust-toolchain.toml`).
+`sunce` currently requires Rust 1.93+ (see `rust-toolchain.toml`).
 
 Native executables are provided for Linux, macOS, and Windows.
 
@@ -86,7 +86,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 ## Time series and geographic sweeps
 
-- **Time ranges:** pass a year (e.g., `2026`) or year-month (`2026-06`) to obtain a daily series for that period when using the `sunrise` command. The `position` command produces per-step samples for the period or day specified; the step is controlled with `--step` (default 1 hour).
+- **Time ranges:** pass a year (e.g., `2026`) or year-month (`2026-06`) to obtain a daily series for that period when using the `sunrise` command. For `position`, year ranges default to daily steps; month and day ranges default to hourly steps unless `--step` is provided.
 - **Geographic ranges:** use `start:end:step` syntax for latitude and/or longitude to define a grid (e.g., `40.0:45.0:0.5`). Geographic sweeps combine with time series to produce spatio-temporal datasets.
 - **Watch mode:** combine `now` with `--step` to periodically track sun position in real-time (e.g., `sunce 52.5 13.4 now position --step=1s` updates every second). Press Ctrl+C to stop.
 
@@ -115,7 +115,7 @@ Run `sunce --help` for a brief usage summary.
 
 ## Performance
 
-`sunce` is designed for high throughput with constant memory usage. The streaming architecture handles infinite coordinate ranges and time series without memory growth. In combined geographic sweeps and time series, the tool can generate several million records per second on a decently modern machine.
+`sunce` is designed for high throughput with streaming output. Memory is bounded by input expansion (the smaller range dimension), the SPA time cache, and output buffering/batching; results are not collected in full.
 
 ## License
 
