@@ -5,173 +5,24 @@ use crate::data::{
     Parameters, Step, TimeSource, TimezoneOverride,
 };
 use crate::error::CliError;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 const DELTAT_MULTIPLE_ERROR: &str = "Option --deltat cannot be used multiple times";
 
 type CliResult<T> = Result<T, CliError>;
 
-type ApplyFn = fn(Option<&str>, &mut Parameters, &mut bool) -> CliResult<()>;
-
-enum OptKind {
-    Value(ApplyFn),
-    OptionalValue(ApplyFn),
-    Flag(ApplyFn),
+#[derive(Default)]
+struct CommandOptionUsage {
+    step: bool,
+    no_refraction: bool,
+    elevation_angle: bool,
+    elevation: bool,
+    temperature: bool,
+    pressure: bool,
+    algorithm: bool,
+    horizon: bool,
+    twilight: bool,
 }
-
-struct OptionSpec {
-    name: &'static str,
-    kind: OptKind,
-}
-
-const OPTION_SPECS: &[OptionSpec] = &[
-    OptionSpec {
-        name: "format",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("format", value)?;
-            params.output.format = v.parse::<OutputFormat>().map_err(CliError::from)?;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "deltat",
-        kind: OptKind::OptionalValue(|value, params, deltat_seen| {
-            if *deltat_seen {
-                return Err(DELTAT_MULTIPLE_ERROR.into());
-            }
-            *deltat_seen = true;
-            params.deltat = match value {
-                Some(v) => Some(v.parse::<f64>().map_err(|_| {
-                    CliError::from("Invalid deltat value: expected floating point number")
-                })?),
-                None => None,
-            };
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "timezone",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("timezone", value)?;
-            params.timezone = Some(v.parse::<TimezoneOverride>()?);
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "algorithm",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("algorithm", value)?;
-            params.calculation.algorithm =
-                v.parse::<CalculationAlgorithm>().map_err(CliError::from)?;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "step",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("step", value)?;
-            params.step = Some(v.parse::<Step>().map_err(CliError::from)?);
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "elevation",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("elevation", value)?;
-            params.environment.elevation = parse_f64("elevation", v)?;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "temperature",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("temperature", value)?;
-            params.environment.temperature = parse_f64("temperature", v)?;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "pressure",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("pressure", value)?;
-            params.environment.pressure = parse_f64("pressure", v)?;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "horizon",
-        kind: OptKind::Value(|value, params, _| {
-            let v = required_value("horizon", value)?;
-            params.calculation.horizon = Some(parse_f64("horizon", v)?);
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "headers",
-        kind: OptKind::Flag(|_, params, _| {
-            params.output.headers = true;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "no-headers",
-        kind: OptKind::Flag(|_, params, _| {
-            params.output.headers = false;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "show-inputs",
-        kind: OptKind::Flag(|_, params, _| {
-            params.output.show_inputs = Some(true);
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "no-show-inputs",
-        kind: OptKind::Flag(|_, params, _| {
-            params.output.show_inputs = Some(false);
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "perf",
-        kind: OptKind::Flag(|_, params, _| {
-            params.perf = true;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "no-refraction",
-        kind: OptKind::Flag(|_, params, _| {
-            params.environment.refraction = false;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "elevation-angle",
-        kind: OptKind::Flag(|_, params, _| {
-            params.output.elevation_angle = true;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "twilight",
-        kind: OptKind::Flag(|_, params, _| {
-            params.calculation.twilight = true;
-            Ok(())
-        }),
-    },
-    OptionSpec {
-        name: "help",
-        kind: OptKind::Flag(|_, _, _| Err(CliError::Exit(get_help_text()))),
-    },
-    OptionSpec {
-        name: "version",
-        kind: OptKind::Flag(|_, _, _| Err(CliError::Exit(get_version_text()))),
-    },
-];
 
 pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameters)> {
     if args.len() < 2 {
@@ -183,7 +34,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
     let mut params = Parameters::default();
     let mut positional = Vec::new();
     let mut deltat_seen = false;
-    let mut applied_options: HashSet<&'static str> = HashSet::new();
+    let mut option_usage = CommandOptionUsage::default();
 
     for arg in args.into_iter().skip(1) {
         if let Some(stripped) = arg.strip_prefix("--") {
@@ -196,7 +47,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
                 value,
                 &mut params,
                 &mut deltat_seen,
-                &mut applied_options,
+                &mut option_usage,
             )?;
         } else {
             positional.push(arg);
@@ -215,10 +66,10 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
 
     let (command, data_source) = parse_positional_args(&positional, &params)?;
 
-    validate_command_options(command, &applied_options)?;
+    validate_command_options(command, &option_usage)?;
 
     if params.output.show_inputs.is_none() {
-        params.output.show_inputs = Some(should_auto_show_inputs(&data_source, command));
+        params.output.show_inputs = Some(should_auto_show_inputs(&data_source));
     }
 
     Ok((data_source, command, params))
@@ -239,29 +90,114 @@ fn apply_option(
     value: Option<&str>,
     params: &mut Parameters,
     deltat_seen: &mut bool,
-    applied: &mut HashSet<&'static str>,
+    option_usage: &mut CommandOptionUsage,
 ) -> CliResult<()> {
-    let Some(spec) = OPTION_SPECS.iter().find(|s| s.name == name) else {
-        return Err(format!("Unknown option: --{}", name).into());
+    let ensure_flag = |opt: &str, val: Option<&str>| -> CliResult<()> {
+        if val.is_some() {
+            Err(format!("Option --{} does not take a value", opt).into())
+        } else {
+            Ok(())
+        }
     };
 
-    match spec.kind {
-        OptKind::Value(handler) => {
-            let val = required_value(spec.name, value)?;
-            handler(Some(val), params, deltat_seen)?;
+    match name {
+        "format" => {
+            let v = required_value("format", value)?;
+            params.output.format = v.parse::<OutputFormat>().map_err(CliError::from)?;
         }
-        OptKind::OptionalValue(handler) => {
-            handler(value, params, deltat_seen)?;
-        }
-        OptKind::Flag(handler) => {
-            if value.is_some() {
-                return Err(format!("Option --{} does not take a value", spec.name).into());
+        "deltat" => {
+            if *deltat_seen {
+                return Err(DELTAT_MULTIPLE_ERROR.into());
             }
-            handler(None, params, deltat_seen)?;
+            *deltat_seen = true;
+            params.deltat = match value {
+                Some(v) => Some(v.parse::<f64>().map_err(|_| {
+                    CliError::from("Invalid deltat value: expected floating point number")
+                })?),
+                None => None,
+            };
         }
+        "timezone" => {
+            let v = required_value("timezone", value)?;
+            params.timezone = Some(v.parse::<TimezoneOverride>()?);
+        }
+        "algorithm" => {
+            let v = required_value("algorithm", value)?;
+            params.calculation.algorithm =
+                v.parse::<CalculationAlgorithm>().map_err(CliError::from)?;
+            option_usage.algorithm = true;
+        }
+        "step" => {
+            let v = required_value("step", value)?;
+            params.step = Some(v.parse::<Step>().map_err(CliError::from)?);
+            option_usage.step = true;
+        }
+        "elevation" => {
+            let v = required_value("elevation", value)?;
+            params.environment.elevation = parse_f64("elevation", v)?;
+            option_usage.elevation = true;
+        }
+        "temperature" => {
+            let v = required_value("temperature", value)?;
+            params.environment.temperature = parse_f64("temperature", v)?;
+            option_usage.temperature = true;
+        }
+        "pressure" => {
+            let v = required_value("pressure", value)?;
+            params.environment.pressure = parse_f64("pressure", v)?;
+            option_usage.pressure = true;
+        }
+        "horizon" => {
+            let v = required_value("horizon", value)?;
+            params.calculation.horizon = Some(parse_f64("horizon", v)?);
+            option_usage.horizon = true;
+        }
+        "headers" => {
+            ensure_flag("headers", value)?;
+            params.output.headers = true;
+        }
+        "no-headers" => {
+            ensure_flag("no-headers", value)?;
+            params.output.headers = false;
+        }
+        "show-inputs" => {
+            ensure_flag("show-inputs", value)?;
+            params.output.show_inputs = Some(true);
+        }
+        "no-show-inputs" => {
+            ensure_flag("no-show-inputs", value)?;
+            params.output.show_inputs = Some(false);
+        }
+        "perf" => {
+            ensure_flag("perf", value)?;
+            params.perf = true;
+        }
+        "no-refraction" => {
+            ensure_flag("no-refraction", value)?;
+            params.environment.refraction = false;
+            option_usage.no_refraction = true;
+        }
+        "elevation-angle" => {
+            ensure_flag("elevation-angle", value)?;
+            params.output.elevation_angle = true;
+            option_usage.elevation_angle = true;
+        }
+        "twilight" => {
+            ensure_flag("twilight", value)?;
+            params.calculation.twilight = true;
+            option_usage.twilight = true;
+        }
+        "help" => {
+            ensure_flag("help", value)?;
+            return Err(CliError::Exit(get_help_text()));
+        }
+        "version" => {
+            ensure_flag("version", value)?;
+            return Err(CliError::Exit(get_version_text()));
+        }
+        _ => return Err(format!("Unknown option: --{}", name).into()),
     }
 
-    applied.insert(spec.name);
     Ok(())
 }
 
@@ -347,11 +283,10 @@ fn parse_positional_args(
         .position(|arg| arg == "position" || arg == "sunrise")
         .ok_or("No command found".to_string())?;
 
-    let command_str = &positional_args[command_index];
-    let command = match command_str.as_str() {
-        "position" => Command::Position,
-        "sunrise" => Command::Sunrise,
-        _ => return Err(format!("Unknown command: {}", command_str).into()),
+    let command = if positional_args[command_index] == "position" {
+        Command::Position
+    } else {
+        Command::Sunrise
     };
 
     let data_args = &positional_args[..command_index];
@@ -360,12 +295,16 @@ fn parse_positional_args(
         return Err("Need at least command and one argument".into());
     }
 
-    let data_source = parse_data_source(data_args, params)?;
+    let data_source = parse_data_source(data_args, params, command)?;
 
     Ok((command, data_source))
 }
 
-fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<DataSource> {
+fn parse_data_source(
+    args: &[String],
+    params: &Parameters,
+    command: Command,
+) -> CliResult<DataSource> {
     match args.len() {
         1 => {
             let arg = &args[0];
@@ -388,7 +327,7 @@ fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<DataSour
                 Ok(DataSource::Separate(location_source, time_source))
             } else if arg1.starts_with('@') {
                 let location_source = LocationSource::File(parse_file_arg(arg1)?);
-                let time_source = parse_time_arg(arg2, params)?;
+                let time_source = parse_time_arg(arg2, params, command)?;
                 Ok(DataSource::Separate(location_source, time_source))
             } else {
                 Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into())
@@ -400,7 +339,7 @@ fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<DataSour
             let time_str = &args[2];
 
             let location_source = parse_location_args(lat_str, lon_str)?;
-            let time_source = parse_time_arg(time_str, params)?;
+            let time_source = parse_time_arg(time_str, params, command)?;
 
             Ok(DataSource::Separate(location_source, time_source))
         }
@@ -408,7 +347,7 @@ fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<DataSour
     }
 }
 
-fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> {
+fn parse_time_arg(time_str: &str, params: &Parameters, command: Command) -> CliResult<TimeSource> {
     if time_str.starts_with('@') {
         return Ok(TimeSource::File(parse_file_arg(time_str)?));
     }
@@ -418,6 +357,10 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> 
     }
 
     if crate::data::time_utils::is_partial_date(time_str) {
+        return Ok(TimeSource::Range(time_str.to_string(), params.step));
+    }
+
+    if command == Command::Position && crate::data::time_utils::is_date_without_time(time_str) {
         return Ok(TimeSource::Range(time_str.to_string(), params.step));
     }
 
@@ -431,9 +374,9 @@ fn parse_time_arg(time_str: &str, params: &Parameters) -> CliResult<TimeSource> 
         );
     }
 
-    data::parse_datetime_string(time_str, params.timezone.as_ref().map(|tz| tz.as_str()))
+    let dt = data::parse_datetime_string(time_str, params.timezone.as_ref().map(|tz| tz.as_str()))
         .map_err(CliError::from)?;
-    Ok(TimeSource::Single(time_str.to_string()))
+    Ok(TimeSource::Single(dt))
 }
 
 fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
@@ -469,13 +412,11 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
     Ok(Some((start, end, step)))
 }
 
-fn should_auto_show_inputs(source: &DataSource, command: Command) -> bool {
+fn should_auto_show_inputs(source: &DataSource) -> bool {
     match source {
         DataSource::Separate(loc, time) => {
             matches!(loc, LocationSource::Range { .. } | LocationSource::File(_))
                 || matches!(time, TimeSource::Range(_, _) | TimeSource::File(_))
-                || (command == Command::Position
-                    && matches!(time, TimeSource::Single(s) if crate::data::time_utils::is_date_without_time(s)))
         }
         DataSource::Paired(_) => true,
     }
@@ -492,36 +433,36 @@ fn get_version_text() -> String {
     )
 }
 
-fn validate_command_options(command: Command, applied: &HashSet<&'static str>) -> CliResult<()> {
+fn validate_command_options(command: Command, usage: &CommandOptionUsage) -> CliResult<()> {
     if command == Command::Position {
-        if applied.contains("horizon") {
+        if usage.horizon {
             return Err("Option --horizon not valid for position command".into());
         }
-        if applied.contains("twilight") {
+        if usage.twilight {
             return Err("Option --twilight not valid for position command".into());
         }
     }
 
     if command == Command::Sunrise {
-        if applied.contains("step") {
+        if usage.step {
             return Err("Option --step not valid for sunrise command".into());
         }
-        if applied.contains("no-refraction") {
+        if usage.no_refraction {
             return Err("Option --no-refraction not valid for sunrise command".into());
         }
-        if applied.contains("elevation-angle") {
+        if usage.elevation_angle {
             return Err("Option --elevation-angle not valid for sunrise command".into());
         }
-        if applied.contains("elevation") {
+        if usage.elevation {
             return Err("Option --elevation not valid for sunrise command".into());
         }
-        if applied.contains("temperature") {
+        if usage.temperature {
             return Err("Option --temperature not valid for sunrise command".into());
         }
-        if applied.contains("pressure") {
+        if usage.pressure {
             return Err("Option --pressure not valid for sunrise command".into());
         }
-        if applied.contains("algorithm") {
+        if usage.algorithm {
             return Err("Option --algorithm not valid for sunrise command".into());
         }
     }

@@ -117,6 +117,12 @@ Run `sunce --help` for a brief usage summary.
 
 `sunce` is designed for high throughput with streaming output. Memory is bounded by input expansion (the smaller range dimension), the SPA time cache, and output buffering/batching; results are not collected in full.
 
+Standard smoke test (release build):
+
+```bash
+target/release/sunce --perf --format=CSV --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null
+```
+
 ## License
 
 This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for details.

@@ -10,7 +10,7 @@ use solar_positioning::SunriseResult;
 // Helper functions for time formatting
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
 
-fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
+pub(crate) fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
     dt.format(RFC3339_NO_MILLIS).to_string()
 }
 
@@ -23,14 +23,33 @@ fn round_f64(value: f64, decimals: u32) -> f64 {
     (value * factor).round() / factor
 }
 
+type FixedDecimalCache = std::collections::HashMap<(u64, u32), String>;
+
+fn cached_f64_fixed(cache: &mut FixedDecimalCache, value: f64, decimals: u32) -> String {
+    let key = (value.to_bits(), decimals);
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    let formatted = format_f64_fixed(value, decimals);
+    cache.insert(key, formatted.clone());
+    formatted
+}
+
 fn format_f64_fixed(value: f64, decimals: u32) -> String {
     if !value.is_finite() {
         return value.to_string();
     }
-    let factor = 10_f64.powi(decimals as i32);
+    let (factor, denom) = match decimals {
+        0 => (1.0, 1_i64),
+        1 => (10.0, 10_i64),
+        2 => (100.0, 100_i64),
+        3 => (1_000.0, 1_000_i64),
+        4 => (10_000.0, 10_000_i64),
+        5 => (100_000.0, 100_000_i64),
+        _ => (10_f64.powi(decimals as i32), 10_i64.pow(decimals)),
+    };
     let scaled = (value * factor).round() as i64;
     let abs = scaled.abs();
-    let denom = 10_i64.pow(decimals);
     let int_part = abs / denom;
     let frac_part = abs % denom;
     let width = decimals as usize;
@@ -119,35 +138,110 @@ impl AngleKind {
     }
 }
 
-struct PositionFields {
-    show_inputs: bool,
-    include_refraction: bool,
+#[derive(Copy, Clone)]
+pub(crate) struct PositionLayout {
+    pub show_inputs: bool,
+    pub include_refraction: bool,
     angle_kind: AngleKind,
+}
+
+impl PositionLayout {
+    pub(crate) fn from_params(params: &Parameters) -> Self {
+        Self {
+            show_inputs: params.output.should_show_inputs(),
+            include_refraction: params.environment.refraction,
+            angle_kind: AngleKind::from_params(params),
+        }
+    }
+
+    pub(crate) fn uses_elevation_angle(self) -> bool {
+        matches!(self.angle_kind, AngleKind::Elevation)
+    }
+
+    pub(crate) fn angle_label(self) -> &'static str {
+        self.angle_kind.label()
+    }
+
+    fn csv_headers(self) -> Vec<&'static str> {
+        let mut headers = Vec::new();
+        if self.show_inputs {
+            headers.extend(["latitude", "longitude", "elevation"]);
+            if self.include_refraction {
+                headers.extend(["pressure", "temperature"]);
+            }
+            headers.extend(["dateTime", "deltaT"]);
+        } else {
+            headers.push("dateTime");
+        }
+        headers.push("azimuth");
+        headers.push(self.angle_label());
+        headers
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct SunriseLayout {
+    pub show_inputs: bool,
+    pub include_twilight: bool,
+}
+
+impl SunriseLayout {
+    pub(crate) fn from_params(params: &Parameters) -> Self {
+        Self {
+            show_inputs: params.output.should_show_inputs(),
+            include_twilight: params.calculation.twilight,
+        }
+    }
+
+    fn csv_headers(self) -> Vec<&'static str> {
+        let mut header = Vec::new();
+        if self.show_inputs {
+            header.extend(["latitude", "longitude", "dateTime", "deltaT"]);
+        } else {
+            header.push("dateTime");
+        }
+        header.extend(["type", "sunrise", "transit", "sunset"]);
+        if self.include_twilight {
+            header.extend([
+                "civil_start",
+                "civil_end",
+                "nautical_start",
+                "nautical_end",
+                "astronomical_start",
+                "astronomical_end",
+            ]);
+        }
+        header
+    }
+}
+
+struct PositionFields {
+    layout: PositionLayout,
     angle_value: f64,
     lat: f64,
     lon: f64,
     elevation: f64,
-    pressure: Option<f64>,
-    temperature: Option<f64>,
+    refraction: Option<(f64, f64)>,
     datetime: DateTime<FixedOffset>,
     deltat: f64,
     azimuth: f64,
 }
 
-fn position_fields(row: &PositionRow, params: &Parameters, show_inputs: bool) -> PositionFields {
-    let include_refraction = params.environment.refraction;
-    let angle_kind = AngleKind::from_params(params);
-
+fn position_fields(
+    row: &PositionRow,
+    params: &Parameters,
+    layout: PositionLayout,
+) -> PositionFields {
     PositionFields {
-        show_inputs,
-        include_refraction,
-        angle_kind,
-        angle_value: row.angle(params.output.elevation_angle),
+        layout,
+        angle_value: row.angle(layout.uses_elevation_angle()),
         lat: row.lat,
         lon: row.lon,
         elevation: params.environment.elevation,
-        pressure: include_refraction.then_some(params.environment.pressure),
-        temperature: include_refraction.then_some(params.environment.temperature),
+        refraction: params
+            .environment
+            .refraction
+            .then_some((params.environment.pressure, params.environment.temperature)),
         datetime: row.datetime,
         deltat: row.deltat,
         azimuth: row.azimuth,
@@ -157,33 +251,38 @@ fn position_fields(row: &PositionRow, params: &Parameters, show_inputs: bool) ->
 impl JsonFields for PositionFields {
     fn map_len(&self) -> usize {
         let mut len = 3; // dateTime, azimuth, angle
-        if self.show_inputs {
+        if self.layout.show_inputs {
             len += 4; // latitude, longitude, elevation, deltaT
-            if self.include_refraction {
+            if self.layout.include_refraction {
                 len += 2; // pressure, temperature
             }
         }
         len
     }
 
-    fn serialize_into_map<S: SerializeMap>(&self, map: &mut S) -> Result<(), S::Error> {
-        if self.show_inputs {
+    fn serialize_into_map<S: SerializeMap>(
+        &self,
+        map: &mut S,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    ) -> Result<(), S::Error> {
+        if self.layout.show_inputs {
             map.serialize_entry("latitude", &self.lat)?;
             map.serialize_entry("longitude", &self.lon)?;
             map.serialize_entry("elevation", &self.elevation)?;
-            if self.include_refraction {
-                map.serialize_entry("pressure", &self.pressure)?;
-                map.serialize_entry("temperature", &self.temperature)?;
+            if self.layout.include_refraction {
+                let (pressure, temperature) = self.refraction.expect("refraction values set");
+                map.serialize_entry("pressure", &pressure)?;
+                map.serialize_entry("temperature", &temperature)?;
             }
         }
-        map.serialize_entry("dateTime", &self.datetime.to_rfc3339())?;
-        if self.show_inputs {
+        map.serialize_entry("dateTime", &cached_datetime(datetime_cache, &self.datetime))?;
+        if self.layout.show_inputs {
             map.serialize_entry("deltaT", &self.deltat)?;
         }
         let azimuth = round_f64(self.azimuth, 4);
         let angle = round_f64(self.angle_value, 4);
         map.serialize_entry("azimuth", &azimuth)?;
-        map.serialize_entry(self.angle_kind.label(), &angle)?;
+        map.serialize_entry(self.layout.angle_label(), &angle)?;
         Ok(())
     }
 }
@@ -207,8 +306,7 @@ pub(crate) struct SunriseRow {
 }
 
 struct SunriseFields {
-    show_inputs: bool,
-    include_twilight: bool,
+    layout: SunriseLayout,
     lat: f64,
     lon: f64,
     date_time: DateTime<FixedOffset>,
@@ -227,19 +325,24 @@ struct SunriseFields {
 
 trait JsonFields {
     fn map_len(&self) -> usize;
-    fn serialize_into_map<S: SerializeMap>(&self, map: &mut S) -> Result<(), S::Error>;
+    fn serialize_into_map<S: SerializeMap>(
+        &self,
+        map: &mut S,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    ) -> Result<(), S::Error>;
 }
 
 fn write_json_fields(
     fields: &impl JsonFields,
     writer: &mut dyn std::io::Write,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
 ) -> Result<(), String> {
     let mut serializer = serde_json::Serializer::new(&mut *writer);
     let mut map = serializer
         .serialize_map(Some(fields.map_len()))
         .map_err(|e| e.to_string())?;
     fields
-        .serialize_into_map(&mut map)
+        .serialize_into_map(&mut map, datetime_cache)
         .map_err(|e| e.to_string())?;
     map.end().map_err(|e| e.to_string())?;
     writeln!(writer).map_err(|e| e.to_string())
@@ -253,63 +356,47 @@ enum OutputRow {
 impl OutputRow {
     fn csv_headers(&self) -> Vec<&'static str> {
         match self {
-            OutputRow::Position(fields) => {
-                let mut header_fields = Vec::new();
-                if fields.show_inputs {
-                    header_fields.extend(["latitude", "longitude", "elevation"]);
-                    if fields.include_refraction {
-                        header_fields.push("pressure");
-                        header_fields.push("temperature");
-                    }
-                    header_fields.push("dateTime");
-                    header_fields.push("deltaT");
-                } else {
-                    header_fields.push("dateTime");
-                }
-                header_fields.push("azimuth");
-                header_fields.push(fields.angle_kind.label());
-                header_fields
-            }
-            OutputRow::Sunrise(fields) => {
-                let mut header = Vec::new();
-                if fields.show_inputs {
-                    header.extend(["latitude", "longitude", "dateTime", "deltaT"]);
-                } else {
-                    header.push("dateTime");
-                }
-                header.push("type");
-                header.push("sunrise");
-                header.push("transit");
-                header.push("sunset");
-                if fields.include_twilight {
-                    header.extend([
-                        "civil_start",
-                        "civil_end",
-                        "nautical_start",
-                        "nautical_end",
-                        "astronomical_start",
-                        "astronomical_end",
-                    ]);
-                }
-                header
-            }
+            OutputRow::Position(fields) => fields.layout.csv_headers(),
+            OutputRow::Sunrise(fields) => fields.layout.csv_headers(),
         }
     }
 
-    fn write_json(&self, writer: &mut dyn std::io::Write) -> Result<(), String> {
+    fn write_json(
+        &self,
+        writer: &mut dyn std::io::Write,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    ) -> Result<(), String> {
         match self {
-            OutputRow::Position(fields) => write_json_fields(fields, writer),
-            OutputRow::Sunrise(fields) => write_json_fields(fields, writer),
+            OutputRow::Position(fields) => write_json_fields(fields, writer, datetime_cache),
+            OutputRow::Sunrise(fields) => write_json_fields(fields, writer, datetime_cache),
         }
     }
 
-    fn csv_values(
+    fn csv_values_into(
         &self,
         datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-    ) -> Vec<String> {
+        fixed_decimal_cache: &mut FixedDecimalCache,
+        out: &mut Vec<String>,
+    ) {
         match self {
-            OutputRow::Position(fields) => position_csv_values(fields, datetime_cache),
-            OutputRow::Sunrise(fields) => sunrise_csv_values(fields),
+            OutputRow::Position(fields) => {
+                position_csv_values_into(fields, datetime_cache, fixed_decimal_cache, out)
+            }
+            OutputRow::Sunrise(fields) => sunrise_csv_values_into(fields, fixed_decimal_cache, out),
+        }
+    }
+
+    fn write_csv<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+        fixed_decimal_cache: &mut FixedDecimalCache,
+    ) -> Result<(), String> {
+        match self {
+            OutputRow::Position(fields) => {
+                write_position_csv(writer, fields, datetime_cache, fixed_decimal_cache)
+            }
+            OutputRow::Sunrise(fields) => write_sunrise_csv(writer, fields, fixed_decimal_cache),
         }
     }
 }
@@ -320,69 +407,79 @@ fn cached_datetime(
 ) -> String {
     cache
         .entry(*dt)
-        .or_insert_with(|| dt.format("%+").to_string())
+        .or_insert_with(|| format_rfc3339(dt))
         .clone()
 }
 
-fn position_csv_values(
+fn position_csv_values_into(
     fields: &PositionFields,
     datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-) -> Vec<String> {
-    let capacity = if fields.show_inputs {
-        if fields.include_refraction { 9 } else { 7 }
+    fixed_decimal_cache: &mut FixedDecimalCache,
+    values: &mut Vec<String>,
+) {
+    let capacity: usize = if fields.layout.show_inputs {
+        if fields.layout.include_refraction {
+            9
+        } else {
+            7
+        }
     } else {
         3
     };
-    let mut values = Vec::with_capacity(capacity);
+    values.clear();
+    values.reserve(capacity.saturating_sub(values.capacity()));
 
-    if fields.show_inputs {
-        values.push(format_f64_fixed(fields.lat, 5));
-        values.push(format_f64_fixed(fields.lon, 5));
-        values.push(format_f64_fixed(fields.elevation, 3));
-        if fields.include_refraction {
-            values.push(format_f64_fixed(
-                fields.pressure.expect("pressure required"),
-                3,
-            ));
-            values.push(format_f64_fixed(
-                fields.temperature.expect("temperature required"),
-                3,
-            ));
+    if fields.layout.show_inputs {
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.lat, 5));
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.lon, 5));
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.elevation, 3));
+        if fields.layout.include_refraction {
+            let (pressure, temperature) = fields.refraction.expect("refraction values set");
+            values.push(cached_f64_fixed(fixed_decimal_cache, pressure, 3));
+            values.push(cached_f64_fixed(fixed_decimal_cache, temperature, 3));
         }
     }
 
     values.push(cached_datetime(datetime_cache, &fields.datetime));
 
-    if fields.show_inputs {
-        values.push(format_f64_fixed(fields.deltat, 3));
+    if fields.layout.show_inputs {
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3));
     }
 
     values.push(format_f64_fixed(fields.azimuth, 4));
     values.push(format_f64_fixed(fields.angle_value, 4));
-    values
 }
 
-fn sunrise_csv_values(fields: &SunriseFields) -> Vec<String> {
-    let capacity = if fields.show_inputs {
-        if fields.include_twilight { 14 } else { 8 }
-    } else if fields.include_twilight {
+fn sunrise_csv_values_into(
+    fields: &SunriseFields,
+    fixed_decimal_cache: &mut FixedDecimalCache,
+    values: &mut Vec<String>,
+) {
+    let capacity: usize = if fields.layout.show_inputs {
+        if fields.layout.include_twilight {
+            14
+        } else {
+            8
+        }
+    } else if fields.layout.include_twilight {
         11
     } else {
         5
     };
-    let mut values = Vec::with_capacity(capacity);
+    values.clear();
+    values.reserve(capacity.saturating_sub(values.capacity()));
 
-    if fields.show_inputs {
-        values.push(format_f64_fixed(fields.lat, 5));
-        values.push(format_f64_fixed(fields.lon, 5));
-        values.push(fields.date_time.format("%+").to_string());
-        values.push(format_f64_fixed(fields.deltat, 3));
+    if fields.layout.show_inputs {
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.lat, 5));
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.lon, 5));
+        values.push(format_rfc3339(&fields.date_time));
+        values.push(cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3));
     } else {
-        values.push(fields.date_time.format("%+").to_string());
+        values.push(format_rfc3339(&fields.date_time));
     }
 
     let sunrise_str = format_datetime_opt(fields.sunrise.as_ref());
-    let transit_str = fields.transit.format("%+").to_string();
+    let transit_str = format_rfc3339(&fields.transit);
     let sunset_str = format_datetime_opt(fields.sunset.as_ref());
 
     values.push(fields.type_label.to_string());
@@ -390,10 +487,9 @@ fn sunrise_csv_values(fields: &SunriseFields) -> Vec<String> {
     values.push(transit_str);
     values.push(sunset_str);
 
-    if fields.include_twilight {
-        let format_twilight = |dt: Option<&DateTime<FixedOffset>>| {
-            dt.map(|d| d.format("%+").to_string()).unwrap_or_default()
-        };
+    if fields.layout.include_twilight {
+        let format_twilight =
+            |dt: Option<&DateTime<FixedOffset>>| dt.map(format_rfc3339).unwrap_or_default();
         values.push(format_twilight(fields.civil_start.as_ref()));
         values.push(format_twilight(fields.civil_end.as_ref()));
         values.push(format_twilight(fields.nautical_start.as_ref()));
@@ -401,14 +497,11 @@ fn sunrise_csv_values(fields: &SunriseFields) -> Vec<String> {
         values.push(format_twilight(fields.astro_start.as_ref()));
         values.push(format_twilight(fields.astro_end.as_ref()));
     }
-
-    values
 }
 
-fn sunrise_fields(row: &SunriseRow, show_inputs: bool, include_twilight: bool) -> SunriseFields {
+fn sunrise_fields(row: &SunriseRow, layout: SunriseLayout) -> SunriseFields {
     SunriseFields {
-        show_inputs,
-        include_twilight,
+        layout,
         lat: row.lat,
         lon: row.lon,
         date_time: row.date_time,
@@ -428,49 +521,92 @@ fn sunrise_fields(row: &SunriseRow, show_inputs: bool, include_twilight: bool) -
 
 impl JsonFields for SunriseFields {
     fn map_len(&self) -> usize {
-        let mut len = if self.show_inputs { 8 } else { 5 }; // base fields
-        if self.include_twilight {
+        let mut len = if self.layout.show_inputs { 8 } else { 5 }; // base fields
+        if self.layout.include_twilight {
             len += 6;
         }
         len
     }
 
-    fn serialize_into_map<S: SerializeMap>(&self, map: &mut S) -> Result<(), S::Error> {
-        if self.show_inputs {
+    fn serialize_into_map<S: SerializeMap>(
+        &self,
+        map: &mut S,
+        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    ) -> Result<(), S::Error> {
+        if self.layout.show_inputs {
             map.serialize_entry("latitude", &self.lat)?;
             map.serialize_entry("longitude", &self.lon)?;
-            map.serialize_entry("dateTime", &format_rfc3339(&self.date_time))?;
+            map.serialize_entry(
+                "dateTime",
+                &cached_datetime(datetime_cache, &self.date_time),
+            )?;
             map.serialize_entry("deltaT", &self.deltat)?;
         } else {
-            map.serialize_entry("dateTime", &format_rfc3339(&self.date_time))?;
+            map.serialize_entry(
+                "dateTime",
+                &cached_datetime(datetime_cache, &self.date_time),
+            )?;
         }
         map.serialize_entry("type", &self.type_label)?;
 
-        map.serialize_entry("sunrise", &self.sunrise.as_ref().map(format_rfc3339))?;
-        map.serialize_entry("transit", &format_rfc3339(&self.transit))?;
-        map.serialize_entry("sunset", &self.sunset.as_ref().map(format_rfc3339))?;
+        map.serialize_entry(
+            "sunrise",
+            &self
+                .sunrise
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt)),
+        )?;
+        map.serialize_entry("transit", &cached_datetime(datetime_cache, &self.transit))?;
+        map.serialize_entry(
+            "sunset",
+            &self
+                .sunset
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt)),
+        )?;
 
-        if self.include_twilight {
+        if self.layout.include_twilight {
             map.serialize_entry(
                 "civil_start",
-                &self.civil_start.as_ref().map(format_rfc3339),
+                &self
+                    .civil_start
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
             )?;
-            map.serialize_entry("civil_end", &self.civil_end.as_ref().map(format_rfc3339))?;
+            map.serialize_entry(
+                "civil_end",
+                &self
+                    .civil_end
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
+            )?;
             map.serialize_entry(
                 "nautical_start",
-                &self.nautical_start.as_ref().map(format_rfc3339),
+                &self
+                    .nautical_start
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
             )?;
             map.serialize_entry(
                 "nautical_end",
-                &self.nautical_end.as_ref().map(format_rfc3339),
+                &self
+                    .nautical_end
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
             )?;
             map.serialize_entry(
                 "astronomical_start",
-                &self.astro_start.as_ref().map(format_rfc3339),
+                &self
+                    .astro_start
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
             )?;
             map.serialize_entry(
                 "astronomical_end",
-                &self.astro_end.as_ref().map(format_rfc3339),
+                &self
+                    .astro_end
+                    .as_ref()
+                    .map(|dt| cached_datetime(datetime_cache, dt)),
             )?;
         }
         Ok(())
@@ -567,16 +703,16 @@ fn to_output_row(
     result: &CalculationResult,
     params: &Parameters,
     command: Command,
+    position_layout: PositionLayout,
+    sunrise_layout: SunriseLayout,
 ) -> Result<OutputRow, String> {
-    let show_inputs = params.output.should_show_inputs();
-    let include_twilight = params.calculation.twilight;
     match command {
         Command::Position => normalize_position_result(result)
             .ok_or_else(|| "Unexpected calculation result for position output".to_string())
-            .map(|row| OutputRow::Position(position_fields(&row, params, show_inputs))),
+            .map(|row| OutputRow::Position(position_fields(&row, params, position_layout))),
         Command::Sunrise => normalize_sunrise_result(result)
             .ok_or_else(|| "Unexpected calculation result for sunrise output".to_string())
-            .map(|row| OutputRow::Sunrise(sunrise_fields(&row, show_inputs, include_twilight))),
+            .map(|row| OutputRow::Sunrise(sunrise_fields(&row, sunrise_layout))),
     }
 }
 
@@ -595,14 +731,122 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let mut iter = fields.into_iter();
-    if let Some(first) = iter.next() {
-        write!(writer, "{}", first.as_ref()).map_err(|e| e.to_string())?;
-        for field in iter {
-            write!(writer, ",{}", field.as_ref()).map_err(|e| e.to_string())?;
+    let mut first = true;
+    for field in fields {
+        if first {
+            first = false;
+        } else {
+            writer.write_all(b",").map_err(|e| e.to_string())?;
+        }
+        writer
+            .write_all(field.as_ref().as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    writer.write_all(b"\n").map_err(|e| e.to_string())
+}
+
+fn write_csv_field<W: std::io::Write>(
+    writer: &mut W,
+    first: &mut bool,
+    value: &str,
+) -> Result<(), String> {
+    if *first {
+        *first = false;
+    } else {
+        writer.write_all(b",").map_err(|e| e.to_string())?;
+    }
+    writer
+        .write_all(value.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+fn write_position_csv<W: std::io::Write>(
+    writer: &mut W,
+    fields: &PositionFields,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    fixed_decimal_cache: &mut FixedDecimalCache,
+) -> Result<(), String> {
+    let mut first = true;
+
+    if fields.layout.show_inputs {
+        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
+        write_csv_field(writer, &mut first, &lat)?;
+        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
+        write_csv_field(writer, &mut first, &lon)?;
+        let elevation = cached_f64_fixed(fixed_decimal_cache, fields.elevation, 3);
+        write_csv_field(writer, &mut first, &elevation)?;
+        if fields.layout.include_refraction {
+            let (pressure, temperature) = fields.refraction.expect("refraction values set");
+            let pressure = cached_f64_fixed(fixed_decimal_cache, pressure, 3);
+            write_csv_field(writer, &mut first, &pressure)?;
+            let temperature = cached_f64_fixed(fixed_decimal_cache, temperature, 3);
+            write_csv_field(writer, &mut first, &temperature)?;
         }
     }
-    writeln!(writer).map_err(|e| e.to_string())
+
+    let dt = cached_datetime(datetime_cache, &fields.datetime);
+    write_csv_field(writer, &mut first, &dt)?;
+
+    if fields.layout.show_inputs {
+        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
+        write_csv_field(writer, &mut first, &deltat)?;
+    }
+
+    let azimuth = format_f64_fixed(fields.azimuth, 4);
+    write_csv_field(writer, &mut first, &azimuth)?;
+    let angle = format_f64_fixed(fields.angle_value, 4);
+    write_csv_field(writer, &mut first, &angle)?;
+
+    writer.write_all(b"\n").map_err(|e| e.to_string())
+}
+
+fn write_sunrise_csv<W: std::io::Write>(
+    writer: &mut W,
+    fields: &SunriseFields,
+    fixed_decimal_cache: &mut FixedDecimalCache,
+) -> Result<(), String> {
+    let mut first = true;
+
+    if fields.layout.show_inputs {
+        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
+        write_csv_field(writer, &mut first, &lat)?;
+        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
+        write_csv_field(writer, &mut first, &lon)?;
+        let date_time = format_rfc3339(&fields.date_time);
+        write_csv_field(writer, &mut first, &date_time)?;
+        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
+        write_csv_field(writer, &mut first, &deltat)?;
+    } else {
+        let date_time = format_rfc3339(&fields.date_time);
+        write_csv_field(writer, &mut first, &date_time)?;
+    }
+
+    write_csv_field(writer, &mut first, fields.type_label)?;
+    let sunrise = format_datetime_opt(fields.sunrise.as_ref());
+    write_csv_field(writer, &mut first, &sunrise)?;
+    let transit = format_rfc3339(&fields.transit);
+    write_csv_field(writer, &mut first, &transit)?;
+    let sunset = format_datetime_opt(fields.sunset.as_ref());
+    write_csv_field(writer, &mut first, &sunset)?;
+
+    if fields.layout.include_twilight {
+        let format_twilight =
+            |dt: Option<&DateTime<FixedOffset>>| dt.map(format_rfc3339).unwrap_or_default();
+        let civil_start = format_twilight(fields.civil_start.as_ref());
+        write_csv_field(writer, &mut first, &civil_start)?;
+        let civil_end = format_twilight(fields.civil_end.as_ref());
+        write_csv_field(writer, &mut first, &civil_end)?;
+        let nautical_start = format_twilight(fields.nautical_start.as_ref());
+        write_csv_field(writer, &mut first, &nautical_start)?;
+        let nautical_end = format_twilight(fields.nautical_end.as_ref());
+        write_csv_field(writer, &mut first, &nautical_end)?;
+        let astro_start = format_twilight(fields.astro_start.as_ref());
+        write_csv_field(writer, &mut first, &astro_start)?;
+        let astro_end = format_twilight(fields.astro_end.as_ref());
+        write_csv_field(writer, &mut first, &astro_end)?;
+    }
+
+    writer.write_all(b"\n").map_err(|e| e.to_string())
 }
 
 fn is_numeric_column(name: &str) -> bool {
@@ -718,6 +962,10 @@ fn write_rows<W: std::io::Write>(
     let mut csv_header_written = false;
     let mut datetime_cache: std::collections::HashMap<DateTime<FixedOffset>, String> =
         std::collections::HashMap::with_capacity(2048);
+    let mut fixed_decimal_cache: FixedDecimalCache = std::collections::HashMap::with_capacity(256);
+    let mut text_row_values: Vec<String> = Vec::new();
+    let position_layout = PositionLayout::from_params(params);
+    let sunrise_layout = SunriseLayout::from_params(params);
 
     if params.output.format == OutputFormat::Text {
         let mut iter = results;
@@ -726,15 +974,26 @@ fn write_rows<W: std::io::Write>(
         };
 
         let first_result = first.map_err(OutputError::from)?;
-        let first_row = to_output_row(&first_result, params, command).map_err(OutputError::from)?;
+        let first_row = to_output_row(
+            &first_result,
+            params,
+            command,
+            position_layout,
+            sunrise_layout,
+        )
+        .map_err(OutputError::from)?;
         let headers: Vec<&'static str> = first_row.csv_headers();
-        let first_values = first_row.csv_values(&mut datetime_cache);
+        first_row.csv_values_into(
+            &mut datetime_cache,
+            &mut fixed_decimal_cache,
+            &mut text_row_values,
+        );
 
         let mut widths: Vec<usize> = headers
             .iter()
             .map(|h| h.len().max(suggested_column_width(h)))
             .collect();
-        for (w, v) in widths.iter_mut().zip(first_values.iter()) {
+        for (w, v) in widths.iter_mut().zip(text_row_values.iter()) {
             *w = (*w).max(v.len());
         }
 
@@ -743,7 +1002,7 @@ fn write_rows<W: std::io::Write>(
             write_pretty_header(writer, &header_strs, &widths)?;
         }
 
-        write_pretty_row(writer, &header_strs, &widths, &first_values)?;
+        write_pretty_row(writer, &header_strs, &widths, &text_row_values)?;
         count += 1;
         if flush_each {
             writer.flush().map_err(OutputError::from)?;
@@ -751,9 +1010,14 @@ fn write_rows<W: std::io::Write>(
 
         for result_or_err in iter {
             let result = result_or_err.map_err(OutputError::from)?;
-            let row = to_output_row(&result, params, command).map_err(OutputError::from)?;
-            let values = row.csv_values(&mut datetime_cache);
-            write_pretty_row(writer, &header_strs, &widths, &values)?;
+            let row = to_output_row(&result, params, command, position_layout, sunrise_layout)
+                .map_err(OutputError::from)?;
+            row.csv_values_into(
+                &mut datetime_cache,
+                &mut fixed_decimal_cache,
+                &mut text_row_values,
+            );
+            write_pretty_row(writer, &header_strs, &widths, &text_row_values)?;
             count += 1;
             if flush_each {
                 writer.flush().map_err(OutputError::from)?;
@@ -765,7 +1029,8 @@ fn write_rows<W: std::io::Write>(
 
     for result_or_err in results {
         let result = result_or_err.map_err(OutputError::from)?;
-        let row = to_output_row(&result, params, command).map_err(OutputError::from)?;
+        let row = to_output_row(&result, params, command, position_layout, sunrise_layout)
+            .map_err(OutputError::from)?;
 
         match params.output.format {
             OutputFormat::Csv => {
@@ -773,10 +1038,12 @@ fn write_rows<W: std::io::Write>(
                     write_csv_line(writer, row.csv_headers()).map_err(OutputError::from)?;
                     csv_header_written = true;
                 }
-                let values = row.csv_values(&mut datetime_cache);
-                write_csv_line(writer, values).map_err(OutputError::from)?;
+                row.write_csv(writer, &mut datetime_cache, &mut fixed_decimal_cache)
+                    .map_err(OutputError::from)?;
             }
-            OutputFormat::Json => row.write_json(writer).map_err(OutputError::from)?,
+            OutputFormat::Json => row
+                .write_json(writer, &mut datetime_cache)
+                .map_err(OutputError::from)?,
             OutputFormat::Text => unreachable!("handled above"),
             #[cfg(feature = "parquet")]
             OutputFormat::Parquet => return Err(OutputError::from("Unsupported format")),

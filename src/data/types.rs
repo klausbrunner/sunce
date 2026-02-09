@@ -20,7 +20,7 @@ pub enum LocationSource {
 
 #[derive(Debug, Clone)]
 pub enum TimeSource {
-    Single(String),
+    Single(DateTime<FixedOffset>),
     Range(String, Option<Step>),
     File(InputPath),
     Now,

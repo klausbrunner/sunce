@@ -2,7 +2,10 @@
 
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
-use crate::output::{normalize_position_result, normalize_sunrise_result, position_angle_label};
+use crate::output::{
+    PositionLayout, SunriseLayout, format_rfc3339, normalize_position_result,
+    normalize_sunrise_result,
+};
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -13,6 +16,30 @@ use std::io::Write;
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
+type DateTimeCache = std::collections::HashMap<chrono::DateTime<chrono::FixedOffset>, String>;
+
+fn cached_datetime(
+    cache: &mut DateTimeCache,
+    dt: &chrono::DateTime<chrono::FixedOffset>,
+) -> String {
+    cache
+        .entry(*dt)
+        .or_insert_with(|| format_rfc3339(dt))
+        .clone()
+}
+
+fn append_opt_time(
+    builder: &mut Option<StringBuilder>,
+    time: Option<&chrono::DateTime<chrono::FixedOffset>>,
+    datetime_cache: &mut DateTimeCache,
+) {
+    if let Some(b) = builder {
+        match time {
+            Some(t) => append_time(b, t, datetime_cache),
+            None => b.append_null(),
+        }
+    }
+}
 
 // Helper to create optional Float64Builder
 fn opt_f64_builder(condition: bool) -> Option<Float64Builder> {
@@ -75,10 +102,8 @@ fn write_position_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.output.should_show_inputs();
-    let elevation_angle = params.output.elevation_angle;
-
-    let schema = build_position_schema(show_inputs, elevation_angle, params.environment.refraction);
+    let layout = PositionLayout::from_params(params);
+    let schema = build_position_schema(layout);
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -86,15 +111,16 @@ fn write_position_parquet<W: Write + Send>(
     let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
 
-    let mut lat_builder = opt_f64_builder(show_inputs);
-    let mut lon_builder = opt_f64_builder(show_inputs);
-    let mut elev_builder = opt_f64_builder(show_inputs);
-    let mut press_builder = opt_f64_builder(show_inputs && params.environment.refraction);
-    let mut temp_builder = opt_f64_builder(show_inputs && params.environment.refraction);
+    let mut lat_builder = opt_f64_builder(layout.show_inputs);
+    let mut lon_builder = opt_f64_builder(layout.show_inputs);
+    let mut elev_builder = opt_f64_builder(layout.show_inputs);
+    let mut press_builder = opt_f64_builder(layout.show_inputs && layout.include_refraction);
+    let mut temp_builder = opt_f64_builder(layout.show_inputs && layout.include_refraction);
     let mut dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
-    let mut deltat_builder = opt_f64_builder(show_inputs);
+    let mut deltat_builder = opt_f64_builder(layout.show_inputs);
     let mut az_builder = Float64Builder::with_capacity(BATCH_SIZE);
     let mut angle_builder = Float64Builder::with_capacity(BATCH_SIZE);
+    let mut datetime_cache: DateTimeCache = std::collections::HashMap::with_capacity(2048);
 
     let mut batch_count = 0;
     let mut total_count = 0;
@@ -104,14 +130,14 @@ fn write_position_parquet<W: Write + Send>(
         let row = normalize_position_result(&result)
             .ok_or_else(|| std::io::Error::other("Unexpected calculation result for position"))?;
 
-        if show_inputs {
+        if layout.show_inputs {
             lat_builder.as_mut().unwrap().append_value(row.lat);
             lon_builder.as_mut().unwrap().append_value(row.lon);
             elev_builder
                 .as_mut()
                 .unwrap()
                 .append_value(params.environment.elevation);
-            if params.environment.refraction {
+            if layout.include_refraction {
                 press_builder
                     .as_mut()
                     .unwrap()
@@ -124,9 +150,9 @@ fn write_position_parquet<W: Write + Send>(
             deltat_builder.as_mut().unwrap().append_value(row.deltat);
         }
 
-        dt_builder.append_value(row.datetime.to_rfc3339());
+        dt_builder.append_value(cached_datetime(&mut datetime_cache, &row.datetime));
         az_builder.append_value(row.azimuth);
-        angle_builder.append_value(row.angle(elevation_angle));
+        angle_builder.append_value(row.angle(layout.uses_elevation_angle()));
 
         batch_count += 1;
         total_count += 1;
@@ -210,18 +236,14 @@ fn flush_position_batch<W: Write + Send>(
     Ok(())
 }
 
-fn build_position_schema(
-    show_inputs: bool,
-    elevation_angle: bool,
-    refraction: bool,
-) -> Arc<Schema> {
+fn build_position_schema(layout: PositionLayout) -> Arc<Schema> {
     let mut fields = Vec::new();
 
-    if show_inputs {
+    if layout.show_inputs {
         fields.push(Field::new("latitude", DataType::Float64, false));
         fields.push(Field::new("longitude", DataType::Float64, false));
         fields.push(Field::new("elevation", DataType::Float64, false));
-        if refraction {
+        if layout.include_refraction {
             fields.push(Field::new("pressure", DataType::Float64, false));
             fields.push(Field::new("temperature", DataType::Float64, false));
         }
@@ -229,14 +251,13 @@ fn build_position_schema(
 
     fields.push(Field::new("dateTime", DataType::Utf8, false));
 
-    if show_inputs {
+    if layout.show_inputs {
         fields.push(Field::new("deltaT", DataType::Float64, false));
     }
 
     fields.push(Field::new("azimuth", DataType::Float64, false));
 
-    let angle_name = position_angle_label(elevation_angle);
-    fields.push(Field::new(angle_name, DataType::Float64, false));
+    fields.push(Field::new(layout.angle_label(), DataType::Float64, false));
 
     Arc::new(Schema::new(fields))
 }
@@ -246,10 +267,8 @@ fn write_sunrise_parquet<W: Write + Send>(
     params: &Parameters,
     writer: W,
 ) -> std::io::Result<usize> {
-    let show_inputs = params.output.should_show_inputs();
-    let show_twilight = params.calculation.twilight;
-
-    let schema = build_sunrise_schema(show_inputs, show_twilight);
+    let layout = SunriseLayout::from_params(params);
+    let schema = build_sunrise_schema(layout);
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -257,49 +276,39 @@ fn write_sunrise_parquet<W: Write + Send>(
     let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
 
-    let mut lat_builder = opt_f64_builder(show_inputs);
-    let mut lon_builder = opt_f64_builder(show_inputs);
+    let mut lat_builder = opt_f64_builder(layout.show_inputs);
+    let mut lon_builder = opt_f64_builder(layout.show_inputs);
     let mut date_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-    let mut deltat_builder = opt_f64_builder(show_inputs);
+    let mut deltat_builder = opt_f64_builder(layout.show_inputs);
     let mut type_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
     let mut sunrise_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
     let mut transit_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
     let mut sunset_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
 
-    let mut civil_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
-    let mut civil_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
-    let mut nautical_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
-    let mut nautical_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
-    let mut astro_start_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
-    let mut astro_end_builder = opt_string_builder(show_twilight, BATCH_SIZE * 25);
+    let mut civil_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
+    let mut civil_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
+    let mut nautical_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
+    let mut nautical_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
+    let mut astro_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
+    let mut astro_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
 
     let mut batch_count = 0;
     let mut total_count = 0;
-
-    let append_opt_time =
-        |builder: &mut Option<StringBuilder>,
-         time: Option<&chrono::DateTime<chrono::FixedOffset>>| {
-            if let Some(b) = builder {
-                match time {
-                    Some(t) => append_time(b, t),
-                    None => b.append_null(),
-                }
-            }
-        };
+    let mut datetime_cache: DateTimeCache = std::collections::HashMap::with_capacity(2048);
 
     for result_or_err in results {
         let result = result_or_err.map_err(std::io::Error::other)?;
         let row = normalize_sunrise_result(&result)
             .ok_or_else(|| std::io::Error::other("Unexpected calculation result for sunrise"))?;
 
-        if show_inputs {
+        if layout.show_inputs {
             lat_builder.as_mut().unwrap().append_value(row.lat);
             lon_builder.as_mut().unwrap().append_value(row.lon);
         }
 
-        date_builder.append_value(row.date_time.to_rfc3339());
+        date_builder.append_value(cached_datetime(&mut datetime_cache, &row.date_time));
 
-        if show_inputs {
+        if layout.show_inputs {
             deltat_builder.as_mut().unwrap().append_value(row.deltat);
         }
 
@@ -310,28 +319,54 @@ fn write_sunrise_parquet<W: Write + Send>(
                 append_time(
                     &mut sunrise_builder,
                     row.sunrise.as_ref().expect("sunrise expected"),
+                    &mut datetime_cache,
                 );
-                append_time(&mut transit_builder, &row.transit);
+                append_time(&mut transit_builder, &row.transit, &mut datetime_cache);
                 append_time(
                     &mut sunset_builder,
                     row.sunset.as_ref().expect("sunset expected"),
+                    &mut datetime_cache,
                 );
             }
             "ALL_DAY" | "ALL_NIGHT" => {
                 sunrise_builder.append_null();
-                append_time(&mut transit_builder, &row.transit);
+                append_time(&mut transit_builder, &row.transit, &mut datetime_cache);
                 sunset_builder.append_null();
             }
             _ => return Err(std::io::Error::other("Unknown sunrise type")),
         }
 
-        if show_twilight {
-            append_opt_time(&mut civil_start_builder, row.civil_start.as_ref());
-            append_opt_time(&mut civil_end_builder, row.civil_end.as_ref());
-            append_opt_time(&mut nautical_start_builder, row.nautical_start.as_ref());
-            append_opt_time(&mut nautical_end_builder, row.nautical_end.as_ref());
-            append_opt_time(&mut astro_start_builder, row.astro_start.as_ref());
-            append_opt_time(&mut astro_end_builder, row.astro_end.as_ref());
+        if layout.include_twilight {
+            append_opt_time(
+                &mut civil_start_builder,
+                row.civil_start.as_ref(),
+                &mut datetime_cache,
+            );
+            append_opt_time(
+                &mut civil_end_builder,
+                row.civil_end.as_ref(),
+                &mut datetime_cache,
+            );
+            append_opt_time(
+                &mut nautical_start_builder,
+                row.nautical_start.as_ref(),
+                &mut datetime_cache,
+            );
+            append_opt_time(
+                &mut nautical_end_builder,
+                row.nautical_end.as_ref(),
+                &mut datetime_cache,
+            );
+            append_opt_time(
+                &mut astro_start_builder,
+                row.astro_start.as_ref(),
+                &mut datetime_cache,
+            );
+            append_opt_time(
+                &mut astro_end_builder,
+                row.astro_end.as_ref(),
+                &mut datetime_cache,
+            );
         }
 
         batch_count += 1;
@@ -388,8 +423,12 @@ fn write_sunrise_parquet<W: Write + Send>(
     Ok(total_count)
 }
 
-fn append_time(builder: &mut StringBuilder, time: &chrono::DateTime<chrono::FixedOffset>) {
-    builder.append_value(time.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+fn append_time(
+    builder: &mut StringBuilder,
+    time: &chrono::DateTime<chrono::FixedOffset>,
+    datetime_cache: &mut DateTimeCache,
+) {
+    builder.append_value(cached_datetime(datetime_cache, time));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -441,17 +480,17 @@ fn flush_sunrise_batch<W: Write + Send>(
     Ok(())
 }
 
-fn build_sunrise_schema(show_inputs: bool, show_twilight: bool) -> Arc<Schema> {
+fn build_sunrise_schema(layout: SunriseLayout) -> Arc<Schema> {
     let mut fields = Vec::new();
 
-    if show_inputs {
+    if layout.show_inputs {
         fields.push(Field::new("latitude", DataType::Float64, false));
         fields.push(Field::new("longitude", DataType::Float64, false));
     }
 
     fields.push(Field::new("dateTime", DataType::Utf8, false));
 
-    if show_inputs {
+    if layout.show_inputs {
         fields.push(Field::new("deltaT", DataType::Float64, false));
     }
 
@@ -460,7 +499,7 @@ fn build_sunrise_schema(show_inputs: bool, show_twilight: bool) -> Arc<Schema> {
     fields.push(Field::new("transit", DataType::Utf8, false));
     fields.push(Field::new("sunset", DataType::Utf8, true));
 
-    if show_twilight {
+    if layout.include_twilight {
         fields.push(Field::new("civil_start", DataType::Utf8, true));
         fields.push(Field::new("civil_end", DataType::Utf8, true));
         fields.push(Field::new("nautical_start", DataType::Utf8, true));
