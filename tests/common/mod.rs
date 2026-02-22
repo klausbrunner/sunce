@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 use assert_cmd::Command;
+use chrono::{DateTime, FixedOffset};
 use predicates::prelude::*;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Test helper for running sunce commands with less boilerplate
@@ -274,4 +277,73 @@ pub fn invalid_algorithm_test() -> SunceTest {
         "position",
         "--algorithm=INVALID",
     ])
+}
+
+/// Parse command stdout as JSON.
+pub fn parse_json_output(stdout: &str) -> Value {
+    serde_json::from_str(stdout).expect("invalid JSON output")
+}
+
+/// Parse CSV output into header and records.
+pub fn parse_csv_output(stdout: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut lines = stdout.lines();
+    let header_line = lines.next().expect("CSV header line missing");
+    let headers = header_line
+        .split(',')
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+
+    let mut rows = Vec::new();
+    for line in lines {
+        let row = line
+            .split(',')
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row.len(),
+            headers.len(),
+            "CSV row width mismatch for line: {}",
+            line
+        );
+        rows.push(row);
+    }
+
+    (headers, rows)
+}
+
+/// Parse CSV output that must contain exactly one record.
+pub fn parse_csv_single_record(stdout: &str) -> (Vec<String>, Vec<String>) {
+    let (headers, rows) = parse_csv_output(stdout);
+    assert_eq!(rows.len(), 1, "expected exactly one CSV record");
+    (headers, rows[0].clone())
+}
+
+/// Convert a CSV row into a field map keyed by header name.
+pub fn csv_row_map(headers: &[String], row: &[String]) -> HashMap<String, String> {
+    assert_eq!(
+        headers.len(),
+        row.len(),
+        "CSV header/value column count mismatch"
+    );
+    headers
+        .iter()
+        .cloned()
+        .zip(row.iter().cloned())
+        .collect::<HashMap<_, _>>()
+}
+
+/// Parse RFC3339 timestamp.
+pub fn parse_rfc3339(ts: &str) -> DateTime<FixedOffset> {
+    DateTime::parse_from_rfc3339(ts).expect("invalid RFC3339 datetime")
+}
+
+/// Assert two RFC3339 timestamps are within tolerance seconds.
+pub fn assert_time_close(actual: &str, expected: &str, tolerance_seconds: i64) {
+    let actual = parse_rfc3339(actual);
+    let expected = parse_rfc3339(expected);
+    let delta = (actual.timestamp() - expected.timestamp()).abs();
+    assert!(
+        delta <= tolerance_seconds,
+        "time mismatch: actual={actual}, expected={expected}, tolerance={tolerance_seconds}s"
+    );
 }

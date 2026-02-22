@@ -25,10 +25,27 @@ fn test_output_formats() {
     position_test().assert_success_contains("azimuth");
 
     // Test CSV format
-    position_test_with_format("CSV").assert_success_contains("dateTime,azimuth,zenith");
+    let csv_output = position_test_with_format("CSV").get_output();
+    assert!(csv_output.status.success());
+    let csv_stdout = String::from_utf8(csv_output.stdout).unwrap();
+    let (headers, rows) = parse_csv_output(&csv_stdout);
+    assert_eq!(
+        headers,
+        vec![
+            "dateTime".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string()
+        ]
+    );
+    assert_eq!(rows.len(), 1);
 
     // Test JSON format
-    position_test_with_format("JSON").assert_success_contains_all(&["\"dateTime\"", "\"azimuth\""]);
+    let json_output = position_test_with_format("JSON").get_output();
+    assert!(json_output.status.success());
+    let json_stdout = String::from_utf8(json_output.stdout).unwrap();
+    let json = parse_json_output(&json_stdout);
+    assert!(json.get("dateTime").is_some());
+    assert!(json.get("azimuth").is_some());
 
     // Test PARQUET format (only when feature enabled)
     #[cfg(feature = "parquet")]
@@ -54,10 +71,18 @@ fn test_output_formats() {
 #[test]
 fn test_elevation_vs_zenith() {
     // Test default (zenith angle)
-    position_test_with_format("CSV").assert_success_contains("zenith");
+    let default_output = position_test_with_format("CSV").get_output();
+    assert!(default_output.status.success());
+    let default_stdout = String::from_utf8(default_output.stdout).unwrap();
+    let (default_headers, _rows) = parse_csv_output(&default_stdout);
+    assert!(default_headers.contains(&"zenith".to_string()));
 
     // Test elevation angle
-    position_test_with_elevation().assert_success_contains("elevation-angle");
+    let elevation_output = position_test_with_elevation().get_output();
+    assert!(elevation_output.status.success());
+    let elevation_stdout = String::from_utf8(elevation_output.stdout).unwrap();
+    let (elevation_headers, _rows) = parse_csv_output(&elevation_stdout);
+    assert!(elevation_headers.contains(&"elevation-angle".to_string()));
 }
 
 /// Test coordinate ranges (geographic sweeps)
@@ -76,11 +101,18 @@ fn test_coordinate_ranges() {
     let lines: Vec<&str> = output_str.lines().collect();
     assert_eq!(lines.len(), 5); // Header + 4 data rows
 
-    // Check some coordinate values
-    assert!(output_str.contains("52.00000,13.00000"));
-    assert!(output_str.contains("52.00000,14.00000"));
-    assert!(output_str.contains("53.00000,13.00000"));
-    assert!(output_str.contains("53.00000,14.00000"));
+    let (headers, rows) = parse_csv_output(&output_str);
+    let combos = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            (record["latitude"].clone(), record["longitude"].clone())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert!(combos.contains(&("52.00000".to_string(), "13.00000".to_string())));
+    assert!(combos.contains(&("52.00000".to_string(), "14.00000".to_string())));
+    assert!(combos.contains(&("53.00000".to_string(), "13.00000".to_string())));
+    assert!(combos.contains(&("53.00000".to_string(), "14.00000".to_string())));
 }
 
 /// Test time series generation
@@ -95,11 +127,34 @@ fn test_time_series() {
         .clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Should have times at 6-hour intervals
-    assert!(output_str.contains("2024-01-01T00:00:00"));
-    assert!(output_str.contains("2024-01-01T06:00:00"));
-    assert!(output_str.contains("2024-01-01T12:00:00"));
-    assert!(output_str.contains("2024-01-01T18:00:00"));
+    let (headers, rows) = parse_csv_output(&output_str);
+    let datetimes = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            record["dateTime"].clone()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-01-01T00:00:00"))
+    );
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-01-01T06:00:00"))
+    );
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-01-01T12:00:00"))
+    );
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-01-01T18:00:00"))
+    );
 }
 
 /// Test partial date inputs
@@ -114,8 +169,24 @@ fn test_partial_dates() {
         .stdout
         .clone();
     let output_str = String::from_utf8(output).unwrap();
-    assert!(output_str.contains("2024-01-01T00:00:00"));
-    assert!(output_str.contains("2024-12-31T00:00:00"));
+    let (headers, rows) = parse_csv_output(&output_str);
+    let datetimes = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            record["dateTime"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-01-01T00:00:00"))
+    );
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-12-31T00:00:00"))
+    );
 
     // Test year-month input
     let output = time_series_test("2024-06", "24h")
@@ -126,19 +197,62 @@ fn test_partial_dates() {
         .stdout
         .clone();
     let output_str = String::from_utf8(output).unwrap();
-    assert!(output_str.contains("2024-06-01T00:00:00"));
-    assert!(output_str.contains("2024-06-30T00:00:00"));
+    let (headers, rows) = parse_csv_output(&output_str);
+    let datetimes = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            record["dateTime"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-06-01T00:00:00"))
+    );
+    assert!(
+        datetimes
+            .iter()
+            .any(|ts| ts.starts_with("2024-06-30T00:00:00"))
+    );
 }
 
 /// Test show-inputs functionality
 #[test]
 fn test_show_inputs() {
     // Test auto-enabling for ranges
-    show_inputs_lat_range_test()
-        .assert_success_contains("latitude,longitude,elevation,pressure,temperature");
+    let auto_output = show_inputs_lat_range_test().get_output();
+    assert!(auto_output.status.success());
+    let auto_stdout = String::from_utf8(auto_output.stdout).unwrap();
+    let (auto_headers, _rows) = parse_csv_output(&auto_stdout);
+    assert_eq!(
+        auto_headers,
+        vec![
+            "latitude".to_string(),
+            "longitude".to_string(),
+            "elevation".to_string(),
+            "pressure".to_string(),
+            "temperature".to_string(),
+            "dateTime".to_string(),
+            "deltaT".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string(),
+        ]
+    );
 
     // Test explicit disable
-    show_inputs_disabled_test().assert_success_contains("dateTime,azimuth,zenith");
+    let disabled_output = show_inputs_disabled_test().get_output();
+    assert!(disabled_output.status.success());
+    let disabled_stdout = String::from_utf8(disabled_output.stdout).unwrap();
+    let (disabled_headers, _rows) = parse_csv_output(&disabled_stdout);
+    assert_eq!(
+        disabled_headers,
+        vec![
+            "dateTime".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string()
+        ]
+    );
 }
 
 /// Test environmental parameters
@@ -153,9 +267,11 @@ fn test_environmental_parameters() {
         .clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    assert!(output_str.contains("1000.000")); // elevation
-    assert!(output_str.contains("900.000")); // pressure
-    assert!(output_str.contains("25.000")); // temperature
+    let (headers, rows) = parse_csv_output(&output_str);
+    let record = csv_row_map(&headers, &rows[0]);
+    assert_eq!(record.get("elevation"), Some(&"1000.000".to_string()));
+    assert_eq!(record.get("pressure"), Some(&"900.000".to_string()));
+    assert_eq!(record.get("temperature"), Some(&"25.000".to_string()));
 }
 
 /// Test refraction correction
@@ -260,10 +376,10 @@ fn test_space_separated_datetime_without_seconds() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains(r#""dateTime":"2024-01-01T12:00:00+00:00""#),
-        "Expected localized datetime in output, got: {}",
-        stdout
+    let json = parse_json_output(&stdout);
+    assert_eq!(
+        json.get("dateTime").and_then(serde_json::Value::as_str),
+        Some("2024-01-01T12:00:00+00:00")
     );
 }
 
@@ -351,7 +467,18 @@ fn test_now_timestamp_consistency() {
 #[test]
 fn test_csv_headers() {
     // Test with headers (default)
-    position_test_with_format("CSV").assert_success_contains("dateTime,azimuth,zenith");
+    let with_headers = position_test_with_format("CSV").get_output();
+    assert!(with_headers.status.success());
+    let with_headers_stdout = String::from_utf8(with_headers.stdout).unwrap();
+    let (headers, _rows) = parse_csv_output(&with_headers_stdout);
+    assert_eq!(
+        headers,
+        vec![
+            "dateTime".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string()
+        ]
+    );
 
     // Test without headers
     let output = position_csv_no_headers()
@@ -369,7 +496,12 @@ fn test_csv_headers() {
 #[test]
 fn test_delta_t() {
     // Test with explicit delta T
-    position_with_deltat("69.2").assert_success_contains("69.200");
+    let explicit_output = position_with_deltat("69.2").get_output();
+    assert!(explicit_output.status.success());
+    let explicit_stdout = String::from_utf8(explicit_output.stdout).unwrap();
+    let (headers, rows) = parse_csv_output(&explicit_stdout);
+    let record = csv_row_map(&headers, &rows[0]);
+    assert_eq!(record.get("deltaT"), Some(&"69.200".to_string()));
 
     // Test with delta T estimation
     position_with_deltat_estimation().assert_success();
@@ -506,15 +638,20 @@ fn test_coordinate_range_floating_point_precision() {
         .get_output();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines: Vec<&str> = stdout.lines().collect();
+    let (headers, rows) = parse_csv_output(&stdout);
 
-    // Should have header + 3 data rows (50.0, 50.1, 50.2)
-    assert_eq!(lines.len(), 4, "Should have exactly 3 coordinate values");
-
-    // Verify all expected coordinates are present
-    assert!(stdout.contains("50.00000"), "Should contain 50.0");
-    assert!(stdout.contains("50.10000"), "Should contain 50.1");
-    assert!(stdout.contains("50.20000"), "Should contain 50.2");
+    // Should have 3 data rows (50.0, 50.1, 50.2)
+    assert_eq!(rows.len(), 3, "Should have exactly 3 coordinate values");
+    let latitudes = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            record["latitude"].clone()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert!(latitudes.contains("50.00000"), "Should contain 50.0");
+    assert!(latitudes.contains("50.10000"), "Should contain 50.1");
+    assert!(latitudes.contains("50.20000"), "Should contain 50.2");
 
     // Test another problematic case with 0.3 step
     let output2 = SunceTest::new()
@@ -528,12 +665,12 @@ fn test_coordinate_range_floating_point_precision() {
         .get_output();
 
     let stdout2 = String::from_utf8(output2.stdout).unwrap();
-    let lines2: Vec<&str> = stdout2.lines().collect();
+    let (_headers2, rows2) = parse_csv_output(&stdout2);
 
-    // Should have header + 4 data rows
+    // Should have 4 data rows
     assert_eq!(
-        lines2.len(),
-        5,
+        rows2.len(),
+        4,
         "Should have exactly 4 coordinate values for 0.3 step"
     );
 }

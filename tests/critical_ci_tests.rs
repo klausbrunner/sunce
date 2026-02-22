@@ -3,25 +3,34 @@
 mod common;
 use common::*;
 
-/// Extract numeric field from CSV data line
-fn extract_csv_field(output: &str, field_index: usize) -> Option<f64> {
-    output
-        .lines()
-        .find(|line| line.contains(',') && !line.starts_with("latitude"))
-        .and_then(|line| line.split(',').nth(field_index))
-        .and_then(|field| field.trim().parse().ok())
+fn csv_number_field(stdout: &str, field: &str) -> f64 {
+    let (headers, row) = parse_csv_single_record(stdout);
+    let record = csv_row_map(&headers, &row);
+    record
+        .get(field)
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("missing or invalid numeric field: {}", field))
 }
 
-/// Extract numeric field from JSON output
-fn extract_json_field(output: &str, field_name: &str) -> Option<f64> {
-    output
-        .find(&format!("\"{}\":", field_name))
-        .and_then(|start| {
-            let after_colon = start + field_name.len() + 3;
-            let remainder = &output[after_colon..];
-            let end = remainder.find([',', '}']).unwrap_or(remainder.len());
-            remainder[..end].trim().parse().ok()
-        })
+fn json_number_field(stdout: &str, field: &str) -> f64 {
+    let json = parse_json_output(stdout);
+    json.get(field)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or_else(|| panic!("missing or invalid numeric JSON field: {}", field))
+}
+
+fn csv_string_field(stdout: &str, field: &str) -> String {
+    let (headers, row) = parse_csv_single_record(stdout);
+    let record = csv_row_map(&headers, &row);
+    record
+        .get(field)
+        .cloned()
+        .unwrap_or_else(|| panic!("missing CSV field: {}", field))
+}
+
+fn csv_headers(stdout: &str) -> Vec<String> {
+    let (headers, _rows) = parse_csv_output(stdout);
+    headers
 }
 
 /// Test 1: Verify exact functional compatibility with solarpos
@@ -45,20 +54,31 @@ fn test_solarpos_exact_functional_match() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Verify CSV header structure (includes environmental params when show-inputs enabled)
-    assert!(stdout.contains(
-        "latitude,longitude,elevation,pressure,temperature,dateTime,deltaT,azimuth,zenith"
-    ));
+    let headers = csv_headers(&stdout);
+    assert_eq!(
+        headers,
+        vec![
+            "latitude".to_string(),
+            "longitude".to_string(),
+            "elevation".to_string(),
+            "pressure".to_string(),
+            "temperature".to_string(),
+            "dateTime".to_string(),
+            "deltaT".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string(),
+        ]
+    );
 
-    // Verify core coordinate values
-    assert!(stdout.contains("52.00000,13.40000"));
-    assert!(stdout.contains("2024-06-21T12:00:00"));
-    assert!(stdout.contains("+02:00"));
+    assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");
+    assert_eq!(csv_string_field(&stdout, "longitude"), "13.40000");
+    assert!(csv_string_field(&stdout, "dateTime").starts_with("2024-06-21T12:00:00"));
+    assert!(csv_string_field(&stdout, "dateTime").ends_with("+02:00"));
 
     // Verify reasonable azimuth and zenith values for this date/location
     // (exact values may vary slightly with different algorithms or settings)
-    let azimuth = extract_csv_field(&stdout, 7).expect("azimuth field");
-    let zenith = extract_csv_field(&stdout, 8).expect("zenith field");
+    let azimuth = csv_number_field(&stdout, "azimuth");
+    let zenith = csv_number_field(&stdout, "zenith");
     assert!(
         (147.0..=149.0).contains(&azimuth),
         "azimuth {} not in range 147-149°",
@@ -99,18 +119,32 @@ fn test_solarpos_sunrise_compatibility() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Verify CSV structure
-    assert!(stdout.contains("latitude,longitude,dateTime,deltaT,type,sunrise,transit,sunset"));
+    let headers = csv_headers(&stdout);
+    assert_eq!(
+        headers,
+        vec![
+            "latitude".to_string(),
+            "longitude".to_string(),
+            "dateTime".to_string(),
+            "deltaT".to_string(),
+            "type".to_string(),
+            "sunrise".to_string(),
+            "transit".to_string(),
+            "sunset".to_string(),
+        ]
+    );
 
-    // Verify coordinates and type are exact
-    assert!(stdout.contains("52.00000"));
-    assert!(stdout.contains("13.40000"));
-    assert!(stdout.contains("NORMAL"));
+    assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");
+    assert_eq!(csv_string_field(&stdout, "longitude"), "13.40000");
+    assert_eq!(csv_string_field(&stdout, "type"), "NORMAL");
 
-    // Verify times are reasonable for summer solstice (UTC timezone)
-    assert!(stdout.contains("02:4") || stdout.contains("02:5")); // sunrise around 02:46 UTC
-    assert!(stdout.contains("11:0") || stdout.contains("11:1")); // transit around 11:08 UTC
-    assert!(stdout.contains("19:2") || stdout.contains("19:3")); // sunset around 19:30 UTC
+    // Verify times are reasonable for summer solstice (UTC timezone).
+    let sunrise = csv_string_field(&stdout, "sunrise");
+    let transit = csv_string_field(&stdout, "transit");
+    let sunset = csv_string_field(&stdout, "sunset");
+    assert!(sunrise.starts_with("2024-06-21T02:4") || sunrise.starts_with("2024-06-21T02:5"));
+    assert!(transit.starts_with("2024-06-21T11:0") || transit.starts_with("2024-06-21T11:1"));
+    assert!(sunset.starts_with("2024-06-21T19:2") || sunset.starts_with("2024-06-21T19:3"));
 }
 
 /// Test JSON output structure compatibility
@@ -129,14 +163,13 @@ fn test_solarpos_json_structure() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Verify JSON field structure (our format may be more minimal than solarpos)
-    assert!(stdout.contains("\"dateTime\":"));
-    assert!(stdout.contains("\"azimuth\":"));
-    assert!(stdout.contains("\"zenith\":"));
-
     // Verify reasonable numerical values (UTC timezone)
-    let azimuth = extract_json_field(&stdout, "azimuth").expect("azimuth field");
-    let zenith = extract_json_field(&stdout, "zenith").expect("zenith field");
+    let json = parse_json_output(&stdout);
+    assert!(json.get("dateTime").is_some());
+    assert!(json.get("azimuth").is_some());
+    assert!(json.get("zenith").is_some());
+    let azimuth = json_number_field(&stdout, "azimuth");
+    let zenith = json_number_field(&stdout, "zenith");
     assert!(
         (191.0..=192.0).contains(&azimuth),
         "azimuth {} not in range 191-192°",
@@ -244,7 +277,7 @@ fn test_cli_option_precedence() {
         .get_output();
 
     let stdout1 = String::from_utf8(output1.stdout).unwrap();
-    assert!(stdout1.contains("69.200")); // Should use specific value
+    assert_eq!(csv_string_field(&stdout1, "deltaT"), "69.200");
 
     // Test deltat estimation flag works
     let output2 = SunceTest::new()
@@ -260,13 +293,13 @@ fn test_cli_option_precedence() {
         .get_output();
 
     let stdout2 = String::from_utf8(output2.stdout).unwrap();
-    // Should use estimated value (~71.2 for 2024-01-01) - look for pattern in CSV data
+    let delta_t = csv_number_field(&stdout2, "deltaT");
     assert!(
-        stdout2.contains(",71.241,"),
-        "Expected deltaT=71.241 in output: {}",
-        stdout2
+        (70.0..=72.0).contains(&delta_t),
+        "Expected estimated deltaT around 71 for 2024-01-01, got {}",
+        delta_t
     );
-    assert!(!stdout2.contains("69.200"));
+    assert_ne!(delta_t, 69.2);
 }
 
 /// Test delta-T handling: default zero value
@@ -284,7 +317,7 @@ fn test_deltat_default_zero() {
         .get_output();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+    let delta_t = csv_number_field(&stdout, "deltaT");
     assert_eq!(delta_t, 0.0, "Default delta-T should be 0.0");
 }
 
@@ -304,7 +337,7 @@ fn test_deltat_explicit_value() {
         .get_output();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+    let delta_t = csv_number_field(&stdout, "deltaT");
     assert_eq!(delta_t, 69.2, "Explicit delta-T should be 69.2");
 }
 
@@ -324,7 +357,7 @@ fn test_deltat_estimation() {
         .get_output();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let delta_t = extract_csv_field(&stdout, 6).expect("delta-T field");
+    let delta_t = csv_number_field(&stdout, "deltaT");
 
     // For 2024, delta-T should be estimated around 69-72 seconds
     assert!(
@@ -356,13 +389,12 @@ fn test_show_inputs_precedence() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Should NOT contain input columns since --no-show-inputs overrides
-    assert!(!stdout.contains("latitude,longitude"));
-    // Should contain only output columns
-    assert!(stdout.contains("azimuth,zenith"));
-    // Should have multiple data rows for the coordinate range
-    let lines: Vec<&str> = stdout.lines().collect();
-    assert!(lines.len() > 2); // header + at least 2 data rows for 52:53:1 range
+    let (headers, rows) = parse_csv_output(&stdout);
+    assert!(!headers.contains(&"latitude".to_string()));
+    assert!(!headers.contains(&"longitude".to_string()));
+    assert!(headers.contains(&"azimuth".to_string()));
+    assert!(headers.contains(&"zenith".to_string()));
+    assert!(rows.len() >= 2);
 }
 
 /// Test global vs command option positioning

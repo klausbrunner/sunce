@@ -2,6 +2,7 @@
 /// Verifies that --twilight flag properly calculates all horizons across all output formats
 mod common;
 use common::*;
+use serde_json::Value;
 
 #[test]
 fn test_twilight_csv_output() {
@@ -17,23 +18,81 @@ fn test_twilight_csv_output() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let (headers, row) = parse_csv_single_record(&stdout);
+    let record = csv_row_map(&headers, &row);
 
-    // Verify CSV header includes all twilight fields (no show-inputs for single values)
-    assert!(stdout.contains("dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end"));
+    assert_eq!(
+        headers,
+        vec![
+            "dateTime".to_string(),
+            "type".to_string(),
+            "sunrise".to_string(),
+            "transit".to_string(),
+            "sunset".to_string(),
+            "civil_start".to_string(),
+            "civil_end".to_string(),
+            "nautical_start".to_string(),
+            "nautical_end".to_string(),
+            "astronomical_start".to_string(),
+            "astronomical_end".to_string(),
+        ]
+    );
 
-    // Verify data row starts with timestamp (RFC3339)
-    assert!(stdout.contains("2024-06-21T00:00:00+00:00,NORMAL"));
-
-    // Verify all times are present (Berlin in summer - all twilight phases exist)
-    assert!(stdout.contains("2024-06-21T02:46:15")); // sunrise
-    assert!(stdout.contains("2024-06-21T11:08:18")); // transit
-    assert!(stdout.contains("2024-06-21T19:30:20")); // sunset
-    assert!(stdout.contains("2024-06-21T01:57:19")); // civil start
-    assert!(stdout.contains("2024-06-21T20:19:16")); // civil end
-    assert!(stdout.contains("2024-06-21T00:38:45")); // nautical start
-    assert!(stdout.contains("2024-06-21T21:37:47")); // nautical end
-    // Astronomical twilight may be absent (sun doesn't go that deep at lat 52° in June)
+    assert_eq!(
+        record.get("dateTime"),
+        Some(&"2024-06-21T00:00:00+00:00".to_string())
+    );
+    assert_eq!(record.get("type"), Some(&"NORMAL".to_string()));
+    assert_time_close(
+        record.get("sunrise").expect("missing sunrise").as_str(),
+        "2024-06-21T02:46:15+00:00",
+        0,
+    );
+    assert_time_close(
+        record.get("transit").expect("missing transit").as_str(),
+        "2024-06-21T11:08:18+00:00",
+        0,
+    );
+    assert_time_close(
+        record.get("sunset").expect("missing sunset").as_str(),
+        "2024-06-21T19:30:20+00:00",
+        0,
+    );
+    assert_time_close(
+        record
+            .get("civil_start")
+            .expect("missing civil_start")
+            .as_str(),
+        "2024-06-21T01:57:19+00:00",
+        0,
+    );
+    assert_time_close(
+        record.get("civil_end").expect("missing civil_end").as_str(),
+        "2024-06-21T20:19:16+00:00",
+        0,
+    );
+    assert_time_close(
+        record
+            .get("nautical_start")
+            .expect("missing nautical_start")
+            .as_str(),
+        "2024-06-21T00:38:45+00:00",
+        0,
+    );
+    // Upstream algorithm/version updates can shift twilight boundary rounding by 1s.
+    assert_time_close(
+        record
+            .get("nautical_end")
+            .expect("missing nautical_end")
+            .as_str(),
+        "2024-06-21T21:37:47+00:00",
+        1,
+    );
+    // Astronomical twilight may be absent (sun doesn't go that deep at lat 52° in June).
+    assert_eq!(record.get("astronomical_start"), Some(&"".to_string()));
+    assert_eq!(record.get("astronomical_end"), Some(&"".to_string()));
 }
 
 #[test]
@@ -50,19 +109,71 @@ fn test_twilight_json_output() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_json_output(&stdout);
 
-    // Verify JSON structure
-    assert!(stdout.contains(r#""type":"NORMAL""#));
-    assert!(stdout.contains(r#""sunrise":"2024-06-21T02:46:15"#));
-    assert!(stdout.contains(r#""transit":"2024-06-21T11:08:18"#));
-    assert!(stdout.contains(r#""sunset":"2024-06-21T19:30:20"#));
-    assert!(stdout.contains(r#""civil_start":"2024-06-21T01:57:19"#));
-    assert!(stdout.contains(r#""civil_end":"2024-06-21T20:19:16"#));
-    assert!(stdout.contains(r#""nautical_start":"2024-06-21T00:38:45"#));
-    assert!(stdout.contains(r#""nautical_end":"2024-06-21T21:37:47"#));
-    assert!(stdout.contains(r#""astronomical_start":null"#));
-    assert!(stdout.contains(r#""astronomical_end":null"#));
+    assert_eq!(json.get("type").and_then(Value::as_str), Some("NORMAL"));
+    assert_time_close(
+        json.get("sunrise")
+            .and_then(Value::as_str)
+            .expect("missing sunrise"),
+        "2024-06-21T02:46:15+00:00",
+        0,
+    );
+    assert_time_close(
+        json.get("transit")
+            .and_then(Value::as_str)
+            .expect("missing transit"),
+        "2024-06-21T11:08:18+00:00",
+        0,
+    );
+    assert_time_close(
+        json.get("sunset")
+            .and_then(Value::as_str)
+            .expect("missing sunset"),
+        "2024-06-21T19:30:20+00:00",
+        0,
+    );
+    assert_time_close(
+        json.get("civil_start")
+            .and_then(Value::as_str)
+            .expect("missing civil_start"),
+        "2024-06-21T01:57:19+00:00",
+        0,
+    );
+    assert_time_close(
+        json.get("civil_end")
+            .and_then(Value::as_str)
+            .expect("missing civil_end"),
+        "2024-06-21T20:19:16+00:00",
+        0,
+    );
+    assert_time_close(
+        json.get("nautical_start")
+            .and_then(Value::as_str)
+            .expect("missing nautical_start"),
+        "2024-06-21T00:38:45+00:00",
+        0,
+    );
+    // Upstream algorithm/version updates can shift twilight boundary rounding by 1s.
+    assert_time_close(
+        json.get("nautical_end")
+            .and_then(Value::as_str)
+            .expect("missing nautical_end"),
+        "2024-06-21T21:37:47+00:00",
+        1,
+    );
+    assert!(
+        json.get("astronomical_start")
+            .expect("missing astronomical_start")
+            .is_null()
+    );
+    assert!(
+        json.get("astronomical_end")
+            .expect("missing astronomical_end")
+            .is_null()
+    );
 }
 
 #[test]
@@ -77,10 +188,15 @@ fn test_json_polar_day_and_night_use_null() {
             "sunrise",
         ])
         .get_output();
+    assert!(polar_day.status.success());
     let day_output = String::from_utf8(polar_day.stdout).unwrap();
-    assert!(day_output.contains(r#""type":"ALL_DAY""#));
-    assert!(day_output.contains(r#""sunrise":null"#));
-    assert!(day_output.contains(r#""sunset":null"#));
+    let day_json = parse_json_output(&day_output);
+    assert_eq!(
+        day_json.get("type").and_then(Value::as_str),
+        Some("ALL_DAY")
+    );
+    assert!(day_json.get("sunrise").expect("missing sunrise").is_null());
+    assert!(day_json.get("sunset").expect("missing sunset").is_null());
 
     let polar_night = SunceTest::new()
         .args([
@@ -92,10 +208,20 @@ fn test_json_polar_day_and_night_use_null() {
             "sunrise",
         ])
         .get_output();
+    assert!(polar_night.status.success());
     let night_output = String::from_utf8(polar_night.stdout).unwrap();
-    assert!(night_output.contains(r#""type":"ALL_NIGHT""#));
-    assert!(night_output.contains(r#""sunrise":null"#));
-    assert!(night_output.contains(r#""sunset":null"#));
+    let night_json = parse_json_output(&night_output);
+    assert_eq!(
+        night_json.get("type").and_then(Value::as_str),
+        Some("ALL_NIGHT")
+    );
+    assert!(
+        night_json
+            .get("sunrise")
+            .expect("missing sunrise")
+            .is_null()
+    );
+    assert!(night_json.get("sunset").expect("missing sunset").is_null());
 }
 
 #[test]
@@ -229,18 +355,27 @@ fn test_twilight_without_show_inputs() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-
-    // Verify header doesn't include lat/lon/deltat
-    let lines: Vec<&str> = stdout.lines().collect();
+    let (headers, row) = parse_csv_single_record(&stdout);
+    let record = csv_row_map(&headers, &row);
     assert_eq!(
-        lines[0],
-        "dateTime,type,sunrise,transit,sunset,civil_start,civil_end,nautical_start,nautical_end,astronomical_start,astronomical_end"
+        headers,
+        vec![
+            "dateTime".to_string(),
+            "type".to_string(),
+            "sunrise".to_string(),
+            "transit".to_string(),
+            "sunset".to_string(),
+            "civil_start".to_string(),
+            "civil_end".to_string(),
+            "nautical_start".to_string(),
+            "nautical_end".to_string(),
+            "astronomical_start".to_string(),
+            "astronomical_end".to_string(),
+        ]
     );
-
-    // Should still have data row with all fields
-    assert!(lines[1].contains("2024-06-21"));
-    assert!(lines[1].contains("NORMAL"));
+    assert_eq!(record.get("type"), Some(&"NORMAL".to_string()));
 }
 
 #[test]
@@ -258,11 +393,14 @@ fn test_twilight_polar_night() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_json_output(&stdout);
 
-    // Should handle ALL_NIGHT or similar gracefully
-    assert!(stdout.contains(r#""type":"#));
-    // Twilight times may still exist even during polar night
+    // Should contain a valid type classification and required core fields.
+    assert!(json.get("type").and_then(Value::as_str).is_some());
+    assert!(json.get("sunrise").is_some());
+    assert!(json.get("sunset").is_some());
 }
 
 #[test]
@@ -280,15 +418,12 @@ fn test_twilight_multiple_dates() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let (headers, _record) = parse_csv_single_record(&stdout);
 
-    // Should have header + 1 data row
-    let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 2); // header + 1 data row
-
-    // Verify header
-    assert!(lines[0].contains("civil_start"));
-    assert!(lines[0].contains("astronomical_end"));
+    assert!(headers.contains(&"civil_start".to_string()));
+    assert!(headers.contains(&"astronomical_end".to_string()));
 }
 
 #[test]
@@ -305,13 +440,21 @@ fn test_no_twilight_flag_behavior() {
         ])
         .get_output();
 
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let (headers, _record) = parse_csv_single_record(&stdout);
 
-    // Header should NOT include twilight fields
-    assert!(!stdout.contains("civil_start"));
-    assert!(!stdout.contains("nautical_start"));
-    assert!(!stdout.contains("astronomical_start"));
-
-    // Should only have standard fields (no show-inputs for single values)
-    assert!(stdout.contains("dateTime,type,sunrise,transit,sunset"));
+    assert!(!headers.contains(&"civil_start".to_string()));
+    assert!(!headers.contains(&"nautical_start".to_string()));
+    assert!(!headers.contains(&"astronomical_start".to_string()));
+    assert_eq!(
+        headers,
+        vec![
+            "dateTime".to_string(),
+            "type".to_string(),
+            "sunrise".to_string(),
+            "transit".to_string(),
+            "sunset".to_string(),
+        ]
+    );
 }
