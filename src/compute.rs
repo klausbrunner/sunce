@@ -182,12 +182,6 @@ fn time_cache_get(
     params: &Parameters,
 ) -> Result<(SpaTimeParts, f64), String> {
     if let Some(existing) = cache.get(&dt) {
-        if order.back().is_none_or(|back| *back != dt) {
-            if let Some(pos) = order.iter().position(|key| *key == dt) {
-                order.remove(pos);
-            }
-            order.push_back(dt);
-        }
         return match existing {
             Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
             Err(err) => Err(err.clone()),
@@ -338,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn spa_time_cache_eviction_is_lru() {
+    fn spa_time_cache_eviction_keeps_existing_when_not_full() {
         let mut cache: SpaCache = HashMap::new();
         let mut order = VecDeque::new();
         let params = Parameters::default();
@@ -350,11 +344,10 @@ mod tests {
 
         time_cache_get(&mut cache, &mut order, 2, dt1, &params).unwrap();
         time_cache_get(&mut cache, &mut order, 2, dt2, &params).unwrap();
-        time_cache_get(&mut cache, &mut order, 2, dt1, &params).unwrap(); // bump dt1
-        time_cache_get(&mut cache, &mut order, 2, dt3, &params).unwrap(); // evict dt2
+        time_cache_get(&mut cache, &mut order, 2, dt3, &params).unwrap();
 
-        assert!(cache.contains_key(&dt1));
-        assert!(!cache.contains_key(&dt2));
+        assert!(!cache.contains_key(&dt1));
+        assert!(cache.contains_key(&dt2));
         assert!(cache.contains_key(&dt3));
     }
 }

@@ -274,14 +274,13 @@ fn parse_positional_args(
     positional_args: &[String],
     params: &Parameters,
 ) -> CliResult<(Command, DataSource)> {
-    if positional_args.is_empty() {
-        return Err("Need at least command and one argument".into());
-    }
-
     let command_index = positional_args
         .iter()
         .position(|arg| arg == "position" || arg == "sunrise")
         .ok_or("No command found".to_string())?;
+    if command_index == 0 {
+        return Err("Need at least command and one argument".into());
+    }
 
     let command = if positional_args[command_index] == "position" {
         Command::Position
@@ -290,10 +289,6 @@ fn parse_positional_args(
     };
 
     let data_args = &positional_args[..command_index];
-
-    if data_args.is_empty() {
-        return Err("Need at least command and one argument".into());
-    }
 
     let data_source = parse_data_source(data_args, params, command)?;
 
@@ -357,15 +352,15 @@ fn parse_time_arg(time_str: &str, params: &Parameters, command: Command) -> CliR
     }
 
     if crate::data::time_utils::is_partial_date(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string(), params.step));
+        return Ok(TimeSource::Range(time_str.to_string()));
     }
 
     if command == Command::Position && crate::data::time_utils::is_date_without_time(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string(), params.step));
+        return Ok(TimeSource::Range(time_str.to_string()));
     }
 
     if params.step.is_some() && crate::data::time_utils::is_date_without_time(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string(), params.step));
+        return Ok(TimeSource::Range(time_str.to_string()));
     }
 
     if params.step.is_some() {
@@ -416,7 +411,7 @@ fn should_auto_show_inputs(source: &DataSource) -> bool {
     match source {
         DataSource::Separate(loc, time) => {
             matches!(loc, LocationSource::Range { .. } | LocationSource::File(_))
-                || matches!(time, TimeSource::Range(_, _) | TimeSource::File(_))
+                || matches!(time, TimeSource::Range(_) | TimeSource::File(_))
         }
         DataSource::Paired(_) => true,
     }

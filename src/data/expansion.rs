@@ -242,8 +242,8 @@ pub fn expand_time_source(
 ) -> Result<TimeIter, String> {
     match source {
         TimeSource::Single(dt) => Ok(Box::new(std::iter::once(Ok(dt)))),
-        TimeSource::Range(partial_date, step_opt) => {
-            let step = step_override.or(step_opt).unwrap_or_else(|| {
+        TimeSource::Range(partial_date) => {
+            let step = step_override.unwrap_or_else(|| {
                 if command == Command::Sunrise || partial_date.len() == 4 {
                     Step(chrono::Duration::days(1))
                 } else {

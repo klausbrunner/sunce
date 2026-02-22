@@ -1,4 +1,3 @@
-use super::config::Step;
 use chrono::{DateTime, FixedOffset};
 use std::path::PathBuf;
 
@@ -21,7 +20,7 @@ pub enum LocationSource {
 #[derive(Debug, Clone)]
 pub enum TimeSource {
     Single(DateTime<FixedOffset>),
-    Range(String, Option<Step>),
+    Range(String),
     File(InputPath),
     Now,
 }

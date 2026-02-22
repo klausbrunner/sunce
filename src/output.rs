@@ -14,10 +14,6 @@ pub(crate) fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
     dt.format(RFC3339_NO_MILLIS).to_string()
 }
 
-fn format_datetime_opt(dt: Option<&DateTime<FixedOffset>>) -> String {
-    dt.map_or(String::new(), format_rfc3339)
-}
-
 fn round_f64(value: f64, decimals: u32) -> f64 {
     let factor = 10_f64.powi(decimals as i32);
     (value * factor).round() / factor
@@ -382,7 +378,9 @@ impl OutputRow {
             OutputRow::Position(fields) => {
                 position_csv_values_into(fields, datetime_cache, fixed_decimal_cache, out)
             }
-            OutputRow::Sunrise(fields) => sunrise_csv_values_into(fields, fixed_decimal_cache, out),
+            OutputRow::Sunrise(fields) => {
+                sunrise_csv_values_into(fields, datetime_cache, fixed_decimal_cache, out)
+            }
         }
     }
 
@@ -396,7 +394,9 @@ impl OutputRow {
             OutputRow::Position(fields) => {
                 write_position_csv(writer, fields, datetime_cache, fixed_decimal_cache)
             }
-            OutputRow::Sunrise(fields) => write_sunrise_csv(writer, fields, fixed_decimal_cache),
+            OutputRow::Sunrise(fields) => {
+                write_sunrise_csv(writer, fields, datetime_cache, fixed_decimal_cache)
+            }
         }
     }
 }
@@ -452,6 +452,7 @@ fn position_csv_values_into(
 
 fn sunrise_csv_values_into(
     fields: &SunriseFields,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
     fixed_decimal_cache: &mut FixedDecimalCache,
     values: &mut Vec<String>,
 ) {
@@ -472,15 +473,23 @@ fn sunrise_csv_values_into(
     if fields.layout.show_inputs {
         values.push(cached_f64_fixed(fixed_decimal_cache, fields.lat, 5));
         values.push(cached_f64_fixed(fixed_decimal_cache, fields.lon, 5));
-        values.push(format_rfc3339(&fields.date_time));
+        values.push(cached_datetime(datetime_cache, &fields.date_time));
         values.push(cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3));
     } else {
-        values.push(format_rfc3339(&fields.date_time));
+        values.push(cached_datetime(datetime_cache, &fields.date_time));
     }
 
-    let sunrise_str = format_datetime_opt(fields.sunrise.as_ref());
-    let transit_str = format_rfc3339(&fields.transit);
-    let sunset_str = format_datetime_opt(fields.sunset.as_ref());
+    let sunrise_str = fields
+        .sunrise
+        .as_ref()
+        .map(|dt| cached_datetime(datetime_cache, dt))
+        .unwrap_or_default();
+    let transit_str = cached_datetime(datetime_cache, &fields.transit);
+    let sunset_str = fields
+        .sunset
+        .as_ref()
+        .map(|dt| cached_datetime(datetime_cache, dt))
+        .unwrap_or_default();
 
     values.push(fields.type_label.to_string());
     values.push(sunrise_str);
@@ -488,15 +497,184 @@ fn sunrise_csv_values_into(
     values.push(sunset_str);
 
     if fields.layout.include_twilight {
-        let format_twilight =
-            |dt: Option<&DateTime<FixedOffset>>| dt.map(format_rfc3339).unwrap_or_default();
-        values.push(format_twilight(fields.civil_start.as_ref()));
-        values.push(format_twilight(fields.civil_end.as_ref()));
-        values.push(format_twilight(fields.nautical_start.as_ref()));
-        values.push(format_twilight(fields.nautical_end.as_ref()));
-        values.push(format_twilight(fields.astro_start.as_ref()));
-        values.push(format_twilight(fields.astro_end.as_ref()));
+        values.push(
+            fields
+                .civil_start
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
+        values.push(
+            fields
+                .civil_end
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
+        values.push(
+            fields
+                .nautical_start
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
+        values.push(
+            fields
+                .nautical_end
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
+        values.push(
+            fields
+                .astro_start
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
+        values.push(
+            fields
+                .astro_end
+                .as_ref()
+                .map(|dt| cached_datetime(datetime_cache, dt))
+                .unwrap_or_default(),
+        );
     }
+}
+
+fn write_csv_field<W: std::io::Write>(
+    writer: &mut W,
+    first: &mut bool,
+    value: &str,
+) -> Result<(), String> {
+    if *first {
+        *first = false;
+    } else {
+        writer.write_all(b",").map_err(|e| e.to_string())?;
+    }
+    writer
+        .write_all(value.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+fn write_position_csv<W: std::io::Write>(
+    writer: &mut W,
+    fields: &PositionFields,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    fixed_decimal_cache: &mut FixedDecimalCache,
+) -> Result<(), String> {
+    let mut first = true;
+
+    if fields.layout.show_inputs {
+        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
+        write_csv_field(writer, &mut first, &lat)?;
+        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
+        write_csv_field(writer, &mut first, &lon)?;
+        let elevation = cached_f64_fixed(fixed_decimal_cache, fields.elevation, 3);
+        write_csv_field(writer, &mut first, &elevation)?;
+        if fields.layout.include_refraction {
+            let (pressure, temperature) = fields.refraction.expect("refraction values set");
+            let pressure = cached_f64_fixed(fixed_decimal_cache, pressure, 3);
+            write_csv_field(writer, &mut first, &pressure)?;
+            let temperature = cached_f64_fixed(fixed_decimal_cache, temperature, 3);
+            write_csv_field(writer, &mut first, &temperature)?;
+        }
+    }
+
+    let dt = cached_datetime(datetime_cache, &fields.datetime);
+    write_csv_field(writer, &mut first, &dt)?;
+
+    if fields.layout.show_inputs {
+        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
+        write_csv_field(writer, &mut first, &deltat)?;
+    }
+
+    let azimuth = format_f64_fixed(fields.azimuth, 4);
+    write_csv_field(writer, &mut first, &azimuth)?;
+    let angle = format_f64_fixed(fields.angle_value, 4);
+    write_csv_field(writer, &mut first, &angle)?;
+
+    writer.write_all(b"\n").map_err(|e| e.to_string())
+}
+
+fn write_sunrise_csv<W: std::io::Write>(
+    writer: &mut W,
+    fields: &SunriseFields,
+    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
+    fixed_decimal_cache: &mut FixedDecimalCache,
+) -> Result<(), String> {
+    let mut first = true;
+
+    if fields.layout.show_inputs {
+        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
+        write_csv_field(writer, &mut first, &lat)?;
+        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
+        write_csv_field(writer, &mut first, &lon)?;
+        let date_time = cached_datetime(datetime_cache, &fields.date_time);
+        write_csv_field(writer, &mut first, &date_time)?;
+        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
+        write_csv_field(writer, &mut first, &deltat)?;
+    } else {
+        let date_time = cached_datetime(datetime_cache, &fields.date_time);
+        write_csv_field(writer, &mut first, &date_time)?;
+    }
+
+    write_csv_field(writer, &mut first, fields.type_label)?;
+    let sunrise = fields
+        .sunrise
+        .as_ref()
+        .map(|dt| cached_datetime(datetime_cache, dt))
+        .unwrap_or_default();
+    write_csv_field(writer, &mut first, &sunrise)?;
+    let transit = cached_datetime(datetime_cache, &fields.transit);
+    write_csv_field(writer, &mut first, &transit)?;
+    let sunset = fields
+        .sunset
+        .as_ref()
+        .map(|dt| cached_datetime(datetime_cache, dt))
+        .unwrap_or_default();
+    write_csv_field(writer, &mut first, &sunset)?;
+
+    if fields.layout.include_twilight {
+        let civil_start = fields
+            .civil_start
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &civil_start)?;
+        let civil_end = fields
+            .civil_end
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &civil_end)?;
+        let nautical_start = fields
+            .nautical_start
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &nautical_start)?;
+        let nautical_end = fields
+            .nautical_end
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &nautical_end)?;
+        let astro_start = fields
+            .astro_start
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &astro_start)?;
+        let astro_end = fields
+            .astro_end
+            .as_ref()
+            .map(|dt| cached_datetime(datetime_cache, dt))
+            .unwrap_or_default();
+        write_csv_field(writer, &mut first, &astro_end)?;
+    }
+
+    writer.write_all(b"\n").map_err(|e| e.to_string())
 }
 
 fn sunrise_fields(row: &SunriseRow, layout: SunriseLayout) -> SunriseFields {
@@ -742,110 +920,6 @@ where
             .write_all(field.as_ref().as_bytes())
             .map_err(|e| e.to_string())?;
     }
-    writer.write_all(b"\n").map_err(|e| e.to_string())
-}
-
-fn write_csv_field<W: std::io::Write>(
-    writer: &mut W,
-    first: &mut bool,
-    value: &str,
-) -> Result<(), String> {
-    if *first {
-        *first = false;
-    } else {
-        writer.write_all(b",").map_err(|e| e.to_string())?;
-    }
-    writer
-        .write_all(value.as_bytes())
-        .map_err(|e| e.to_string())
-}
-
-fn write_position_csv<W: std::io::Write>(
-    writer: &mut W,
-    fields: &PositionFields,
-    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-    fixed_decimal_cache: &mut FixedDecimalCache,
-) -> Result<(), String> {
-    let mut first = true;
-
-    if fields.layout.show_inputs {
-        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
-        write_csv_field(writer, &mut first, &lat)?;
-        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
-        write_csv_field(writer, &mut first, &lon)?;
-        let elevation = cached_f64_fixed(fixed_decimal_cache, fields.elevation, 3);
-        write_csv_field(writer, &mut first, &elevation)?;
-        if fields.layout.include_refraction {
-            let (pressure, temperature) = fields.refraction.expect("refraction values set");
-            let pressure = cached_f64_fixed(fixed_decimal_cache, pressure, 3);
-            write_csv_field(writer, &mut first, &pressure)?;
-            let temperature = cached_f64_fixed(fixed_decimal_cache, temperature, 3);
-            write_csv_field(writer, &mut first, &temperature)?;
-        }
-    }
-
-    let dt = cached_datetime(datetime_cache, &fields.datetime);
-    write_csv_field(writer, &mut first, &dt)?;
-
-    if fields.layout.show_inputs {
-        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
-        write_csv_field(writer, &mut first, &deltat)?;
-    }
-
-    let azimuth = format_f64_fixed(fields.azimuth, 4);
-    write_csv_field(writer, &mut first, &azimuth)?;
-    let angle = format_f64_fixed(fields.angle_value, 4);
-    write_csv_field(writer, &mut first, &angle)?;
-
-    writer.write_all(b"\n").map_err(|e| e.to_string())
-}
-
-fn write_sunrise_csv<W: std::io::Write>(
-    writer: &mut W,
-    fields: &SunriseFields,
-    fixed_decimal_cache: &mut FixedDecimalCache,
-) -> Result<(), String> {
-    let mut first = true;
-
-    if fields.layout.show_inputs {
-        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
-        write_csv_field(writer, &mut first, &lat)?;
-        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
-        write_csv_field(writer, &mut first, &lon)?;
-        let date_time = format_rfc3339(&fields.date_time);
-        write_csv_field(writer, &mut first, &date_time)?;
-        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
-        write_csv_field(writer, &mut first, &deltat)?;
-    } else {
-        let date_time = format_rfc3339(&fields.date_time);
-        write_csv_field(writer, &mut first, &date_time)?;
-    }
-
-    write_csv_field(writer, &mut first, fields.type_label)?;
-    let sunrise = format_datetime_opt(fields.sunrise.as_ref());
-    write_csv_field(writer, &mut first, &sunrise)?;
-    let transit = format_rfc3339(&fields.transit);
-    write_csv_field(writer, &mut first, &transit)?;
-    let sunset = format_datetime_opt(fields.sunset.as_ref());
-    write_csv_field(writer, &mut first, &sunset)?;
-
-    if fields.layout.include_twilight {
-        let format_twilight =
-            |dt: Option<&DateTime<FixedOffset>>| dt.map(format_rfc3339).unwrap_or_default();
-        let civil_start = format_twilight(fields.civil_start.as_ref());
-        write_csv_field(writer, &mut first, &civil_start)?;
-        let civil_end = format_twilight(fields.civil_end.as_ref());
-        write_csv_field(writer, &mut first, &civil_end)?;
-        let nautical_start = format_twilight(fields.nautical_start.as_ref());
-        write_csv_field(writer, &mut first, &nautical_start)?;
-        let nautical_end = format_twilight(fields.nautical_end.as_ref());
-        write_csv_field(writer, &mut first, &nautical_end)?;
-        let astro_start = format_twilight(fields.astro_start.as_ref());
-        write_csv_field(writer, &mut first, &astro_start)?;
-        let astro_end = format_twilight(fields.astro_end.as_ref());
-        write_csv_field(writer, &mut first, &astro_end)?;
-    }
-
     writer.write_all(b"\n").map_err(|e| e.to_string())
 }
 
@@ -1107,5 +1181,101 @@ mod tests {
 
         assert_eq!(writer.flushes, 1);
         assert!(!writer.buf.is_empty());
+    }
+
+    fn split_csv_line(buf: Vec<u8>) -> Vec<String> {
+        String::from_utf8(buf)
+            .expect("valid utf8")
+            .trim_end_matches('\n')
+            .split(',')
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn position_text_and_csv_field_order_match() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+        let params = Parameters {
+            output: OutputOptions {
+                show_inputs: Some(true),
+                elevation_angle: true,
+                ..OutputOptions::default()
+            },
+            ..Parameters::default()
+        };
+        let row = PositionRow {
+            lat: 52.0,
+            lon: 13.4,
+            datetime: dt,
+            deltat: 69.123,
+            azimuth: 180.12345,
+            zenith: 45.98765,
+        };
+        let fields = position_fields(&row, &params, PositionLayout::from_params(&params));
+        let out_row = OutputRow::Position(fields);
+
+        let mut values = Vec::new();
+        let mut text_dt_cache = std::collections::HashMap::new();
+        let mut text_num_cache = std::collections::HashMap::new();
+        out_row.csv_values_into(&mut text_dt_cache, &mut text_num_cache, &mut values);
+
+        let mut bytes = Vec::new();
+        let mut csv_dt_cache = std::collections::HashMap::new();
+        let mut csv_num_cache = std::collections::HashMap::new();
+        out_row
+            .write_csv(&mut bytes, &mut csv_dt_cache, &mut csv_num_cache)
+            .expect("csv write");
+
+        assert_eq!(split_csv_line(bytes), values);
+    }
+
+    #[test]
+    fn sunrise_text_and_csv_field_order_match() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 0, 0, 0).unwrap();
+        let params = Parameters {
+            output: OutputOptions {
+                show_inputs: Some(true),
+                ..OutputOptions::default()
+            },
+            calculation: crate::data::config::CalculationOptions {
+                twilight: true,
+                ..crate::data::config::CalculationOptions::default()
+            },
+            ..Parameters::default()
+        };
+        let row = SunriseRow {
+            lat: 52.0,
+            lon: 13.4,
+            date_time: dt,
+            deltat: 69.123,
+            type_label: "NORMAL",
+            sunrise: Some(dt + chrono::Duration::hours(4)),
+            transit: dt + chrono::Duration::hours(12),
+            sunset: Some(dt + chrono::Duration::hours(20)),
+            civil_start: Some(dt + chrono::Duration::hours(3)),
+            civil_end: Some(dt + chrono::Duration::hours(21)),
+            nautical_start: Some(dt + chrono::Duration::hours(2)),
+            nautical_end: Some(dt + chrono::Duration::hours(22)),
+            astro_start: Some(dt + chrono::Duration::hours(1)),
+            astro_end: Some(dt + chrono::Duration::hours(23)),
+        };
+        let fields = sunrise_fields(&row, SunriseLayout::from_params(&params));
+        let out_row = OutputRow::Sunrise(fields);
+
+        let mut values = Vec::new();
+        let mut text_dt_cache = std::collections::HashMap::new();
+        let mut text_num_cache = std::collections::HashMap::new();
+        out_row.csv_values_into(&mut text_dt_cache, &mut text_num_cache, &mut values);
+
+        let mut bytes = Vec::new();
+        let mut csv_dt_cache = std::collections::HashMap::new();
+        let mut csv_num_cache = std::collections::HashMap::new();
+        out_row
+            .write_csv(&mut bytes, &mut csv_dt_cache, &mut csv_num_cache)
+            .expect("csv write");
+
+        assert_eq!(split_csv_line(bytes), values);
     }
 }
