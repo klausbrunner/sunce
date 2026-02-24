@@ -8,9 +8,6 @@ pub struct ComputePlan {
     pub command: Command,
     pub params: Parameters,
     pub allow_time_cache: bool,
-}
-
-pub struct OutputPlan {
     pub flush_each_record: bool,
 }
 
@@ -18,7 +15,7 @@ pub fn build_job(
     source: DataSource,
     command: Command,
     params: Parameters,
-) -> Result<(ComputePlan, OutputPlan), PlannerError> {
+) -> Result<ComputePlan, PlannerError> {
     let data_iter = match &source {
         DataSource::Separate(loc_source, time_source) => data::expand_cartesian_product(
             loc_source.clone(),
@@ -32,15 +29,11 @@ pub fn build_job(
             .map_err(PlannerError::from),
     }?;
 
-    let allow_time_cache = !source.is_watch_mode(&params.step);
-    let flush_each_record = source.uses_stdin() || source.is_watch_mode(&params.step);
-
-    let compute_plan = ComputePlan {
+    Ok(ComputePlan {
         data_iter,
         command,
+        allow_time_cache: !source.is_watch_mode(&params.step),
+        flush_each_record: source.uses_stdin() || source.is_watch_mode(&params.step),
         params,
-        allow_time_cache,
-    };
-    let output_plan = OutputPlan { flush_each_record };
-    Ok((compute_plan, output_plan))
+    })
 }

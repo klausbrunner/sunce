@@ -436,22 +436,18 @@ fn test_now_timestamp_consistency() {
         .get_output();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines: Vec<&str> = stdout.lines().collect();
+    let (headers, rows) = parse_csv_output(&stdout);
 
-    // Should have header + 2 data lines (one for each coordinate)
-    assert_eq!(lines.len(), 3, "Should have header + 2 data rows");
+    // Should have 2 data lines (one for each coordinate)
+    assert_eq!(rows.len(), 2, "Should have 2 data rows");
 
-    // Extract timestamps from both data lines
-    let mut timestamps = Vec::new();
-    for line in lines.iter().skip(1) {
-        // Skip header
-        if line.contains(',') {
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 6 {
-                timestamps.push(parts[5]); // dateTime field
-            }
-        }
-    }
+    let timestamps = rows
+        .iter()
+        .map(|row| {
+            let record = csv_row_map(&headers, row);
+            record["dateTime"].clone()
+        })
+        .collect::<Vec<_>>();
 
     assert_eq!(timestamps.len(), 2, "Should have extracted 2 timestamps");
 

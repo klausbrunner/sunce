@@ -225,48 +225,41 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
         );
     }
 
-    let lat_range = match parse_range(lat_str)? {
-        Some(range) => Some(data::validate_latitude_range(range).map_err(CliError::from)?),
-        None => None,
-    };
-    let lon_range = match parse_range(lon_str)? {
-        Some(range) => Some(data::validate_longitude_range(range).map_err(CliError::from)?),
-        None => None,
-    };
+    fn parse_latitude(value: &str) -> CliResult<f64> {
+        value
+            .parse::<f64>()
+            .map_err(|_| CliError::from(format!("Invalid latitude: {}", value)))
+            .and_then(|value| data::validate_latitude(value).map_err(CliError::from))
+    }
+
+    fn parse_longitude(value: &str) -> CliResult<f64> {
+        value
+            .parse::<f64>()
+            .map_err(|_| CliError::from(format!("Invalid longitude: {}", value)))
+            .and_then(|value| data::validate_longitude(value).map_err(CliError::from))
+    }
+
+    let lat_range = parse_range(lat_str)?
+        .map(|range| data::validate_latitude_range(range).map_err(CliError::from))
+        .transpose()?;
+    let lon_range = parse_range(lon_str)?
+        .map(|range| data::validate_longitude_range(range).map_err(CliError::from))
+        .transpose()?;
 
     match (lat_range, lon_range) {
         (Some(lat), Some(lon)) => Ok(LocationSource::Range { lat, lon }),
-        (Some(lat), None) => {
-            let lon_val = lon_str
-                .parse::<f64>()
-                .map_err(|_| CliError::from(format!("Invalid longitude: {}", lon_str)))?;
-            let lon_valid = data::validate_longitude(lon_val).map_err(CliError::from)?;
-            Ok(LocationSource::Range {
-                lat,
-                lon: (lon_valid, lon_valid, 0.0),
-            })
-        }
-        (None, Some(lon)) => {
-            let lat_val = lat_str
-                .parse::<f64>()
-                .map_err(|_| CliError::from(format!("Invalid latitude: {}", lat_str)))?;
-            let lat_valid = data::validate_latitude(lat_val).map_err(CliError::from)?;
-            Ok(LocationSource::Range {
-                lat: (lat_valid, lat_valid, 0.0),
-                lon,
-            })
-        }
-        (None, None) => {
-            let lat_value = lat_str
-                .parse::<f64>()
-                .map_err(|_| CliError::from(format!("Invalid latitude: {}", lat_str)))?;
-            let lon_value = lon_str
-                .parse::<f64>()
-                .map_err(|_| CliError::from(format!("Invalid longitude: {}", lon_str)))?;
-            let lat = data::validate_latitude(lat_value).map_err(CliError::from)?;
-            let lon = data::validate_longitude(lon_value).map_err(CliError::from)?;
-            Ok(LocationSource::Single(lat, lon))
-        }
+        (Some(lat), None) => parse_longitude(lon_str).map(|lon| LocationSource::Range {
+            lat,
+            lon: (lon, lon, 0.0),
+        }),
+        (None, Some(lon)) => parse_latitude(lat_str).map(|lat| LocationSource::Range {
+            lat: (lat, lat, 0.0),
+            lon,
+        }),
+        (None, None) => Ok(LocationSource::Single(
+            parse_latitude(lat_str)?,
+            parse_longitude(lon_str)?,
+        )),
     }
 }
 
@@ -282,17 +275,15 @@ fn parse_positional_args(
         return Err("Need at least command and one argument".into());
     }
 
-    let command = if positional_args[command_index] == "position" {
-        Command::Position
-    } else {
-        Command::Sunrise
+    let command = match positional_args[command_index].as_str() {
+        "position" => Command::Position,
+        "sunrise" => Command::Sunrise,
+        _ => unreachable!("filtered above"),
     };
-
-    let data_args = &positional_args[..command_index];
-
-    let data_source = parse_data_source(data_args, params, command)?;
-
-    Ok((command, data_source))
+    Ok((
+        command,
+        parse_data_source(&positional_args[..command_index], params, command)?,
+    ))
 }
 
 fn parse_data_source(
@@ -302,42 +293,30 @@ fn parse_data_source(
 ) -> CliResult<DataSource> {
     match args.len() {
         1 => {
-            let arg = &args[0];
-            if arg.starts_with('@') {
-                Ok(DataSource::Paired(parse_file_arg(arg)?))
+            if args[0].starts_with('@') {
+                parse_file_arg(&args[0]).map(DataSource::Paired)
             } else {
                 Err("Single argument must be a file (@file or @-)".into())
             }
         }
         2 => {
-            let arg1 = &args[0];
-            let arg2 = &args[1];
-
-            if arg1.starts_with('@') && arg2.starts_with('@') {
-                let coord_path = parse_file_arg(arg1)?;
-                let time_path = parse_file_arg(arg2)?;
-
-                let location_source = LocationSource::File(coord_path);
-                let time_source = TimeSource::File(time_path);
-                Ok(DataSource::Separate(location_source, time_source))
-            } else if arg1.starts_with('@') {
-                let location_source = LocationSource::File(parse_file_arg(arg1)?);
-                let time_source = parse_time_arg(arg2, params, command)?;
-                Ok(DataSource::Separate(location_source, time_source))
-            } else {
+            if !args[0].starts_with('@') {
                 Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into())
+            } else {
+                Ok(DataSource::Separate(
+                    LocationSource::File(parse_file_arg(&args[0])?),
+                    if args[1].starts_with('@') {
+                        TimeSource::File(parse_file_arg(&args[1])?)
+                    } else {
+                        parse_time_arg(&args[1], params, command)?
+                    },
+                ))
             }
         }
-        3 => {
-            let lat_str = &args[0];
-            let lon_str = &args[1];
-            let time_str = &args[2];
-
-            let location_source = parse_location_args(lat_str, lon_str)?;
-            let time_source = parse_time_arg(time_str, params, command)?;
-
-            Ok(DataSource::Separate(location_source, time_source))
-        }
+        3 => Ok(DataSource::Separate(
+            parse_location_args(&args[0], &args[1])?,
+            parse_time_arg(&args[2], params, command)?,
+        )),
         _ => Err("Too many arguments".into()),
     }
 }
@@ -351,15 +330,10 @@ fn parse_time_arg(time_str: &str, params: &Parameters, command: Command) -> CliR
         return Ok(TimeSource::Now);
     }
 
-    if crate::data::time_utils::is_partial_date(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string()));
-    }
-
-    if command == Command::Position && crate::data::time_utils::is_date_without_time(time_str) {
-        return Ok(TimeSource::Range(time_str.to_string()));
-    }
-
-    if params.step.is_some() && crate::data::time_utils::is_date_without_time(time_str) {
+    let is_date_only = crate::data::time_utils::is_date_without_time(time_str);
+    if crate::data::time_utils::is_partial_date(time_str)
+        || (is_date_only && (command == Command::Position || params.step.is_some()))
+    {
         return Ok(TimeSource::Range(time_str.to_string()));
     }
 
@@ -429,40 +403,44 @@ fn get_version_text() -> String {
 }
 
 fn validate_command_options(command: Command, usage: &CommandOptionUsage) -> CliResult<()> {
-    if command == Command::Position {
-        if usage.horizon {
-            return Err("Option --horizon not valid for position command".into());
-        }
-        if usage.twilight {
-            return Err("Option --twilight not valid for position command".into());
-        }
+    fn first_used(options: &[(bool, &'static str)]) -> Option<&'static str> {
+        options
+            .iter()
+            .find_map(|(used, name)| used.then_some(*name))
     }
 
-    if command == Command::Sunrise {
-        if usage.step {
-            return Err("Option --step not valid for sunrise command".into());
+    let invalid_option = match command {
+        Command::Position => {
+            first_used(&[(usage.horizon, "--horizon"), (usage.twilight, "--twilight")])
         }
-        if usage.no_refraction {
-            return Err("Option --no-refraction not valid for sunrise command".into());
-        }
-        if usage.elevation_angle {
-            return Err("Option --elevation-angle not valid for sunrise command".into());
-        }
-        if usage.elevation {
-            return Err("Option --elevation not valid for sunrise command".into());
-        }
-        if usage.temperature {
-            return Err("Option --temperature not valid for sunrise command".into());
-        }
-        if usage.pressure {
-            return Err("Option --pressure not valid for sunrise command".into());
-        }
-        if usage.algorithm {
-            return Err("Option --algorithm not valid for sunrise command".into());
-        }
-    }
+        Command::Sunrise => first_used(&[
+            (usage.step, "--step"),
+            (usage.no_refraction, "--no-refraction"),
+            (usage.elevation_angle, "--elevation-angle"),
+            (usage.elevation, "--elevation"),
+            (usage.temperature, "--temperature"),
+            (usage.pressure, "--pressure"),
+            (usage.algorithm, "--algorithm"),
+        ]),
+    };
 
-    Ok(())
+    invalid_option
+        .map(|name| {
+            Err(format!(
+                "Option {} not valid for {} command",
+                name,
+                command_name(command)
+            )
+            .into())
+        })
+        .unwrap_or(Ok(()))
+}
+
+fn command_name(command: Command) -> &'static str {
+    match command {
+        Command::Position => "position",
+        Command::Sunrise => "sunrise",
+    }
 }
 
 fn get_help_text() -> String {

@@ -14,33 +14,26 @@ fn main() {
 
     match cli::parse_cli(args) {
         Ok((source, command, params)) => {
-            // Performance monitoring setup
-            let start = if params.perf {
-                Some(std::time::Instant::now())
-            } else {
-                None
-            };
-
-            let (compute_plan, output_plan) = match planner::build_job(source, command, params) {
-                Ok(spec) => spec,
-                Err(err) => {
-                    eprintln!("Error: {}", err);
-                    std::process::exit(1);
-                }
-            };
+            let start = params.perf.then(std::time::Instant::now);
 
             let planner::ComputePlan {
                 data_iter,
                 command,
                 params,
                 allow_time_cache,
-            } = compute_plan;
+                flush_each_record,
+            } = match planner::build_job(source, command, params) {
+                Ok(plan) => plan,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    std::process::exit(1);
+                }
+            };
 
             let results =
                 compute::calculate_stream(data_iter, command, params.clone(), allow_time_cache);
-
             let record_count =
-                match output::dispatch_output(results, command, &params, &output_plan) {
+                match output::dispatch_output(results, command, &params, flush_each_record) {
                     Ok(count) => count,
                     Err(err) => {
                         eprintln!("Error: {}", err);
@@ -48,7 +41,6 @@ fn main() {
                     }
                 };
 
-            // Report performance if requested
             if let Some(start_time) = start {
                 let elapsed = start_time.elapsed();
                 eprintln!(

@@ -12,11 +12,12 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use std::io::Write;
+use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
-type DateTimeCache = std::collections::HashMap<chrono::DateTime<chrono::FixedOffset>, String>;
+type DateTimeCache = HashMap<chrono::DateTime<chrono::FixedOffset>, String>;
 
 fn cached_datetime(
     cache: &mut DateTimeCache,
@@ -28,61 +29,294 @@ fn cached_datetime(
         .clone()
 }
 
-fn append_opt_time(
+fn append_time(
+    builder: &mut StringBuilder,
+    time: &chrono::DateTime<chrono::FixedOffset>,
+    datetime_cache: &mut DateTimeCache,
+) {
+    builder.append_value(cached_datetime(datetime_cache, time));
+}
+
+fn parquet_error(message: impl Into<String>) -> io::Error {
+    io::Error::other(message.into())
+}
+
+struct PositionBatchBuilders {
+    latitude: Option<Float64Builder>,
+    longitude: Option<Float64Builder>,
+    elevation: Option<Float64Builder>,
+    pressure: Option<Float64Builder>,
+    temperature: Option<Float64Builder>,
+    date_time: StringBuilder,
+    delta_t: Option<Float64Builder>,
+    azimuth: Float64Builder,
+    angle: Float64Builder,
+}
+
+impl PositionBatchBuilders {
+    fn new(layout: PositionLayout) -> Self {
+        Self {
+            latitude: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            longitude: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            elevation: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            pressure: (layout.show_inputs && layout.include_refraction)
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            temperature: (layout.show_inputs && layout.include_refraction)
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            date_time: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 30),
+            delta_t: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            azimuth: Float64Builder::with_capacity(BATCH_SIZE),
+            angle: Float64Builder::with_capacity(BATCH_SIZE),
+        }
+    }
+
+    fn append_row(
+        &mut self,
+        row: &crate::output::PositionRow,
+        params: &Parameters,
+        layout: PositionLayout,
+        datetime_cache: &mut DateTimeCache,
+    ) {
+        if layout.show_inputs {
+            self.latitude.as_mut().unwrap().append_value(row.lat);
+            self.longitude.as_mut().unwrap().append_value(row.lon);
+            self.elevation
+                .as_mut()
+                .unwrap()
+                .append_value(params.environment.elevation);
+            if layout.include_refraction {
+                self.pressure
+                    .as_mut()
+                    .unwrap()
+                    .append_value(params.environment.pressure);
+                self.temperature
+                    .as_mut()
+                    .unwrap()
+                    .append_value(params.environment.temperature);
+            }
+            self.delta_t.as_mut().unwrap().append_value(row.deltat);
+        }
+
+        self.date_time
+            .append_value(cached_datetime(datetime_cache, &row.datetime));
+        self.azimuth.append_value(row.azimuth);
+        self.angle
+            .append_value(row.angle(layout.uses_elevation_angle()));
+    }
+
+    fn flush<W: Write + Send>(
+        &mut self,
+        writer: &mut ArrowWriter<W>,
+        schema: &Arc<Schema>,
+    ) -> io::Result<()> {
+        let mut arrays = Vec::with_capacity(schema.fields().len());
+        finish_optional_f64(&mut self.latitude, &mut arrays);
+        finish_optional_f64(&mut self.longitude, &mut arrays);
+        finish_optional_f64(&mut self.elevation, &mut arrays);
+        finish_optional_f64(&mut self.pressure, &mut arrays);
+        finish_optional_f64(&mut self.temperature, &mut arrays);
+        finish_string(&mut self.date_time, BATCH_SIZE * 30, &mut arrays);
+        finish_optional_f64(&mut self.delta_t, &mut arrays);
+        finish_f64(&mut self.azimuth, &mut arrays);
+        finish_f64(&mut self.angle, &mut arrays);
+        write_batch(writer, schema, arrays)
+    }
+}
+
+struct SunriseBatchBuilders {
+    latitude: Option<Float64Builder>,
+    longitude: Option<Float64Builder>,
+    date_time: StringBuilder,
+    delta_t: Option<Float64Builder>,
+    kind: StringBuilder,
+    sunrise: StringBuilder,
+    transit: StringBuilder,
+    sunset: StringBuilder,
+    civil_start: Option<StringBuilder>,
+    civil_end: Option<StringBuilder>,
+    nautical_start: Option<StringBuilder>,
+    nautical_end: Option<StringBuilder>,
+    astronomical_start: Option<StringBuilder>,
+    astronomical_end: Option<StringBuilder>,
+}
+
+impl SunriseBatchBuilders {
+    fn new(layout: SunriseLayout) -> Self {
+        Self {
+            latitude: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            longitude: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            date_time: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 30),
+            delta_t: layout
+                .show_inputs
+                .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
+            kind: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10),
+            sunrise: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
+            transit: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
+            sunset: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
+            civil_start: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            civil_end: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            nautical_start: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            nautical_end: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            astronomical_start: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            astronomical_end: layout
+                .include_twilight
+                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+        }
+    }
+
+    fn append_row(
+        &mut self,
+        row: &crate::output::SunriseRow,
+        layout: SunriseLayout,
+        datetime_cache: &mut DateTimeCache,
+    ) -> io::Result<()> {
+        if layout.show_inputs {
+            self.latitude.as_mut().unwrap().append_value(row.lat);
+            self.longitude.as_mut().unwrap().append_value(row.lon);
+            self.delta_t.as_mut().unwrap().append_value(row.deltat);
+        }
+
+        self.date_time
+            .append_value(cached_datetime(datetime_cache, &row.date_time));
+        self.kind.append_value(row.type_label);
+
+        match row.type_label {
+            "NORMAL" => {
+                append_time(
+                    &mut self.sunrise,
+                    row.sunrise.as_ref().expect("sunrise expected"),
+                    datetime_cache,
+                );
+                append_time(&mut self.transit, &row.transit, datetime_cache);
+                append_time(
+                    &mut self.sunset,
+                    row.sunset.as_ref().expect("sunset expected"),
+                    datetime_cache,
+                );
+            }
+            "ALL_DAY" | "ALL_NIGHT" => {
+                self.sunrise.append_null();
+                append_time(&mut self.transit, &row.transit, datetime_cache);
+                self.sunset.append_null();
+            }
+            other => return Err(parquet_error(format!("Unknown sunrise type: {other}"))),
+        }
+
+        append_optional_time(
+            &mut self.civil_start,
+            row.civil_start.as_ref(),
+            datetime_cache,
+        );
+        append_optional_time(&mut self.civil_end, row.civil_end.as_ref(), datetime_cache);
+        append_optional_time(
+            &mut self.nautical_start,
+            row.nautical_start.as_ref(),
+            datetime_cache,
+        );
+        append_optional_time(
+            &mut self.nautical_end,
+            row.nautical_end.as_ref(),
+            datetime_cache,
+        );
+        append_optional_time(
+            &mut self.astronomical_start,
+            row.astro_start.as_ref(),
+            datetime_cache,
+        );
+        append_optional_time(
+            &mut self.astronomical_end,
+            row.astro_end.as_ref(),
+            datetime_cache,
+        );
+
+        Ok(())
+    }
+
+    fn flush<W: Write + Send>(
+        &mut self,
+        writer: &mut ArrowWriter<W>,
+        schema: &Arc<Schema>,
+    ) -> io::Result<()> {
+        let mut arrays = Vec::with_capacity(schema.fields().len());
+        finish_optional_f64(&mut self.latitude, &mut arrays);
+        finish_optional_f64(&mut self.longitude, &mut arrays);
+        finish_string(&mut self.date_time, BATCH_SIZE * 30, &mut arrays);
+        finish_optional_f64(&mut self.delta_t, &mut arrays);
+        finish_string(&mut self.kind, BATCH_SIZE * 10, &mut arrays);
+        finish_string(&mut self.sunrise, BATCH_SIZE * 25, &mut arrays);
+        finish_string(&mut self.transit, BATCH_SIZE * 25, &mut arrays);
+        finish_string(&mut self.sunset, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.civil_start, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.civil_end, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.nautical_start, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.nautical_end, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.astronomical_start, BATCH_SIZE * 25, &mut arrays);
+        finish_optional_string(&mut self.astronomical_end, BATCH_SIZE * 25, &mut arrays);
+        write_batch(writer, schema, arrays)
+    }
+}
+
+fn append_optional_time(
     builder: &mut Option<StringBuilder>,
     time: Option<&chrono::DateTime<chrono::FixedOffset>>,
     datetime_cache: &mut DateTimeCache,
 ) {
-    if let Some(b) = builder {
+    if let Some(builder) = builder {
         match time {
-            Some(t) => append_time(b, t, datetime_cache),
-            None => b.append_null(),
+            Some(time) => append_time(builder, time, datetime_cache),
+            None => builder.append_null(),
         }
     }
 }
 
-// Helper to create optional Float64Builder
-fn opt_f64_builder(condition: bool) -> Option<Float64Builder> {
-    condition.then(|| Float64Builder::with_capacity(BATCH_SIZE))
-}
-
-// Helper to create optional StringBuilder
-fn opt_string_builder(condition: bool, capacity: usize) -> Option<StringBuilder> {
-    condition.then(|| StringBuilder::with_capacity(BATCH_SIZE, capacity))
-}
-
-// Helper to finish and reset Float64Builder
-fn finish_and_reset_f64(builder: &mut Option<Float64Builder>, arrays: &mut Vec<ArrayRef>) {
-    if let Some(b) = builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = Float64Builder::with_capacity(BATCH_SIZE);
+fn finish_optional_f64(builder: &mut Option<Float64Builder>, arrays: &mut Vec<ArrayRef>) {
+    if let Some(builder) = builder {
+        arrays.push(Arc::new(builder.finish()) as ArrayRef);
+        *builder = Float64Builder::with_capacity(BATCH_SIZE);
     }
 }
 
-// Helper to finish and reset StringBuilder
-fn finish_and_reset_string(
-    builder: &mut Option<StringBuilder>,
-    arrays: &mut Vec<ArrayRef>,
-    capacity: usize,
-) {
-    if let Some(b) = builder {
-        arrays.push(Arc::new(b.finish()) as ArrayRef);
-        *b = StringBuilder::with_capacity(BATCH_SIZE, capacity);
-    }
-}
-
-fn finish_and_reset_f64_required(builder: &mut Float64Builder, arrays: &mut Vec<ArrayRef>) {
+fn finish_f64(builder: &mut Float64Builder, arrays: &mut Vec<ArrayRef>) {
     arrays.push(Arc::new(builder.finish()) as ArrayRef);
     *builder = Float64Builder::with_capacity(BATCH_SIZE);
 }
 
-fn finish_and_reset_string_required(
-    builder: &mut StringBuilder,
-    arrays: &mut Vec<ArrayRef>,
-    capacity: usize,
-) {
+fn finish_string(builder: &mut StringBuilder, capacity: usize, arrays: &mut Vec<ArrayRef>) {
     arrays.push(Arc::new(builder.finish()) as ArrayRef);
     *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
+}
+
+fn finish_optional_string(
+    builder: &mut Option<StringBuilder>,
+    capacity: usize,
+    arrays: &mut Vec<ArrayRef>,
+) {
+    if let Some(builder) = builder {
+        arrays.push(Arc::new(builder.finish()) as ArrayRef);
+        *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
+    }
 }
 
 pub fn write_parquet<W: Write + Send>(
@@ -90,7 +324,7 @@ pub fn write_parquet<W: Write + Send>(
     command: Command,
     params: &Parameters,
     writer: W,
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     match command {
         Command::Position => write_position_parquet(results, params, writer),
         Command::Sunrise => write_sunrise_parquet(results, params, writer),
@@ -101,139 +335,94 @@ fn write_position_parquet<W: Write + Send>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     writer: W,
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     let layout = PositionLayout::from_params(params);
     let schema = build_position_schema(layout);
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
-
-    let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
-        .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
-
-    let mut lat_builder = opt_f64_builder(layout.show_inputs);
-    let mut lon_builder = opt_f64_builder(layout.show_inputs);
-    let mut elev_builder = opt_f64_builder(layout.show_inputs);
-    let mut press_builder = opt_f64_builder(layout.show_inputs && layout.include_refraction);
-    let mut temp_builder = opt_f64_builder(layout.show_inputs && layout.include_refraction);
-    let mut dt_builder = StringBuilder::with_capacity(BATCH_SIZE, 30);
-    let mut deltat_builder = opt_f64_builder(layout.show_inputs);
-    let mut az_builder = Float64Builder::with_capacity(BATCH_SIZE);
-    let mut angle_builder = Float64Builder::with_capacity(BATCH_SIZE);
-    let mut datetime_cache: DateTimeCache = std::collections::HashMap::with_capacity(2048);
-
+    let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
+        .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
+    let mut builders = PositionBatchBuilders::new(layout);
+    let mut datetime_cache = DateTimeCache::with_capacity(2048);
     let mut batch_count = 0;
     let mut total_count = 0;
 
-    for result_or_err in results {
-        let result = result_or_err.map_err(std::io::Error::other)?;
+    for result in results {
+        let result = result.map_err(io::Error::other)?;
         let row = normalize_position_result(&result)
-            .ok_or_else(|| std::io::Error::other("Unexpected calculation result for position"))?;
-
-        if layout.show_inputs {
-            lat_builder.as_mut().unwrap().append_value(row.lat);
-            lon_builder.as_mut().unwrap().append_value(row.lon);
-            elev_builder
-                .as_mut()
-                .unwrap()
-                .append_value(params.environment.elevation);
-            if layout.include_refraction {
-                press_builder
-                    .as_mut()
-                    .unwrap()
-                    .append_value(params.environment.pressure);
-                temp_builder
-                    .as_mut()
-                    .unwrap()
-                    .append_value(params.environment.temperature);
-            }
-            deltat_builder.as_mut().unwrap().append_value(row.deltat);
-        }
-
-        dt_builder.append_value(cached_datetime(&mut datetime_cache, &row.datetime));
-        az_builder.append_value(row.azimuth);
-        angle_builder.append_value(row.angle(layout.uses_elevation_angle()));
-
+            .ok_or_else(|| parquet_error("Unexpected calculation result for position"))?;
+        builders.append_row(&row, params, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
 
-        if batch_count >= BATCH_SIZE {
-            flush_position_batch(
-                &mut parquet_writer,
-                &schema,
-                &mut lat_builder,
-                &mut lon_builder,
-                &mut elev_builder,
-                &mut press_builder,
-                &mut temp_builder,
-                &mut dt_builder,
-                &mut deltat_builder,
-                &mut az_builder,
-                &mut angle_builder,
-            )?;
+        if batch_count == BATCH_SIZE {
+            builders.flush(&mut writer, &schema)?;
             batch_count = 0;
         }
     }
 
     if batch_count > 0 {
-        flush_position_batch(
-            &mut parquet_writer,
-            &schema,
-            &mut lat_builder,
-            &mut lon_builder,
-            &mut elev_builder,
-            &mut press_builder,
-            &mut temp_builder,
-            &mut dt_builder,
-            &mut deltat_builder,
-            &mut az_builder,
-            &mut angle_builder,
-        )?;
+        builders.flush(&mut writer, &schema)?;
     }
 
-    parquet_writer
+    writer
         .close()
-        .map_err(|e| std::io::Error::other(format!("Failed to close parquet: {}", e)))?;
-
+        .map_err(|e| parquet_error(format!("Failed to close parquet: {e}")))?;
     Ok(total_count)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn flush_position_batch<W: Write + Send>(
-    writer: &mut ArrowWriter<W>,
-    schema: &Arc<Schema>,
-    lat_builder: &mut Option<Float64Builder>,
-    lon_builder: &mut Option<Float64Builder>,
-    elev_builder: &mut Option<Float64Builder>,
-    press_builder: &mut Option<Float64Builder>,
-    temp_builder: &mut Option<Float64Builder>,
-    dt_builder: &mut StringBuilder,
-    deltat_builder: &mut Option<Float64Builder>,
-    az_builder: &mut Float64Builder,
-    angle_builder: &mut Float64Builder,
-) -> std::io::Result<()> {
-    let mut arrays: Vec<ArrayRef> = Vec::new();
+fn write_sunrise_parquet<W: Write + Send>(
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
+    params: &Parameters,
+    writer: W,
+) -> io::Result<usize> {
+    let layout = SunriseLayout::from_params(params);
+    let schema = build_sunrise_schema(layout);
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
+        .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
+    let mut builders = SunriseBatchBuilders::new(layout);
+    let mut datetime_cache = DateTimeCache::with_capacity(2048);
+    let mut batch_count = 0;
+    let mut total_count = 0;
 
-    finish_and_reset_f64(lat_builder, &mut arrays);
-    finish_and_reset_f64(lon_builder, &mut arrays);
-    finish_and_reset_f64(elev_builder, &mut arrays);
-    finish_and_reset_f64(press_builder, &mut arrays);
-    finish_and_reset_f64(temp_builder, &mut arrays);
+    for result in results {
+        let result = result.map_err(io::Error::other)?;
+        let row = normalize_sunrise_result(&result)
+            .ok_or_else(|| parquet_error("Unexpected calculation result for sunrise"))?;
+        builders.append_row(&row, layout, &mut datetime_cache)?;
+        batch_count += 1;
+        total_count += 1;
 
-    finish_and_reset_string_required(dt_builder, &mut arrays, 30);
-    finish_and_reset_f64(deltat_builder, &mut arrays);
+        if batch_count == BATCH_SIZE {
+            builders.flush(&mut writer, &schema)?;
+            batch_count = 0;
+        }
+    }
 
-    finish_and_reset_f64_required(az_builder, &mut arrays);
-    finish_and_reset_f64_required(angle_builder, &mut arrays);
-
-    let batch = RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|e| std::io::Error::other(format!("Failed to create batch: {}", e)))?;
+    if batch_count > 0 {
+        builders.flush(&mut writer, &schema)?;
+    }
 
     writer
-        .write(&batch)
-        .map_err(|e| std::io::Error::other(format!("Failed to write batch: {}", e)))?;
+        .close()
+        .map_err(|e| parquet_error(format!("Failed to close parquet: {e}")))?;
+    Ok(total_count)
+}
 
-    Ok(())
+fn write_batch<W: Write + Send>(
+    writer: &mut ArrowWriter<W>,
+    schema: &Arc<Schema>,
+    arrays: Vec<ArrayRef>,
+) -> io::Result<()> {
+    let batch = RecordBatch::try_new(schema.clone(), arrays)
+        .map_err(|e| parquet_error(format!("Failed to create batch: {e}")))?;
+    writer
+        .write(&batch)
+        .map_err(|e| parquet_error(format!("Failed to write batch: {e}")))
 }
 
 fn build_position_schema(layout: PositionLayout) -> Arc<Schema> {
@@ -250,234 +439,13 @@ fn build_position_schema(layout: PositionLayout) -> Arc<Schema> {
     }
 
     fields.push(Field::new("dateTime", DataType::Utf8, false));
-
     if layout.show_inputs {
         fields.push(Field::new("deltaT", DataType::Float64, false));
     }
-
     fields.push(Field::new("azimuth", DataType::Float64, false));
-
     fields.push(Field::new(layout.angle_label(), DataType::Float64, false));
 
     Arc::new(Schema::new(fields))
-}
-
-fn write_sunrise_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    params: &Parameters,
-    writer: W,
-) -> std::io::Result<usize> {
-    let layout = SunriseLayout::from_params(params);
-    let schema = build_sunrise_schema(layout);
-    let props = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build();
-
-    let mut parquet_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
-        .map_err(|e| std::io::Error::other(format!("Parquet writer error: {}", e)))?;
-
-    let mut lat_builder = opt_f64_builder(layout.show_inputs);
-    let mut lon_builder = opt_f64_builder(layout.show_inputs);
-    let mut date_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-    let mut deltat_builder = opt_f64_builder(layout.show_inputs);
-    let mut type_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10);
-    let mut sunrise_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    let mut transit_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-    let mut sunset_builder = StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25);
-
-    let mut civil_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-    let mut civil_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-    let mut nautical_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-    let mut nautical_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-    let mut astro_start_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-    let mut astro_end_builder = opt_string_builder(layout.include_twilight, BATCH_SIZE * 25);
-
-    let mut batch_count = 0;
-    let mut total_count = 0;
-    let mut datetime_cache: DateTimeCache = std::collections::HashMap::with_capacity(2048);
-
-    for result_or_err in results {
-        let result = result_or_err.map_err(std::io::Error::other)?;
-        let row = normalize_sunrise_result(&result)
-            .ok_or_else(|| std::io::Error::other("Unexpected calculation result for sunrise"))?;
-
-        if layout.show_inputs {
-            lat_builder.as_mut().unwrap().append_value(row.lat);
-            lon_builder.as_mut().unwrap().append_value(row.lon);
-        }
-
-        date_builder.append_value(cached_datetime(&mut datetime_cache, &row.date_time));
-
-        if layout.show_inputs {
-            deltat_builder.as_mut().unwrap().append_value(row.deltat);
-        }
-
-        type_builder.append_value(row.type_label);
-
-        match row.type_label {
-            "NORMAL" => {
-                append_time(
-                    &mut sunrise_builder,
-                    row.sunrise.as_ref().expect("sunrise expected"),
-                    &mut datetime_cache,
-                );
-                append_time(&mut transit_builder, &row.transit, &mut datetime_cache);
-                append_time(
-                    &mut sunset_builder,
-                    row.sunset.as_ref().expect("sunset expected"),
-                    &mut datetime_cache,
-                );
-            }
-            "ALL_DAY" | "ALL_NIGHT" => {
-                sunrise_builder.append_null();
-                append_time(&mut transit_builder, &row.transit, &mut datetime_cache);
-                sunset_builder.append_null();
-            }
-            _ => return Err(std::io::Error::other("Unknown sunrise type")),
-        }
-
-        if layout.include_twilight {
-            append_opt_time(
-                &mut civil_start_builder,
-                row.civil_start.as_ref(),
-                &mut datetime_cache,
-            );
-            append_opt_time(
-                &mut civil_end_builder,
-                row.civil_end.as_ref(),
-                &mut datetime_cache,
-            );
-            append_opt_time(
-                &mut nautical_start_builder,
-                row.nautical_start.as_ref(),
-                &mut datetime_cache,
-            );
-            append_opt_time(
-                &mut nautical_end_builder,
-                row.nautical_end.as_ref(),
-                &mut datetime_cache,
-            );
-            append_opt_time(
-                &mut astro_start_builder,
-                row.astro_start.as_ref(),
-                &mut datetime_cache,
-            );
-            append_opt_time(
-                &mut astro_end_builder,
-                row.astro_end.as_ref(),
-                &mut datetime_cache,
-            );
-        }
-
-        batch_count += 1;
-        total_count += 1;
-
-        if batch_count >= BATCH_SIZE {
-            flush_sunrise_batch(
-                &mut parquet_writer,
-                &schema,
-                &mut lat_builder,
-                &mut lon_builder,
-                &mut date_builder,
-                &mut deltat_builder,
-                &mut type_builder,
-                &mut sunrise_builder,
-                &mut transit_builder,
-                &mut sunset_builder,
-                &mut civil_start_builder,
-                &mut civil_end_builder,
-                &mut nautical_start_builder,
-                &mut nautical_end_builder,
-                &mut astro_start_builder,
-                &mut astro_end_builder,
-            )?;
-            batch_count = 0;
-        }
-    }
-
-    if batch_count > 0 {
-        flush_sunrise_batch(
-            &mut parquet_writer,
-            &schema,
-            &mut lat_builder,
-            &mut lon_builder,
-            &mut date_builder,
-            &mut deltat_builder,
-            &mut type_builder,
-            &mut sunrise_builder,
-            &mut transit_builder,
-            &mut sunset_builder,
-            &mut civil_start_builder,
-            &mut civil_end_builder,
-            &mut nautical_start_builder,
-            &mut nautical_end_builder,
-            &mut astro_start_builder,
-            &mut astro_end_builder,
-        )?;
-    }
-
-    parquet_writer
-        .close()
-        .map_err(|e| std::io::Error::other(format!("Failed to close parquet: {}", e)))?;
-
-    Ok(total_count)
-}
-
-fn append_time(
-    builder: &mut StringBuilder,
-    time: &chrono::DateTime<chrono::FixedOffset>,
-    datetime_cache: &mut DateTimeCache,
-) {
-    builder.append_value(cached_datetime(datetime_cache, time));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn flush_sunrise_batch<W: Write + Send>(
-    writer: &mut ArrowWriter<W>,
-    schema: &Arc<Schema>,
-    lat_builder: &mut Option<Float64Builder>,
-    lon_builder: &mut Option<Float64Builder>,
-    date_builder: &mut StringBuilder,
-    deltat_builder: &mut Option<Float64Builder>,
-    type_builder: &mut StringBuilder,
-    sunrise_builder: &mut StringBuilder,
-    transit_builder: &mut StringBuilder,
-    sunset_builder: &mut StringBuilder,
-    civil_start_builder: &mut Option<StringBuilder>,
-    civil_end_builder: &mut Option<StringBuilder>,
-    nautical_start_builder: &mut Option<StringBuilder>,
-    nautical_end_builder: &mut Option<StringBuilder>,
-    astro_start_builder: &mut Option<StringBuilder>,
-    astro_end_builder: &mut Option<StringBuilder>,
-) -> std::io::Result<()> {
-    let mut arrays: Vec<ArrayRef> = Vec::new();
-
-    finish_and_reset_f64(lat_builder, &mut arrays);
-    finish_and_reset_f64(lon_builder, &mut arrays);
-
-    finish_and_reset_string_required(date_builder, &mut arrays, BATCH_SIZE * 10);
-    finish_and_reset_f64(deltat_builder, &mut arrays);
-
-    finish_and_reset_string_required(type_builder, &mut arrays, BATCH_SIZE * 10);
-    finish_and_reset_string_required(sunrise_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string_required(transit_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string_required(sunset_builder, &mut arrays, BATCH_SIZE * 25);
-
-    finish_and_reset_string(civil_start_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string(civil_end_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string(nautical_start_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string(nautical_end_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string(astro_start_builder, &mut arrays, BATCH_SIZE * 25);
-    finish_and_reset_string(astro_end_builder, &mut arrays, BATCH_SIZE * 25);
-
-    let batch = RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|e| std::io::Error::other(format!("Failed to create batch: {}", e)))?;
-
-    writer
-        .write(&batch)
-        .map_err(|e| std::io::Error::other(format!("Failed to write batch: {}", e)))?;
-
-    Ok(())
 }
 
 fn build_sunrise_schema(layout: SunriseLayout) -> Arc<Schema> {
@@ -489,7 +457,6 @@ fn build_sunrise_schema(layout: SunriseLayout) -> Arc<Schema> {
     }
 
     fields.push(Field::new("dateTime", DataType::Utf8, false));
-
     if layout.show_inputs {
         fields.push(Field::new("deltaT", DataType::Float64, false));
     }

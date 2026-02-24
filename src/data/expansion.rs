@@ -12,6 +12,42 @@ use std::sync::Arc;
 
 type TimeIter = Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>;
 
+struct CoordRangeIter {
+    next: Option<f64>,
+    end: f64,
+    step: f64,
+}
+
+impl CoordRangeIter {
+    fn new(start: f64, end: f64, step: f64) -> Self {
+        Self {
+            next: Some(start),
+            end,
+            step,
+        }
+    }
+}
+
+impl Iterator for CoordRangeIter {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.next?;
+        if self.step == 0.0 || (current - self.end).abs() < f64::EPSILON {
+            self.next = None;
+            return Some(current);
+        }
+
+        let next = current + self.step;
+        self.next = if self.step > 0.0 {
+            (next <= self.end + self.step * 0.5).then_some(next)
+        } else {
+            (next >= self.end + self.step * 0.5).then_some(next)
+        };
+        Some(current)
+    }
+}
+
 struct TimeStepIter {
     tz: TimezoneInfo,
     next: Option<DateTime<FixedOffset>>,
@@ -99,13 +135,17 @@ struct Line {
     ctx: String,
 }
 
+fn input_context(input_path: &InputPath) -> String {
+    match input_path {
+        InputPath::Stdin => "stdin".to_string(),
+        InputPath::File(path) => path.display().to_string(),
+    }
+}
+
 fn read_non_comment_lines(
     input_path: &InputPath,
 ) -> Result<Box<dyn Iterator<Item = Result<Line, String>>>, String> {
-    let ctx = match input_path {
-        InputPath::Stdin => "stdin".to_string(),
-        InputPath::File(p) => p.display().to_string(),
-    };
+    let ctx = input_context(input_path);
 
     let reader = open_input(input_path).map_err(|e| format!("Error opening {}: {}", ctx, e))?;
     let mut lines = reader.lines().enumerate();
@@ -136,21 +176,8 @@ fn read_non_comment_lines(
     })))
 }
 
-fn coord_range_iter(start: f64, end: f64, step: f64) -> Box<dyn Iterator<Item = f64>> {
-    if step == 0.0 || start == end {
-        // Single value case
-        Box::new(std::iter::once(start))
-    } else if step > 0.0 {
-        Box::new(std::iter::successors(Some(start), move |&x| {
-            let next = x + step;
-            (next <= end + step * 0.5).then_some(next)
-        }))
-    } else {
-        Box::new(std::iter::successors(Some(start), move |&x| {
-            let next = x + step;
-            (next >= end + step * 0.5).then_some(next)
-        }))
-    }
+fn coord_range_iter(start: f64, end: f64, step: f64) -> CoordRangeIter {
+    CoordRangeIter::new(start, end, step)
 }
 
 fn range_point_count(start: f64, end: f64, step: f64) -> usize {
@@ -163,11 +190,11 @@ fn range_point_count(start: f64, end: f64, step: f64) -> usize {
     }
 }
 
-fn arc_values(values: Arc<Vec<f64>>) -> impl Iterator<Item = f64> {
-    let mut idx = 0usize;
+fn shared_values(values: Arc<[f64]>) -> impl Iterator<Item = f64> {
+    let mut index = 0usize;
     std::iter::from_fn(move || {
-        let value = values.get(idx).copied();
-        idx += 1;
+        let value = values.get(index).copied();
+        index += 1;
         value
     })
 }
@@ -176,32 +203,30 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
     match source {
         LocationSource::Single(lat, lon) => Ok(Box::new(std::iter::once(Ok((lat, lon))))),
         LocationSource::Range { lat, lon } => {
-            let lat_iter = coord_range_iter(lat.0, lat.1, lat.2);
-
+            let lat_values: Vec<f64> = coord_range_iter(lat.0, lat.1, lat.2).collect();
             let (lon_start, lon_end, lon_step) = lon;
-
-            // Create a vector for one dimension to allow repeated iteration
-            // Choose the smaller dimension to minimize memory usage
             let lat_count = range_point_count(lat.0, lat.1, lat.2);
             let lon_count = range_point_count(lon_start, lon_end, lon_step);
 
             if lat_count <= lon_count {
-                // Collect latitudes (smaller), iterate longitudes
-                let lat_coords = Arc::new(lat_iter.collect::<Vec<f64>>());
+                let lat_coords: Arc<[f64]> = Arc::from(lat_values);
                 Ok(Box::new(
                     coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
                         let lat_coords = Arc::clone(&lat_coords);
-                        arc_values(lat_coords).map(move |lat| Ok::<(f64, f64), String>((lat, lon)))
+                        shared_values(lat_coords)
+                            .map(move |lat| Ok::<(f64, f64), String>((lat, lon)))
                     }),
                 ))
             } else {
-                // Collect longitudes (smaller), iterate latitudes
-                let lon_coords =
-                    Arc::new(coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<f64>>());
-                Ok(Box::new(lat_iter.flat_map(move |lat| {
-                    let lon_coords = Arc::clone(&lon_coords);
-                    arc_values(lon_coords).map(move |lon| Ok::<(f64, f64), String>((lat, lon)))
-                })))
+                let lon_coords: Arc<[f64]> =
+                    Arc::from(coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<_>>());
+                Ok(Box::new(coord_range_iter(lat.0, lat.1, lat.2).flat_map(
+                    move |lat| {
+                        let lon_coords = Arc::clone(&lon_coords);
+                        shared_values(lon_coords)
+                            .map(move |lon| Ok::<(f64, f64), String>((lat, lon)))
+                    },
+                )))
             }
         }
         LocationSource::File(input_path) => {
@@ -416,6 +441,47 @@ fn read_times_file(
     Ok(Box::new(iter))
 }
 
+fn expand_time_outer(
+    loc_source: LocationSource,
+    time_source: TimeSource,
+    step: Option<Step>,
+    override_tz: Option<TimezoneOverride>,
+    command: Command,
+) -> Result<CoordTimeStream, String> {
+    let iter = expand_time_source(time_source, step, override_tz.clone(), command)?.flat_map(
+        move |time_res| match time_res {
+            Ok(dt) => match expand_location_source(loc_source.clone()) {
+                Ok(locations) => Box::new(
+                    locations.map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt))),
+                ) as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            },
+            Err(err) => Box::new(std::iter::once(Err(err))),
+        },
+    );
+    Ok(Box::new(iter))
+}
+
+fn expand_location_outer(
+    loc_source: LocationSource,
+    time_source: TimeSource,
+    step: Option<Step>,
+    override_tz: Option<TimezoneOverride>,
+    command: Command,
+) -> Result<CoordTimeStream, String> {
+    let iter = expand_location_source(loc_source)?.flat_map(move |coord_res| match coord_res {
+        Ok((lat, lon)) => {
+            match expand_time_source(time_source.clone(), step, override_tz.clone(), command) {
+                Ok(times) => Box::new(times.map(move |time_res| time_res.map(|dt| (lat, lon, dt))))
+                    as Box<dyn Iterator<Item = CoordTimeResult>>,
+                Err(err) => Box::new(std::iter::once(Err(err))),
+            }
+        }
+        Err(err) => Box::new(std::iter::once(Err(err))),
+    });
+    Ok(Box::new(iter))
+}
+
 pub fn expand_cartesian_product(
     loc_source: LocationSource,
     time_source: TimeSource,
@@ -423,53 +489,6 @@ pub fn expand_cartesian_product(
     override_tz: Option<TimezoneOverride>,
     command: Command,
 ) -> Result<CoordTimeStream, String> {
-    fn expand_time_first(
-        loc_source: LocationSource,
-        time_source: TimeSource,
-        step: Option<Step>,
-        override_tz: Option<TimezoneOverride>,
-        command: Command,
-    ) -> Result<CoordTimeStream, String> {
-        let loc_for_each_time = loc_source;
-        let iter = expand_time_source(time_source, step, override_tz.clone(), command)?.flat_map(
-            move |time_res| match time_res {
-                Ok(dt) => match expand_location_source(loc_for_each_time.clone()) {
-                    Ok(locations) => Box::new(
-                        locations.map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt))),
-                    )
-                        as Box<dyn Iterator<Item = CoordTimeResult>>,
-                    Err(err) => Box::new(std::iter::once(Err(err))),
-                },
-                Err(err) => Box::new(std::iter::once(Err(err))),
-            },
-        );
-        Ok(Box::new(iter))
-    }
-
-    fn expand_location_first(
-        loc_source: LocationSource,
-        time_source: TimeSource,
-        step: Option<Step>,
-        override_tz: Option<TimezoneOverride>,
-        command: Command,
-    ) -> Result<CoordTimeStream, String> {
-        let time_for_each_location = time_source;
-        let iter = expand_location_source(loc_source)?.flat_map(move |coord_res| match coord_res {
-            Ok((lat, lon)) => match expand_time_source(
-                time_for_each_location.clone(),
-                step,
-                override_tz.clone(),
-                command,
-            ) {
-                Ok(times) => Box::new(times.map(move |time_res| time_res.map(|dt| (lat, lon, dt))))
-                    as Box<dyn Iterator<Item = CoordTimeResult>>,
-                Err(err) => Box::new(std::iter::once(Err(err))),
-            },
-            Err(err) => Box::new(std::iter::once(Err(err))),
-        });
-        Ok(Box::new(iter))
-    }
-
     let loc_is_single = matches!(loc_source, LocationSource::Single(_, _));
     let loc_replayable = !matches!(loc_source, LocationSource::File(InputPath::Stdin));
 
@@ -503,15 +522,13 @@ pub fn expand_cartesian_product(
 
     if time_replayable {
         if loc_replayable {
-            // Iterate times outermost to maximize reuse of cached time-dependent SPA parts.
-            return expand_time_first(loc_source, time_source, step, override_tz, command);
+            return expand_time_outer(loc_source, time_source, step, override_tz, command);
         }
-        // Time is replayable but locations are not (e.g., stdin) - iterate locations first.
-        return expand_location_first(loc_source, time_source, step, override_tz, command);
+        return expand_location_outer(loc_source, time_source, step, override_tz, command);
     }
 
     if loc_replayable {
-        return expand_time_first(loc_source, time_source, step, override_tz, command);
+        return expand_time_outer(loc_source, time_source, step, override_tz, command);
     }
 
     if loc_is_single {
