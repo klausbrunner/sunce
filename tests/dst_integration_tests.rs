@@ -1,4 +1,5 @@
 mod common;
+use chrono::{DateTime, FixedOffset};
 use common::{csv_row_map, parse_csv_output, parse_json_output, sunce_command};
 use serde_json::Value;
 
@@ -23,22 +24,14 @@ fn csv_datetimes(output: std::process::Output) -> Vec<String> {
 }
 
 fn no_header_csv_datetimes(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .map(|line| {
-            line.split(',')
-                .find(|field| {
-                    field.contains('T')
-                        && (field.contains("+00:00")
-                            || field.contains("+01:00")
-                            || field.contains("+02:00")
-                            || field.contains("-04:00")
-                            || field.contains("-05:00"))
-                })
-                .unwrap_or_else(|| panic!("datetime field not found in line: {}", line))
-                .to_string()
+    common::parse_csv_no_headers_output(stdout)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .find(|field| DateTime::<FixedOffset>::parse_from_rfc3339(field).is_ok())
+                .unwrap_or_else(|| panic!("datetime field not found"))
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 #[test]

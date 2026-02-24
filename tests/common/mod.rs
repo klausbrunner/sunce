@@ -2,6 +2,7 @@
 
 use assert_cmd::Command;
 use chrono::{DateTime, FixedOffset};
+use csv::ReaderBuilder;
 use predicates::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -286,29 +287,43 @@ pub fn parse_json_output(stdout: &str) -> Value {
 
 /// Parse CSV output into header and records.
 pub fn parse_csv_output(stdout: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    let mut lines = stdout.lines();
-    let header_line = lines.next().expect("CSV header line missing");
-    let headers = header_line
-        .split(',')
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(stdout.as_bytes());
+    let headers = reader
+        .headers()
+        .expect("CSV header line missing")
+        .iter()
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
-
     let mut rows = Vec::new();
-    for line in lines {
-        let row = line
-            .split(',')
+    for record in reader.records() {
+        let record = record.expect("invalid CSV record");
+        let row = record
+            .iter()
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
-        assert_eq!(
-            row.len(),
-            headers.len(),
-            "CSV row width mismatch for line: {}",
-            line
-        );
+        assert_eq!(row.len(), headers.len(), "CSV row width mismatch");
         rows.push(row);
     }
 
     (headers, rows)
+}
+
+/// Parse CSV output that has no header row.
+pub fn parse_csv_no_headers_output(stdout: &str) -> Vec<Vec<String>> {
+    let mut reader = ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(stdout.as_bytes());
+    reader
+        .records()
+        .map(|r| {
+            r.expect("invalid CSV record")
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
 }
 
 /// Parse CSV output that must contain exactly one record.

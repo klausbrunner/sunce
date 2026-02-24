@@ -304,14 +304,16 @@ fn test_parquet_consistency_with_csv() {
     assert!(parquet_cmd_output.status.success());
 
     // Parse CSV output to extract values
-    let csv_text = String::from_utf8_lossy(&csv_cmd_output.stdout);
-    let csv_lines: Vec<&str> = csv_text.trim().split('\n').collect();
-    assert_eq!(csv_lines.len(), 2, "CSV should have header + 1 data row");
-
-    let csv_values: Vec<&str> = csv_lines[1].split(',').collect();
+    let csv_text = String::from_utf8(csv_cmd_output.stdout).unwrap();
+    let (csv_headers, csv_rows) = parse_csv_output(&csv_text);
+    assert_eq!(csv_rows.len(), 1, "CSV should have exactly 1 data row");
     assert_eq!(
-        csv_values.len(),
-        3,
+        csv_headers,
+        vec![
+            "dateTime".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string()
+        ],
         "CSV should have 3 columns: dateTime,azimuth,zenith"
     );
 

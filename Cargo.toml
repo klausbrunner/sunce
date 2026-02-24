@@ -48,6 +48,7 @@ assert_cmd = "2.1"
 predicates = "3.1"
 tempfile = "3.25"
 bytes = "1.11"
+csv = "1.4"
 
 [profile.release]
 opt-level = 3
