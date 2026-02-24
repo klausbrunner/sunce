@@ -4,8 +4,7 @@ mod common;
 use common::*;
 
 fn csv_number_field(stdout: &str, field: &str) -> f64 {
-    let (headers, row) = parse_csv_single_record(stdout);
-    let record = csv_row_map(&headers, &row);
+    let record = parse_csv_single_record_map(stdout);
     record
         .get(field)
         .and_then(|s| s.parse::<f64>().ok())
@@ -20,8 +19,7 @@ fn json_number_field(stdout: &str, field: &str) -> f64 {
 }
 
 fn csv_string_field(stdout: &str, field: &str) -> String {
-    let (headers, row) = parse_csv_single_record(stdout);
-    let record = csv_row_map(&headers, &row);
+    let record = parse_csv_single_record_map(stdout);
     record
         .get(field)
         .cloned()
@@ -57,17 +55,17 @@ fn test_solarpos_exact_functional_match() {
     let headers = csv_headers(&stdout);
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "elevation".to_string(),
-            "pressure".to_string(),
-            "temperature".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "azimuth".to_string(),
-            "zenith".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "elevation",
+            "pressure",
+            "temperature",
+            "dateTime",
+            "deltaT",
+            "azimuth",
+            "zenith",
+        ])
     );
 
     assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");
@@ -122,16 +120,16 @@ fn test_solarpos_sunrise_compatibility() {
     let headers = csv_headers(&stdout);
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "dateTime",
+            "deltaT",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+        ])
     );
 
     assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");

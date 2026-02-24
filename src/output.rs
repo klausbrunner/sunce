@@ -49,17 +49,12 @@ fn format_f64_fixed(value: f64, decimals: u32) -> String {
     let int_part = abs / denom;
     let frac_part = abs % denom;
     let width = decimals as usize;
+    let sign = if scaled < 0 { "-" } else { "" };
 
     if decimals == 0 {
-        if scaled < 0 {
-            format!("-{}", int_part)
-        } else {
-            int_part.to_string()
-        }
-    } else if scaled < 0 {
-        format!("-{}.{:0width$}", int_part, frac_part, width = width)
+        format!("{sign}{int_part}")
     } else {
-        format!("{}.{:0width$}", int_part, frac_part, width = width)
+        format!("{sign}{}.{:0width$}", int_part, frac_part, width = width)
     }
 }
 

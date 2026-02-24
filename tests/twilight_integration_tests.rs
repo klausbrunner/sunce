@@ -25,19 +25,19 @@ fn test_twilight_csv_output() {
 
     assert_eq!(
         headers,
-        vec![
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-            "civil_start".to_string(),
-            "civil_end".to_string(),
-            "nautical_start".to_string(),
-            "nautical_end".to_string(),
-            "astronomical_start".to_string(),
-            "astronomical_end".to_string(),
-        ]
+        fields(&[
+            "dateTime",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+            "civil_start",
+            "civil_end",
+            "nautical_start",
+            "nautical_end",
+            "astronomical_start",
+            "astronomical_end",
+        ])
     );
 
     assert_eq!(
@@ -361,19 +361,19 @@ fn test_twilight_without_show_inputs() {
     let record = csv_row_map(&headers, &row);
     assert_eq!(
         headers,
-        vec![
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-            "civil_start".to_string(),
-            "civil_end".to_string(),
-            "nautical_start".to_string(),
-            "nautical_end".to_string(),
-            "astronomical_start".to_string(),
-            "astronomical_end".to_string(),
-        ]
+        fields(&[
+            "dateTime",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+            "civil_start",
+            "civil_end",
+            "nautical_start",
+            "nautical_end",
+            "astronomical_start",
+            "astronomical_end",
+        ])
     );
     assert_eq!(record.get("type"), Some(&"NORMAL".to_string()));
 }
@@ -449,12 +449,6 @@ fn test_no_twilight_flag_behavior() {
     assert!(!headers.contains(&"astronomical_start".to_string()));
     assert_eq!(
         headers,
-        vec![
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
     );
 }

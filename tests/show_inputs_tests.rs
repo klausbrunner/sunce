@@ -1,5 +1,5 @@
 mod common;
-use common::{parse_csv_output, parse_json_output, sunce_command};
+use common::{fields, parse_csv_output, parse_json_output, sunce_command};
 
 fn csv_headers_for_args(args: &[&str]) -> Vec<String> {
     let mut cmd = sunce_command();
@@ -12,17 +12,17 @@ fn csv_headers_for_args(args: &[&str]) -> Vec<String> {
 }
 
 fn position_show_inputs_headers() -> Vec<String> {
-    vec![
-        "latitude".to_string(),
-        "longitude".to_string(),
-        "elevation".to_string(),
-        "pressure".to_string(),
-        "temperature".to_string(),
-        "dateTime".to_string(),
-        "deltaT".to_string(),
-        "azimuth".to_string(),
-        "zenith".to_string(),
-    ]
+    fields(&[
+        "latitude",
+        "longitude",
+        "elevation",
+        "pressure",
+        "temperature",
+        "dateTime",
+        "deltaT",
+        "azimuth",
+        "zenith",
+    ])
 }
 
 /// Test that single-value inputs do NOT auto-enable show-inputs
@@ -36,14 +36,7 @@ fn test_single_values_no_auto_show_inputs_csv() {
         "position",
     ]);
 
-    assert_eq!(
-        headers,
-        vec![
-            "dateTime".to_string(),
-            "azimuth".to_string(),
-            "zenith".to_string()
-        ]
-    );
+    assert_eq!(headers, fields(&["dateTime", "azimuth", "zenith"]));
 }
 
 #[test]
@@ -150,14 +143,7 @@ fn test_no_show_inputs_override() {
         "position",
     ]);
 
-    assert_eq!(
-        headers,
-        vec![
-            "dateTime".to_string(),
-            "azimuth".to_string(),
-            "zenith".to_string()
-        ]
-    );
+    assert_eq!(headers, fields(&["dateTime", "azimuth", "zenith"]));
 }
 
 /// Test that explicit --show-inputs works for single values
@@ -189,15 +175,15 @@ fn test_show_inputs_omits_refraction_fields_when_disabled_csv() {
 
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "elevation".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "azimuth".to_string(),
-            "zenith".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "elevation",
+            "dateTime",
+            "deltaT",
+            "azimuth",
+            "zenith",
+        ])
     );
 }
 
@@ -230,13 +216,7 @@ fn test_sunrise_single_values_no_auto_show_inputs() {
 
     assert_eq!(
         headers,
-        vec![
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
     );
 }
 
@@ -247,16 +227,16 @@ fn test_sunrise_partial_date_auto_enables_show_inputs() {
 
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "dateTime",
+            "deltaT",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+        ])
     );
 }
 
@@ -268,16 +248,16 @@ fn test_sunrise_coordinate_range_auto_enables_show_inputs() {
 
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "dateTime",
+            "deltaT",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+        ])
     );
 }
 
@@ -295,13 +275,7 @@ fn test_twilight_single_values_no_auto_show_inputs() {
 
     assert_eq!(
         headers[0..5],
-        [
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
     );
     assert!(!headers.contains(&"latitude".to_string()));
 }
@@ -339,12 +313,6 @@ fn test_sunrise_complete_date_no_auto_show_inputs() {
     let headers = csv_headers_for_args(&["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]);
     assert_eq!(
         headers,
-        vec![
-            "dateTime".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
     );
 }

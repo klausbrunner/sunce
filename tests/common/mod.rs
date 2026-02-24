@@ -285,6 +285,10 @@ pub fn parse_json_output(stdout: &str) -> Value {
     serde_json::from_str(stdout).expect("invalid JSON output")
 }
 
+pub fn fields(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_string()).collect()
+}
+
 /// Parse CSV output into header and records.
 pub fn parse_csv_output(stdout: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let mut reader = ReaderBuilder::new()
@@ -331,6 +335,11 @@ pub fn parse_csv_single_record(stdout: &str) -> (Vec<String>, Vec<String>) {
     let (headers, rows) = parse_csv_output(stdout);
     assert_eq!(rows.len(), 1, "expected exactly one CSV record");
     (headers, rows[0].clone())
+}
+
+pub fn parse_csv_single_record_map(stdout: &str) -> HashMap<String, String> {
+    let (headers, row) = parse_csv_single_record(stdout);
+    csv_row_map(&headers, &row)
 }
 
 /// Convert a CSV row into a field map keyed by header name.
