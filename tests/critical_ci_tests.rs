@@ -4,8 +4,7 @@ mod common;
 use common::*;
 
 fn csv_number_field(stdout: &str, field: &str) -> f64 {
-    let (headers, row) = parse_csv_single_record(stdout);
-    let record = csv_row_map(&headers, &row);
+    let record = parse_csv_single_record_map(stdout);
     record
         .get(field)
         .and_then(|s| s.parse::<f64>().ok())
@@ -20,8 +19,7 @@ fn json_number_field(stdout: &str, field: &str) -> f64 {
 }
 
 fn csv_string_field(stdout: &str, field: &str) -> String {
-    let (headers, row) = parse_csv_single_record(stdout);
-    let record = csv_row_map(&headers, &row);
+    let record = parse_csv_single_record_map(stdout);
     record
         .get(field)
         .cloned()
@@ -57,17 +55,17 @@ fn test_solarpos_exact_functional_match() {
     let headers = csv_headers(&stdout);
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "elevation".to_string(),
-            "pressure".to_string(),
-            "temperature".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "azimuth".to_string(),
-            "zenith".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "elevation",
+            "pressure",
+            "temperature",
+            "dateTime",
+            "deltaT",
+            "azimuth",
+            "zenith",
+        ])
     );
 
     assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");
@@ -75,18 +73,17 @@ fn test_solarpos_exact_functional_match() {
     assert!(csv_string_field(&stdout, "dateTime").starts_with("2024-06-21T12:00:00"));
     assert!(csv_string_field(&stdout, "dateTime").ends_with("+02:00"));
 
-    // Verify reasonable azimuth and zenith values for this date/location
-    // (exact values may vary slightly with different algorithms or settings)
+    // Verify exact baseline values from solarpos-compatible output.
     let azimuth = csv_number_field(&stdout, "azimuth");
     let zenith = csv_number_field(&stdout, "zenith");
     assert!(
-        (147.0..=149.0).contains(&azimuth),
-        "azimuth {} not in range 147-149°",
+        (azimuth - 148.8808).abs() <= 1e-4,
+        "azimuth {} does not match baseline 148.8808",
         azimuth
     );
     assert!(
-        (30.0..=32.0).contains(&zenith),
-        "zenith {} not in range 30-32°",
+        (zenith - 31.4083).abs() <= 1e-4,
+        "zenith {} does not match baseline 31.4083",
         zenith
     );
 }
@@ -95,15 +92,6 @@ fn test_solarpos_exact_functional_match() {
 #[test]
 fn test_solarpos_sunrise_compatibility() {
     // Reference from: solarpos 52.0 13.4 2024-06-21 sunrise --format=CSV --show-inputs
-    let _expected_sunrise_fields = [
-        "52.00000",
-        "13.40000",
-        "2024-06-21",
-        "normal",   // type
-        "04:50:57", // sunrise time (approximate - timezone may affect format)
-        "12:13:02", // transit
-        "19:35:07", // sunset
-    ];
 
     let output = SunceTest::new()
         .args([
@@ -122,29 +110,29 @@ fn test_solarpos_sunrise_compatibility() {
     let headers = csv_headers(&stdout);
     assert_eq!(
         headers,
-        vec![
-            "latitude".to_string(),
-            "longitude".to_string(),
-            "dateTime".to_string(),
-            "deltaT".to_string(),
-            "type".to_string(),
-            "sunrise".to_string(),
-            "transit".to_string(),
-            "sunset".to_string(),
-        ]
+        fields(&[
+            "latitude",
+            "longitude",
+            "dateTime",
+            "deltaT",
+            "type",
+            "sunrise",
+            "transit",
+            "sunset",
+        ])
     );
 
     assert_eq!(csv_string_field(&stdout, "latitude"), "52.00000");
     assert_eq!(csv_string_field(&stdout, "longitude"), "13.40000");
     assert_eq!(csv_string_field(&stdout, "type"), "NORMAL");
 
-    // Verify times are reasonable for summer solstice (UTC timezone).
+    // Verify exact baseline times for UTC output.
     let sunrise = csv_string_field(&stdout, "sunrise");
     let transit = csv_string_field(&stdout, "transit");
     let sunset = csv_string_field(&stdout, "sunset");
-    assert!(sunrise.starts_with("2024-06-21T02:4") || sunrise.starts_with("2024-06-21T02:5"));
-    assert!(transit.starts_with("2024-06-21T11:0") || transit.starts_with("2024-06-21T11:1"));
-    assert!(sunset.starts_with("2024-06-21T19:2") || sunset.starts_with("2024-06-21T19:3"));
+    assert_time_close(&sunrise, "2024-06-21T02:46:15+00:00", 0);
+    assert_time_close(&transit, "2024-06-21T11:08:18+00:00", 0);
+    assert_time_close(&sunset, "2024-06-21T19:30:20+00:00", 0);
 }
 
 /// Test JSON output structure compatibility

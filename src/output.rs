@@ -49,17 +49,12 @@ fn format_f64_fixed(value: f64, decimals: u32) -> String {
     let int_part = abs / denom;
     let frac_part = abs % denom;
     let width = decimals as usize;
+    let sign = if scaled < 0 { "-" } else { "" };
 
     if decimals == 0 {
-        if scaled < 0 {
-            format!("-{}", int_part)
-        } else {
-            int_part.to_string()
-        }
-    } else if scaled < 0 {
-        format!("-{}.{:0width$}", int_part, frac_part, width = width)
+        format!("{sign}{int_part}")
     } else {
-        format!("{}.{:0width$}", int_part, frac_part, width = width)
+        format!("{sign}{}.{:0width$}", int_part, frac_part, width = width)
     }
 }
 
@@ -383,22 +378,6 @@ impl OutputRow {
             }
         }
     }
-
-    fn write_csv<W: std::io::Write>(
-        &self,
-        writer: &mut W,
-        datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-        fixed_decimal_cache: &mut FixedDecimalCache,
-    ) -> Result<(), String> {
-        match self {
-            OutputRow::Position(fields) => {
-                write_position_csv(writer, fields, datetime_cache, fixed_decimal_cache)
-            }
-            OutputRow::Sunrise(fields) => {
-                write_sunrise_csv(writer, fields, datetime_cache, fixed_decimal_cache)
-            }
-        }
-    }
 }
 
 fn cached_datetime(
@@ -540,141 +519,6 @@ fn sunrise_csv_values_into(
                 .unwrap_or_default(),
         );
     }
-}
-
-fn write_csv_field<W: std::io::Write>(
-    writer: &mut W,
-    first: &mut bool,
-    value: &str,
-) -> Result<(), String> {
-    if *first {
-        *first = false;
-    } else {
-        writer.write_all(b",").map_err(|e| e.to_string())?;
-    }
-    writer
-        .write_all(value.as_bytes())
-        .map_err(|e| e.to_string())
-}
-
-fn write_position_csv<W: std::io::Write>(
-    writer: &mut W,
-    fields: &PositionFields,
-    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-    fixed_decimal_cache: &mut FixedDecimalCache,
-) -> Result<(), String> {
-    let mut first = true;
-
-    if fields.layout.show_inputs {
-        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
-        write_csv_field(writer, &mut first, &lat)?;
-        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
-        write_csv_field(writer, &mut first, &lon)?;
-        let elevation = cached_f64_fixed(fixed_decimal_cache, fields.elevation, 3);
-        write_csv_field(writer, &mut first, &elevation)?;
-        if fields.layout.include_refraction {
-            let (pressure, temperature) = fields.refraction.expect("refraction values set");
-            let pressure = cached_f64_fixed(fixed_decimal_cache, pressure, 3);
-            write_csv_field(writer, &mut first, &pressure)?;
-            let temperature = cached_f64_fixed(fixed_decimal_cache, temperature, 3);
-            write_csv_field(writer, &mut first, &temperature)?;
-        }
-    }
-
-    let dt = cached_datetime(datetime_cache, &fields.datetime);
-    write_csv_field(writer, &mut first, &dt)?;
-
-    if fields.layout.show_inputs {
-        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
-        write_csv_field(writer, &mut first, &deltat)?;
-    }
-
-    let azimuth = format_f64_fixed(fields.azimuth, 4);
-    write_csv_field(writer, &mut first, &azimuth)?;
-    let angle = format_f64_fixed(fields.angle_value, 4);
-    write_csv_field(writer, &mut first, &angle)?;
-
-    writer.write_all(b"\n").map_err(|e| e.to_string())
-}
-
-fn write_sunrise_csv<W: std::io::Write>(
-    writer: &mut W,
-    fields: &SunriseFields,
-    datetime_cache: &mut std::collections::HashMap<DateTime<FixedOffset>, String>,
-    fixed_decimal_cache: &mut FixedDecimalCache,
-) -> Result<(), String> {
-    let mut first = true;
-
-    if fields.layout.show_inputs {
-        let lat = cached_f64_fixed(fixed_decimal_cache, fields.lat, 5);
-        write_csv_field(writer, &mut first, &lat)?;
-        let lon = cached_f64_fixed(fixed_decimal_cache, fields.lon, 5);
-        write_csv_field(writer, &mut first, &lon)?;
-        let date_time = cached_datetime(datetime_cache, &fields.date_time);
-        write_csv_field(writer, &mut first, &date_time)?;
-        let deltat = cached_f64_fixed(fixed_decimal_cache, fields.deltat, 3);
-        write_csv_field(writer, &mut first, &deltat)?;
-    } else {
-        let date_time = cached_datetime(datetime_cache, &fields.date_time);
-        write_csv_field(writer, &mut first, &date_time)?;
-    }
-
-    write_csv_field(writer, &mut first, fields.type_label)?;
-    let sunrise = fields
-        .sunrise
-        .as_ref()
-        .map(|dt| cached_datetime(datetime_cache, dt))
-        .unwrap_or_default();
-    write_csv_field(writer, &mut first, &sunrise)?;
-    let transit = cached_datetime(datetime_cache, &fields.transit);
-    write_csv_field(writer, &mut first, &transit)?;
-    let sunset = fields
-        .sunset
-        .as_ref()
-        .map(|dt| cached_datetime(datetime_cache, dt))
-        .unwrap_or_default();
-    write_csv_field(writer, &mut first, &sunset)?;
-
-    if fields.layout.include_twilight {
-        let civil_start = fields
-            .civil_start
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &civil_start)?;
-        let civil_end = fields
-            .civil_end
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &civil_end)?;
-        let nautical_start = fields
-            .nautical_start
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &nautical_start)?;
-        let nautical_end = fields
-            .nautical_end
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &nautical_end)?;
-        let astro_start = fields
-            .astro_start
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &astro_start)?;
-        let astro_end = fields
-            .astro_end
-            .as_ref()
-            .map(|dt| cached_datetime(datetime_cache, dt))
-            .unwrap_or_default();
-        write_csv_field(writer, &mut first, &astro_end)?;
-    }
-
-    writer.write_all(b"\n").map_err(|e| e.to_string())
 }
 
 fn sunrise_fields(row: &SunriseRow, layout: SunriseLayout) -> SunriseFields {
@@ -1037,7 +881,7 @@ fn write_rows<W: std::io::Write>(
     let mut datetime_cache: std::collections::HashMap<DateTime<FixedOffset>, String> =
         std::collections::HashMap::with_capacity(2048);
     let mut fixed_decimal_cache: FixedDecimalCache = std::collections::HashMap::with_capacity(256);
-    let mut text_row_values: Vec<String> = Vec::new();
+    let mut row_values: Vec<String> = Vec::new();
     let position_layout = PositionLayout::from_params(params);
     let sunrise_layout = SunriseLayout::from_params(params);
 
@@ -1060,14 +904,14 @@ fn write_rows<W: std::io::Write>(
         first_row.csv_values_into(
             &mut datetime_cache,
             &mut fixed_decimal_cache,
-            &mut text_row_values,
+            &mut row_values,
         );
 
         let mut widths: Vec<usize> = headers
             .iter()
             .map(|h| h.len().max(suggested_column_width(h)))
             .collect();
-        for (w, v) in widths.iter_mut().zip(text_row_values.iter()) {
+        for (w, v) in widths.iter_mut().zip(row_values.iter()) {
             *w = (*w).max(v.len());
         }
 
@@ -1076,7 +920,7 @@ fn write_rows<W: std::io::Write>(
             write_pretty_header(writer, &header_strs, &widths)?;
         }
 
-        write_pretty_row(writer, &header_strs, &widths, &text_row_values)?;
+        write_pretty_row(writer, &header_strs, &widths, &row_values)?;
         count += 1;
         if flush_each {
             writer.flush().map_err(OutputError::from)?;
@@ -1089,9 +933,9 @@ fn write_rows<W: std::io::Write>(
             row.csv_values_into(
                 &mut datetime_cache,
                 &mut fixed_decimal_cache,
-                &mut text_row_values,
+                &mut row_values,
             );
-            write_pretty_row(writer, &header_strs, &widths, &text_row_values)?;
+            write_pretty_row(writer, &header_strs, &widths, &row_values)?;
             count += 1;
             if flush_each {
                 writer.flush().map_err(OutputError::from)?;
@@ -1112,8 +956,12 @@ fn write_rows<W: std::io::Write>(
                     write_csv_line(writer, row.csv_headers()).map_err(OutputError::from)?;
                     csv_header_written = true;
                 }
-                row.write_csv(writer, &mut datetime_cache, &mut fixed_decimal_cache)
-                    .map_err(OutputError::from)?;
+                row.csv_values_into(
+                    &mut datetime_cache,
+                    &mut fixed_decimal_cache,
+                    &mut row_values,
+                );
+                write_csv_line(writer, row_values.iter()).map_err(OutputError::from)?;
             }
             OutputFormat::Json => row
                 .write_json(writer, &mut datetime_cache)
@@ -1219,15 +1067,22 @@ mod tests {
         let mut text_dt_cache = std::collections::HashMap::new();
         let mut text_num_cache = std::collections::HashMap::new();
         out_row.csv_values_into(&mut text_dt_cache, &mut text_num_cache, &mut values);
+        let expected = vec![
+            "52.00000".to_string(),
+            "13.40000".to_string(),
+            "0.000".to_string(),
+            "1013.000".to_string(),
+            "15.000".to_string(),
+            "2024-06-21T12:00:00+00:00".to_string(),
+            "69.123".to_string(),
+            "180.1235".to_string(),
+            "44.0124".to_string(),
+        ];
+        assert_eq!(values, expected);
 
         let mut bytes = Vec::new();
-        let mut csv_dt_cache = std::collections::HashMap::new();
-        let mut csv_num_cache = std::collections::HashMap::new();
-        out_row
-            .write_csv(&mut bytes, &mut csv_dt_cache, &mut csv_num_cache)
-            .expect("csv write");
-
-        assert_eq!(split_csv_line(bytes), values);
+        write_csv_line(&mut bytes, values.iter()).expect("csv write");
+        assert_eq!(split_csv_line(bytes), expected);
     }
 
     #[test]
@@ -1268,14 +1123,26 @@ mod tests {
         let mut text_dt_cache = std::collections::HashMap::new();
         let mut text_num_cache = std::collections::HashMap::new();
         out_row.csv_values_into(&mut text_dt_cache, &mut text_num_cache, &mut values);
+        let expected = vec![
+            "52.00000".to_string(),
+            "13.40000".to_string(),
+            "2024-06-21T00:00:00+00:00".to_string(),
+            "69.123".to_string(),
+            "NORMAL".to_string(),
+            "2024-06-21T04:00:00+00:00".to_string(),
+            "2024-06-21T12:00:00+00:00".to_string(),
+            "2024-06-21T20:00:00+00:00".to_string(),
+            "2024-06-21T03:00:00+00:00".to_string(),
+            "2024-06-21T21:00:00+00:00".to_string(),
+            "2024-06-21T02:00:00+00:00".to_string(),
+            "2024-06-21T22:00:00+00:00".to_string(),
+            "2024-06-21T01:00:00+00:00".to_string(),
+            "2024-06-21T23:00:00+00:00".to_string(),
+        ];
+        assert_eq!(values, expected);
 
         let mut bytes = Vec::new();
-        let mut csv_dt_cache = std::collections::HashMap::new();
-        let mut csv_num_cache = std::collections::HashMap::new();
-        out_row
-            .write_csv(&mut bytes, &mut csv_dt_cache, &mut csv_num_cache)
-            .expect("csv write");
-
-        assert_eq!(split_csv_line(bytes), values);
+        write_csv_line(&mut bytes, values.iter()).expect("csv write");
+        assert_eq!(split_csv_line(bytes), expected);
     }
 }

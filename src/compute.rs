@@ -181,20 +181,15 @@ fn time_cache_get(
     dt: DateTime<FixedOffset>,
     params: &Parameters,
 ) -> Result<(SpaTimeParts, f64), String> {
-    if let Some(existing) = cache.get(&dt) {
-        return match existing {
-            Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
-            Err(err) => Err(err.clone()),
-        };
+    if let Some(existing) = cache.get(&dt).cloned() {
+        return existing;
     }
 
     while cache.len() >= capacity {
-        match order.pop_front() {
-            Some(oldest) => {
-                cache.remove(&oldest);
-            }
-            None => break,
-        }
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        cache.remove(&oldest);
     }
 
     let entry = cache.entry(dt).or_insert_with(|| {
@@ -206,7 +201,7 @@ fn time_cache_get(
 
     order.push_back(dt);
 
-    match entry {
+    match entry.as_ref() {
         Ok((parts, deltat)) => Ok((Arc::clone(parts), *deltat)),
         Err(err) => Err(err.clone()),
     }

@@ -1,5 +1,5 @@
 mod common;
-use common::sunce_command;
+use common::{csv_row_map, parse_csv_output, sunce_command};
 use predicates::prelude::*;
 use std::fs::File;
 use std::io::Write;
@@ -503,12 +503,33 @@ fn test_solarpos_compatibility_coordinate_file() {
 
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
+    let (headers, rows) = parse_csv_output(&sunce_str);
+    assert_eq!(rows.len(), 2, "Expected 2 rows for two coordinate inputs");
 
-    // Verify key values are present (angles are rounded to 4 decimals)
-    assert!(sunce_str.contains("204.0441,30.2240")); // Berlin coordinates
-    assert!(sunce_str.contains("206.7683,37.9702")); // Stockholm coordinates
-    assert!(sunce_str.contains("52.00000,13.40000"));
-    assert!(sunce_str.contains("59.33400,18.06300"));
+    let mut got_berlin = false;
+    let mut got_stockholm = false;
+    for row in &rows {
+        let record = csv_row_map(&headers, row);
+        match (
+            record.get("latitude").map(String::as_str),
+            record.get("longitude").map(String::as_str),
+        ) {
+            (Some("52.00000"), Some("13.40000")) => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("204.0441"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("30.2240"));
+                got_berlin = true;
+            }
+            (Some("59.33400"), Some("18.06300")) => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("206.7683"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("37.9702"));
+                got_stockholm = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(got_berlin, "Missing Berlin baseline row");
+    assert!(got_stockholm, "Missing Stockholm baseline row");
 }
 
 /// Test solarpos compatibility with time file input
@@ -532,10 +553,29 @@ fn test_solarpos_compatibility_time_file() {
 
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
+    let (headers, rows) = parse_csv_output(&sunce_str);
+    assert_eq!(rows.len(), 2, "Expected 2 rows for two timestamps");
 
-    // Verify expected values (angles are rounded to 4 decimals)
-    assert!(sunce_str.contains("204.0441,30.2240")); // 12:00 position
-    assert!(sunce_str.contains("294.4356,79.1283")); // 18:00 position
+    let mut got_noon = false;
+    let mut got_evening = false;
+    for row in &rows {
+        let record = csv_row_map(&headers, row);
+        match record.get("dateTime").map(String::as_str) {
+            Some("2024-06-21T12:00:00+00:00") => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("204.0441"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("30.2240"));
+                got_noon = true;
+            }
+            Some("2024-06-21T18:00:00+00:00") => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("294.4356"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("79.1283"));
+                got_evening = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(got_noon, "Missing noon baseline row");
+    assert!(got_evening, "Missing evening baseline row");
 }
 
 /// Test solarpos compatibility with paired file input
@@ -557,10 +597,33 @@ fn test_solarpos_compatibility_paired_file() {
 
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
+    let (headers, rows) = parse_csv_output(&sunce_str);
+    assert_eq!(rows.len(), 2, "Expected 2 rows for paired input file");
 
-    // Verify expected values (angles are rounded to 4 decimals)
-    assert!(sunce_str.contains("204.0441,30.2240")); // Berlin summer
-    assert!(sunce_str.contains("176.6580,63.8995")); // Madrid winter
+    let mut got_berlin = false;
+    let mut got_madrid = false;
+    for row in &rows {
+        let record = csv_row_map(&headers, row);
+        match (
+            record.get("latitude").map(String::as_str),
+            record.get("longitude").map(String::as_str),
+            record.get("dateTime").map(String::as_str),
+        ) {
+            (Some("52.00000"), Some("13.40000"), Some("2024-06-21T12:00:00+00:00")) => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("204.0441"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("30.2240"));
+                got_berlin = true;
+            }
+            (Some("40.42000"), Some("-3.70000"), Some("2024-12-21T12:00:00+00:00")) => {
+                assert_eq!(record.get("azimuth").map(String::as_str), Some("176.6580"));
+                assert_eq!(record.get("zenith").map(String::as_str), Some("63.8995"));
+                got_madrid = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(got_berlin, "Missing Berlin baseline row");
+    assert!(got_madrid, "Missing Madrid baseline row");
 }
 
 /// Test solarpos compatibility with sunrise coordinate file
@@ -583,12 +646,44 @@ fn test_solarpos_compatibility_sunrise_coordinate_file() {
 
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
+    let (headers, rows) = parse_csv_output(&sunce_str);
+    assert_eq!(rows.len(), 2, "Expected 2 sunrise rows");
 
-    // Verify exact sunrise times that should match solarpos
-    assert!(sunce_str.contains("2024-06-21T02:46:15+00:00")); // Berlin sunrise
-    assert!(sunce_str.contains("2024-06-21T19:30:20+00:00")); // Berlin sunset
-    assert!(sunce_str.contains("2024-06-21T04:44:49+00:00")); // Madrid sunrise
-    assert!(sunce_str.contains("2024-06-21T19:48:36+00:00")); // Madrid sunset
+    let mut got_berlin = false;
+    let mut got_madrid = false;
+    for row in &rows {
+        let record = csv_row_map(&headers, row);
+        match (
+            record.get("latitude").map(String::as_str),
+            record.get("longitude").map(String::as_str),
+        ) {
+            (Some("52.00000"), Some("13.40000")) => {
+                assert_eq!(
+                    record.get("sunrise").map(String::as_str),
+                    Some("2024-06-21T02:46:15+00:00")
+                );
+                assert_eq!(
+                    record.get("sunset").map(String::as_str),
+                    Some("2024-06-21T19:30:20+00:00")
+                );
+                got_berlin = true;
+            }
+            (Some("40.42000"), Some("-3.70000")) => {
+                assert_eq!(
+                    record.get("sunrise").map(String::as_str),
+                    Some("2024-06-21T04:44:49+00:00")
+                );
+                assert_eq!(
+                    record.get("sunset").map(String::as_str),
+                    Some("2024-06-21T19:48:36+00:00")
+                );
+                got_madrid = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(got_berlin, "Missing Berlin sunrise baseline row");
+    assert!(got_madrid, "Missing Madrid sunrise baseline row");
 }
 
 /// Test stdin compatibility with solarpos format
@@ -602,10 +697,16 @@ fn test_solarpos_compatibility_stdin() {
 
     let sunce_output = sunce_cmd.assert().success().get_output().stdout.clone();
     let sunce_str = String::from_utf8(sunce_output).unwrap();
-
-    // Should match expected values (angles are rounded to 4 decimals)
-    assert!(sunce_str.contains("204.0441,30.2240"));
-    assert!(sunce_str.contains("52.00000,13.40000"));
+    let (headers, rows) = parse_csv_output(&sunce_str);
+    assert_eq!(rows.len(), 1, "Expected exactly one row from stdin");
+    let record = csv_row_map(&headers, &rows[0]);
+    assert_eq!(record.get("latitude").map(String::as_str), Some("52.00000"));
+    assert_eq!(
+        record.get("longitude").map(String::as_str),
+        Some("13.40000")
+    );
+    assert_eq!(record.get("azimuth").map(String::as_str), Some("204.0441"));
+    assert_eq!(record.get("zenith").map(String::as_str), Some("30.2240"));
 }
 
 /// Test coordinate ranges with time files for position command

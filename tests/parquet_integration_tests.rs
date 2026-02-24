@@ -1,7 +1,7 @@
 #![cfg(feature = "parquet")]
 
 mod common;
-use arrow::array::Array;
+use arrow::array::{Array, Float64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use common::*;
@@ -304,16 +304,29 @@ fn test_parquet_consistency_with_csv() {
     assert!(parquet_cmd_output.status.success());
 
     // Parse CSV output to extract values
-    let csv_text = String::from_utf8_lossy(&csv_cmd_output.stdout);
-    let csv_lines: Vec<&str> = csv_text.trim().split('\n').collect();
-    assert_eq!(csv_lines.len(), 2, "CSV should have header + 1 data row");
-
-    let csv_values: Vec<&str> = csv_lines[1].split(',').collect();
+    let csv_text = String::from_utf8(csv_cmd_output.stdout).unwrap();
+    let (csv_headers, csv_rows) = parse_csv_output(&csv_text);
+    assert_eq!(csv_rows.len(), 1, "CSV should have exactly 1 data row");
     assert_eq!(
-        csv_values.len(),
-        3,
+        csv_headers,
+        vec![
+            "dateTime".to_string(),
+            "azimuth".to_string(),
+            "zenith".to_string()
+        ],
         "CSV should have 3 columns: dateTime,azimuth,zenith"
     );
+
+    let csv_record = csv_row_map(&csv_headers, &csv_rows[0]);
+    let csv_dt = csv_record.get("dateTime").expect("CSV dateTime missing");
+    let csv_azimuth = csv_record
+        .get("azimuth")
+        .and_then(|v| v.parse::<f64>().ok())
+        .expect("CSV azimuth missing or invalid");
+    let csv_zenith = csv_record
+        .get("zenith")
+        .and_then(|v| v.parse::<f64>().ok())
+        .expect("CSV zenith missing or invalid");
 
     // Parse Parquet output and extract the same values
     let bytes = Bytes::from(parquet_cmd_output.stdout);
@@ -327,7 +340,7 @@ fn test_parquet_consistency_with_csv() {
     assert_eq!(batches.len(), 1, "Should have exactly one batch");
     assert_eq!(batches[0].num_rows(), 1, "Should have exactly one row");
 
-    // Verify both formats produced the same logical content structure
+    // Verify both formats produced the same logical content and values.
     let batch = &batches[0];
     assert_eq!(
         batch.num_columns(),
@@ -335,8 +348,40 @@ fn test_parquet_consistency_with_csv() {
         "Parquet should have 3 columns: dateTime,azimuth,zenith"
     );
 
-    // Both formats should represent the same calculation results
-    // (We can't easily compare exact values due to format differences, but structure should match)
+    let dt_col = batch
+        .column_by_name("dateTime")
+        .expect("Parquet dateTime column missing")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("Parquet dateTime should be StringArray");
+    assert_eq!(dt_col.value(0), csv_dt);
+
+    let az_col = batch
+        .column_by_name("azimuth")
+        .expect("Parquet azimuth column missing")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("Parquet azimuth should be Float64Array");
+    let ze_col = batch
+        .column_by_name("zenith")
+        .expect("Parquet zenith column missing")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("Parquet zenith should be Float64Array");
+
+    // CSV is rounded to 4 decimals; Parquet stores full precision.
+    assert!(
+        (az_col.value(0) - csv_azimuth).abs() <= 1e-4,
+        "Azimuth mismatch: parquet={}, csv={}",
+        az_col.value(0),
+        csv_azimuth
+    );
+    assert!(
+        (ze_col.value(0) - csv_zenith).abs() <= 1e-4,
+        "Zenith mismatch: parquet={}, csv={}",
+        ze_col.value(0),
+        csv_zenith
+    );
 }
 
 #[test]

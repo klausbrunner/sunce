@@ -1,5 +1,31 @@
 mod common;
-use common::sunce_command;
+use common::{parse_csv_single_record_map, sunce_command};
+
+fn assert_close(actual: f64, expected: f64, tolerance: f64, field: &str) {
+    let delta = (actual - expected).abs();
+    assert!(
+        delta <= tolerance,
+        "{} mismatch: actual={}, expected={}, tolerance={}",
+        field,
+        actual,
+        expected,
+        tolerance
+    );
+}
+
+fn assert_position_values(output_str: &str, expected_azimuth: f64, expected_zenith: f64) {
+    let record = parse_csv_single_record_map(output_str);
+    let azimuth = record
+        .get("azimuth")
+        .and_then(|v| v.parse::<f64>().ok())
+        .expect("azimuth field missing or invalid");
+    let zenith = record
+        .get("zenith")
+        .and_then(|v| v.parse::<f64>().ok())
+        .expect("zenith field missing or invalid");
+    assert_close(azimuth, expected_azimuth, 1e-4, "azimuth");
+    assert_close(zenith, expected_zenith, 1e-4, "zenith");
+}
 
 /// Test solar position accuracy against known astronomical reference values
 /// These tests validate that sunce produces correct solar coordinates for well-documented cases
@@ -19,9 +45,8 @@ fn test_solar_position_reference_accuracy() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("179.0640")); // Azimuth
-    assert!(output_str.contains("28.0358")); // Zenith
+    // Exact field-level values from solarpos verification.
+    assert_position_values(&output_str, 179.0640, 28.0358);
 }
 
 #[test]
@@ -40,9 +65,8 @@ fn test_winter_solstice_reference_accuracy() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("180.4126")); // Azimuth
-    assert!(output_str.contains("63.4083")); // Zenith
+    // Exact field-level values from solarpos verification.
+    assert_position_values(&output_str, 180.4126, 63.4083);
 }
 
 #[test]
@@ -61,9 +85,8 @@ fn test_equinox_reference_accuracy() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("85.4225")); // Azimuth
-    assert!(output_str.contains("1.8319")); // Zenith (very close to overhead)
+    // Exact field-level values from solarpos verification.
+    assert_position_values(&output_str, 85.4225, 1.8319);
 }
 
 #[test]
@@ -82,7 +105,6 @@ fn test_southern_hemisphere_reference_accuracy() {
     let output = cmd.assert().success().get_output().stdout.clone();
     let output_str = String::from_utf8(output).unwrap();
 
-    // Exact values from solarpos verification - must match precisely
-    assert!(output_str.contains("52.4346")); // Azimuth
-    assert!(output_str.contains("18.9729")); // Zenith
+    // Exact field-level values from solarpos verification.
+    assert_position_values(&output_str, 52.4346, 18.9729);
 }
