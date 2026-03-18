@@ -6,6 +6,7 @@ use csv::ReaderBuilder;
 use predicates::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Test helper for running sunce commands with less boilerplate
@@ -342,6 +343,11 @@ pub fn parse_csv_single_record_map(stdout: &str) -> HashMap<String, String> {
     csv_row_map(&headers, &row)
 }
 
+pub fn parse_csv_output_maps(stdout: &str) -> Vec<HashMap<String, String>> {
+    let (headers, rows) = parse_csv_output(stdout);
+    rows.iter().map(|row| csv_row_map(&headers, row)).collect()
+}
+
 /// Convert a CSV row into a field map keyed by header name.
 pub fn csv_row_map(headers: &[String], row: &[String]) -> HashMap<String, String> {
     assert_eq!(
@@ -354,6 +360,36 @@ pub fn csv_row_map(headers: &[String], row: &[String]) -> HashMap<String, String
         .cloned()
         .zip(row.iter().cloned())
         .collect::<HashMap<_, _>>()
+}
+
+pub fn find_csv_row<'a>(
+    rows: &'a [HashMap<String, String>],
+    filters: &[(&str, &str)],
+) -> &'a HashMap<String, String> {
+    rows.iter()
+        .find(|row| {
+            filters
+                .iter()
+                .all(|(field, expected)| row.get(*field).map(String::as_str) == Some(*expected))
+        })
+        .unwrap_or_else(|| panic!("missing CSV row matching filters: {filters:?}"))
+}
+
+pub fn load_fixture_rows(name: &str) -> Vec<HashMap<String, String>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name);
+    let text = fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!("failed to read fixture {}: {}", path.display(), err);
+    });
+    parse_csv_output_maps(&text)
+}
+
+pub fn write_text_file(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap_or_else(|err| {
+        panic!("failed to write {}: {}", path.display(), err);
+    });
 }
 
 /// Parse RFC3339 timestamp.

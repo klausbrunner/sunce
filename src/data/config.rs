@@ -221,3 +221,71 @@ impl FromStr for TimezoneOverride {
             .ok_or_else(|| format!("Invalid timezone: '{}'", s))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_format_parsing_and_defaults_work() {
+        assert_eq!("text".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
+        assert_eq!("CSV".parse::<OutputFormat>().unwrap(), OutputFormat::Csv);
+        assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
+        #[cfg(feature = "parquet")]
+        assert_eq!(
+            "parquet".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Parquet
+        );
+        assert!("wat".parse::<OutputFormat>().is_err());
+
+        let defaults = OutputOptions::default();
+        assert_eq!(defaults.format, OutputFormat::Text);
+        assert!(defaults.headers);
+        assert_eq!(defaults.show_inputs, None);
+        assert!(!defaults.should_show_inputs());
+        assert!(!defaults.elevation_angle);
+    }
+
+    #[test]
+    fn algorithm_step_and_timezone_parsing_work() {
+        assert_eq!(
+            "spa".parse::<CalculationAlgorithm>().unwrap(),
+            CalculationAlgorithm::Spa
+        );
+        assert_eq!(
+            "GRENA3".parse::<CalculationAlgorithm>().unwrap(),
+            CalculationAlgorithm::Grena3
+        );
+        assert!("bad".parse::<CalculationAlgorithm>().is_err());
+
+        let step = "1h".parse::<Step>().unwrap();
+        assert_eq!(Duration::from(step), Duration::hours(1));
+        assert!("0s".parse::<Step>().is_err());
+        assert!("bad".parse::<Step>().is_err());
+
+        let fixed = "+05:30".parse::<TimezoneOverride>().unwrap();
+        assert_eq!(fixed.as_str(), "+05:30");
+        let named = "Europe/Berlin".parse::<TimezoneOverride>().unwrap();
+        assert_eq!(named.as_str(), "Europe/Berlin");
+        assert!("".parse::<TimezoneOverride>().is_err());
+        assert!("Not/AZone".parse::<TimezoneOverride>().is_err());
+    }
+
+    #[test]
+    fn parameter_defaults_are_sensible() {
+        let defaults = Parameters::default();
+        assert_eq!(defaults.deltat, Some(0.0));
+        assert!(!defaults.perf);
+        assert!(defaults.step.is_none());
+        assert!(defaults.timezone.is_none());
+        assert_eq!(defaults.output.format, OutputFormat::Text);
+        assert!(defaults.output.headers);
+        assert_eq!(defaults.calculation.algorithm, CalculationAlgorithm::Spa);
+        assert!(defaults.calculation.horizon.is_none());
+        assert!(!defaults.calculation.twilight);
+        assert!(defaults.environment.refraction);
+        assert_eq!(defaults.environment.elevation, 0.0);
+        assert_eq!(defaults.environment.temperature, 15.0);
+        assert_eq!(defaults.environment.pressure, 1013.0);
+    }
+}

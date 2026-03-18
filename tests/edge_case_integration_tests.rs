@@ -1,100 +1,123 @@
 mod common;
-use common::{SunceTest, sunce_command, sunce_exe_path};
+use common::{SunceTest, parse_csv_output_maps, sunce_command, sunce_exe_path, write_text_file};
 use predicates::prelude::*;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command as StdCommand, Stdio};
+use std::thread;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 
-#[test]
-fn test_large_coordinate_range_memory_usage() {
-    // Test that large coordinate ranges don't cause excessive memory usage
-    // This should stream results rather than collecting them all
-    let mut cmd = sunce_command();
-
-    // 101x101 grid = 10,201 points (ranges are inclusive)
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "50:60:0.1",
-        "10:20:0.1",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-    .timeout(Duration::from_secs(30));
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    assert!(output.status.success(), "Command should succeed");
-
-    // Count lines to verify we got the expected number of results
-    let lines: Vec<_> = output
-        .stdout
-        .split(|&b| b == b'\n')
-        .filter(|line| !line.is_empty())
-        .collect();
-    assert_eq!(lines.len(), 10201, "Should produce 101x101 grid points"); // 101 because inclusive range
+fn timed_output(args: &[&str], timeout: Duration) -> std::process::Output {
+    sunce_command()
+        .args(args)
+        .timeout(timeout)
+        .output()
+        .expect("Failed to execute command")
 }
 
-#[test]
-fn test_very_fine_coordinate_step() {
-    // Test extremely fine step sizes
-    let mut cmd = sunce_command();
-
-    // Very fine step: 0.001 degrees
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "52.000:52.010:0.001",
-        "13.400",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-    .timeout(Duration::from_secs(5));
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    assert!(output.status.success(), "Command should succeed");
-
-    // Count CSV lines (should be 11 data points: 52.000 to 52.010 inclusive with 0.001 step)
-    let lines: Vec<_> = output
-        .stdout
-        .split(|&b| b == b'\n')
-        .filter(|line| !line.is_empty())
-        .collect();
-    assert_eq!(
-        lines.len(),
-        11,
-        "Should produce 11 points with 0.001 step (52.000 to 52.010 inclusive)"
-    );
-}
-
-#[test]
-fn test_year_long_time_series_memory() {
-    // Test that a year-long time series with hourly steps doesn't cause memory issues
-    let mut cmd = sunce_command();
-
-    // Full year with hourly steps = 8760 points (or 8784 in leap year)
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "52.0",
-        "13.4",
-        "2024",
-        "position",
-        "--step=1h",
-    ])
-    .timeout(Duration::from_secs(30));
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    assert!(output.status.success(), "Command should succeed");
-
-    // 2024 is a leap year: 366 days * 24 hours = 8784 points
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
+fn no_header_line_count(args: &[&str], timeout: Duration) -> usize {
+    let output = timed_output(args, timeout);
     assert!(
-        line_count >= 8784,
-        "Should produce at least 8784 hourly points for leap year"
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    output.stdout.iter().filter(|&&b| b == b'\n').count()
+}
+
+#[test]
+fn test_large_outputs_and_ranges() {
+    for (args, timeout, expected) in [
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "50:60:0.1",
+                "10:20:0.1",
+                "2024-01-01T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(30),
+            10201,
+        ),
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "52.000:52.010:0.001",
+                "13.400",
+                "2024-01-01T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(5),
+            11,
+        ),
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "-5:5:2.5",
+                "-10:10:5",
+                "2024-06-21T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(5),
+            25,
+        ),
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "51.5",
+                "-5:5:2.5",
+                "2024-06-21T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(5),
+            5,
+        ),
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "-40:-30:5",
+                "150",
+                "2024-12-21T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(5),
+            3,
+        ),
+        (
+            vec![
+                "--format=csv",
+                "--no-headers",
+                "-2:2:2",
+                "-2:2:2",
+                "2024-06-21T12:00:00",
+                "position",
+            ],
+            Duration::from_secs(5),
+            9,
+        ),
+    ] {
+        assert_eq!(no_header_line_count(&args, timeout), expected);
+    }
+
+    let year_output = timed_output(
+        &[
+            "--format=csv",
+            "--no-headers",
+            "52.0",
+            "13.4",
+            "2024",
+            "position",
+            "--step=1h",
+        ],
+        Duration::from_secs(30),
+    );
+    assert!(year_output.status.success());
+    assert!(year_output.stdout.iter().filter(|&&b| b == b'\n').count() >= 8784);
 }
 
 #[test]
@@ -110,7 +133,6 @@ fn test_unbounded_watch_requires_single_location() {
 
 #[test]
 fn test_streaming_with_head_command() {
-    // Test that output streams properly and can be interrupted with head
     let mut child = StdCommand::new(sunce_exe_path())
         .args([
             "--format=csv",
@@ -125,7 +147,6 @@ fn test_streaming_with_head_command() {
         .spawn()
         .expect("Failed to spawn sunce");
 
-    // Use head to take only first 10 lines
     let head = StdCommand::new("head")
         .args(["-n", "10"])
         .stdin(child.stdout.take().unwrap())
@@ -134,24 +155,19 @@ fn test_streaming_with_head_command() {
         .expect("Failed to spawn head");
 
     let head_output = head.wait_with_output().expect("Failed to wait for head");
-
-    // The sunce process should be terminated by SIGPIPE
-    // Give it a moment to clean up
-    std::thread::sleep(Duration::from_millis(100));
-
-    // Try to kill the child process if it's still running
+    thread::sleep(Duration::from_millis(100));
     let _ = child.kill();
     let _ = child.wait();
 
-    assert!(head_output.status.success(), "Head command should succeed");
-
-    let line_count = head_output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 10, "Should get exactly 10 lines from head");
+    assert!(head_output.status.success());
+    assert_eq!(
+        head_output.stdout.iter().filter(|&&b| b == b'\n').count(),
+        10
+    );
 }
 
 #[test]
 fn test_stdin_streaming_paired_data() {
-    // Test streaming paired data through stdin
     let mut child = StdCommand::new(sunce_exe_path())
         .args(["--format=csv", "--no-headers", "@-", "position"])
         .stdin(Stdio::piped())
@@ -161,69 +177,45 @@ fn test_stdin_streaming_paired_data() {
         .expect("Failed to spawn sunce");
 
     let mut stdin = child.stdin.take().expect("Failed to get stdin");
-
-    // Write test data progressively
-    let test_data = vec![
+    for line in [
         "52.0,13.4,2024-01-01T12:00:00",
         "52.5,13.5,2024-01-02T12:00:00",
         "53.0,14.0,2024-01-03T12:00:00",
-    ];
-
-    for line in test_data {
-        writeln!(stdin, "{}", line).expect("Failed to write to stdin");
+    ] {
+        writeln!(stdin, "{line}").expect("Failed to write to stdin");
     }
-
-    // Close stdin to signal EOF
     drop(stdin);
 
     let output = child.wait_with_output().expect("Failed to wait for output");
-
-    assert!(output.status.success(), "Command should succeed");
-
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 3, "Should process 3 input lines");
+    assert!(output.status.success());
+    assert_eq!(output.stdout.iter().filter(|&&b| b == b'\n').count(), 3);
 }
 
 #[test]
 fn test_partial_line_handling_in_file() {
-    // Test handling of files without final newline
-    use tempfile::NamedTempFile;
-
-    let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-
-    // Write data without final newline
+    let mut file = NamedTempFile::new().expect("Failed to create temp file");
     write!(
-        temp_file,
+        file,
         "52.0,13.4,2024-01-01T12:00:00\n52.5,13.5,2024-01-02T12:00:00"
     )
     .expect("Failed to write test data");
-    temp_file.flush().expect("Failed to flush");
+    file.flush().expect("Failed to flush");
 
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        &format!("@{}", temp_file.path().display()),
-        "position",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    assert!(
-        output.status.success(),
-        "Should handle file without final newline"
+    let output = timed_output(
+        &[
+            "--format=csv",
+            "--no-headers",
+            &format!("@{}", file.path().display()),
+            "position",
+        ],
+        Duration::from_secs(5),
     );
-
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(
-        line_count, 2,
-        "Should process both lines even without final newline"
-    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout.iter().filter(|&&b| b == b'\n').count(), 2);
 }
 
 #[test]
 fn test_sigpipe_handling() {
-    // Test that SIGPIPE is handled gracefully
     let mut child = StdCommand::new(sunce_exe_path())
         .args(["--format=csv", "50:90:0.1", "10:50:0.1", "2024", "position"])
         .stdout(Stdio::piped())
@@ -231,135 +223,81 @@ fn test_sigpipe_handling() {
         .spawn()
         .expect("Failed to spawn sunce");
 
-    // Read only a tiny bit of output then close the pipe
     if let Some(mut stdout) = child.stdout.take() {
         let mut buffer = [0; 100];
-        let _ = std::io::Read::read(&mut stdout, &mut buffer);
-        // Explicitly close stdout by dropping it
+        let _ = stdout.read(&mut buffer);
         drop(stdout);
     }
 
-    // Give the process a moment to receive SIGPIPE
-    std::thread::sleep(Duration::from_millis(100));
-
-    // The process should exit cleanly (killed by SIGPIPE)
+    thread::sleep(Duration::from_millis(100));
     match child.try_wait() {
-        Ok(Some(_status)) => {
-            // Process has exited - this is expected
-            // On Unix, SIGPIPE typically results in exit code 141 (128 + 13)
-            // But we accept any termination as success for this test
-        }
+        Ok(Some(_)) => {}
         Ok(None) => {
-            // Process still running - kill it and fail the test
             child.kill().expect("Failed to kill child");
             child.wait().expect("Failed to wait for child");
             panic!("Process didn't handle SIGPIPE properly");
         }
-        Err(e) => panic!("Error checking process status: {}", e),
+        Err(err) => panic!("Error checking process status: {err}"),
     }
-}
-
-#[test]
-fn test_coordinate_range_with_negative_values() {
-    // Test coordinate ranges that cross zero
-    let mut cmd = sunce_command();
-
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "-5:5:2.5",
-        "-10:10:5",
-        "2024-06-21T12:00:00",
-        "position",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    assert!(
-        output.status.success(),
-        "Should handle negative coordinate ranges"
-    );
-
-    // Expected: latitude -5, -2.5, 0, 2.5, 5 (5 values)
-    //           longitude -10, -5, 0, 5, 10 (5 values)
-    // Total: 5 * 5 = 25 combinations
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 25, "Should produce 5x5 grid");
 }
 
 #[test]
 fn test_time_series_crossing_dst_boundary() {
-    // Test time series that crosses DST transition
-    let mut cmd = sunce_command();
-
-    // March 31, 2024 - DST transition in Europe/Berlin happens at 2:00 AM
-    // Use a partial date to generate time series
-    cmd.args([
-        "--timezone=Europe/Berlin",
-        "--format=csv",
-        "--show-inputs",
-        "52.0",
-        "13.4",
-        "2024-03-31",
-        "position",
-        "--step=30m",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("Command failed: {}", stderr);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Check that the output contains the DST transition
-    // At 2:00 AM, clocks jump to 3:00 AM
-    // The exact format may vary depending on if it's T00:30:00 or just T00:30
-    let has_130_cet = stdout.contains("T01:30:00+01:00") || stdout.contains("01:30+01:00");
-    let has_300_cest = stdout.contains("T03:00:00+02:00") || stdout.contains("03:00+02:00");
-
-    assert!(
-        has_130_cet,
-        "Should have 1:30 AM CET in output:\n{}",
-        stdout
+    let output = timed_output(
+        &[
+            "--timezone=Europe/Berlin",
+            "--format=csv",
+            "--show-inputs",
+            "52.0",
+            "13.4",
+            "2024-03-31",
+            "position",
+            "--step=30m",
+        ],
+        Duration::from_secs(10),
     );
+    assert!(output.status.success());
+
+    let rows = parse_csv_output_maps(&String::from_utf8(output.stdout).unwrap());
+    let datetimes = rows
+        .iter()
+        .map(|row| row["dateTime"].clone())
+        .collect::<Vec<_>>();
+    assert!(datetimes.iter().any(|ts| ts == "2024-03-31T01:30:00+01:00"));
+    assert!(datetimes.iter().any(|ts| ts == "2024-03-31T03:00:00+02:00"));
     assert!(
-        has_300_cest,
-        "Should jump to 3:00 AM CEST in output:\n{}",
-        stdout
-    );
-    assert!(
-        !stdout.contains("02:00:00") && !stdout.contains("02:30:00"),
-        "Should not have 2:00 AM or 2:30 AM"
+        datetimes
+            .iter()
+            .all(|ts| !ts.contains("T02:00:00") && !ts.contains("T02:30:00"))
     );
 }
 
 #[test]
-fn test_extreme_latitude_values() {
-    // Test calculations at extreme latitudes
-    SunceTest::new()
-        .args(["89.9", "0", "2024-06-21", "position"])
-        .assert_success()
-        .stdout(predicate::str::contains("azimuth"));
+fn test_extreme_and_negative_coordinates() {
+    for args in [
+        vec!["89.9", "0", "2024-06-21", "position"],
+        vec!["-89.9", "0", "2024-12-21", "position"],
+        vec!["-33.8688", "151.2093", "2024-06-21T12:00:00", "position"],
+        vec!["-34.6037", "-58.3816", "2024-12-21T12:00:00", "position"],
+        vec!["40.7128", "-74.0060", "2024-03-20T12:00:00", "position"],
+        vec!["-89.5", "0", "2024-12-21T12:00:00", "position"],
+        vec!["-45.0", "-179.9", "2024-06-21T12:00:00", "position"],
+    ] {
+        SunceTest::new().args(args).assert_success();
+    }
 
-    SunceTest::new()
-        .args(["-89.9", "0", "2024-12-21", "position"])
-        .assert_success()
-        .stdout(predicate::str::contains("azimuth"));
-
-    // Test polar day/night
-    SunceTest::new()
-        .args(["89.9", "0", "2024-06-21", "sunrise"])
-        .assert_success();
+    for args in [
+        vec!["89.9", "0", "2024-06-21", "sunrise"],
+        vec!["-33.8688", "151.2093", "2024-06-21", "sunrise"],
+        vec!["-34.6037", "-58.3816", "2024-12-21", "sunrise"],
+        vec!["-33.9249", "18.4241", "2024-01-15", "sunrise"],
+    ] {
+        SunceTest::new().args(args).assert_success();
+    }
 }
 
 #[test]
 fn test_mixed_input_formats_error_handling() {
-    // Test error handling for mixed input formats
-    use tempfile::NamedTempFile;
-
     let mut coords_file = NamedTempFile::new().expect("Failed to create temp file");
     writeln!(coords_file, "52.0,13.4").expect("Failed to write");
     coords_file.flush().expect("Failed to flush");
@@ -368,7 +306,6 @@ fn test_mixed_input_formats_error_handling() {
     writeln!(times_file, "2024-01-01").expect("Failed to write");
     times_file.flush().expect("Failed to flush");
 
-    // This should work: coordinate file + time file
     SunceTest::new()
         .args([
             &format!("@{}", coords_file.path().display()),
@@ -377,7 +314,6 @@ fn test_mixed_input_formats_error_handling() {
         ])
         .assert_success();
 
-    // This should fail: paired file doesn't work with separate time file
     let mut paired_file = NamedTempFile::new().expect("Failed to create temp file");
     writeln!(paired_file, "52.0,13.4,2024-01-01").expect("Failed to write");
     paired_file.flush().expect("Failed to flush");
@@ -393,11 +329,7 @@ fn test_mixed_input_formats_error_handling() {
 
 #[test]
 fn test_empty_file_handling() {
-    use tempfile::NamedTempFile;
-
     let empty_file = NamedTempFile::new().expect("Failed to create temp file");
-
-    // Empty files should succeed but produce no output
     SunceTest::new()
         .args([&format!("@{}", empty_file.path().display()), "position"])
         .assert_success()
@@ -406,193 +338,10 @@ fn test_empty_file_handling() {
 
 #[test]
 fn test_unicode_in_error_messages() {
-    // Test that unicode in file paths is handled correctly
-    use std::fs;
-    use tempfile::tempdir;
-
-    let dir = tempdir().expect("Failed to create temp dir");
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let unicode_path = dir.path().join("файл_文件.txt");
-    fs::write(&unicode_path, "invalid data").expect("Failed to write file");
-
+    write_text_file(&unicode_path, "invalid data");
     SunceTest::new()
         .args([&format!("@{}", unicode_path.display()), "position"])
         .assert_failure();
-}
-
-#[test]
-fn test_negative_coordinates_position() {
-    // Sydney, Australia (negative latitude)
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "-33.8688",
-            "151.2093",
-            "2024-06-21T12:00:00",
-            "position",
-        ])
-        .assert_success();
-
-    // Buenos Aires, Argentina (negative latitude and longitude)
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "-34.6037",
-            "-58.3816",
-            "2024-12-21T12:00:00",
-            "position",
-        ])
-        .assert_success();
-
-    // West of Prime Meridian (negative longitude only)
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "40.7128",
-            "-74.0060",
-            "2024-03-20T12:00:00",
-            "position",
-        ])
-        .assert_success();
-}
-
-#[test]
-fn test_negative_coordinates_sunrise() {
-    // Sydney, Australia - should have winter sunrise/sunset
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "-33.8688",
-            "151.2093",
-            "2024-06-21",
-            "sunrise",
-        ])
-        .assert_success();
-
-    // Buenos Aires, Argentina - should have summer sunrise/sunset
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "-34.6037",
-            "-58.3816",
-            "2024-12-21",
-            "sunrise",
-        ])
-        .assert_success();
-
-    // Cape Town, South Africa (negative latitude)
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "--no-headers",
-            "-33.9249",
-            "18.4241",
-            "2024-01-15",
-            "sunrise",
-        ])
-        .assert_success();
-}
-
-#[test]
-fn test_negative_longitude_range() {
-    // Test longitude range from positive to negative (crossing Prime Meridian)
-    let mut cmd = sunce_command();
-
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "51.5",
-        "-5:5:2.5",
-        "2024-06-21T12:00:00",
-        "position",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-    assert!(
-        output.status.success(),
-        "Should handle longitude range crossing Prime Meridian"
-    );
-
-    // Expected: longitude -5, -2.5, 0, 2.5, 5 (5 values)
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 5, "Should produce 5 longitude points");
-}
-
-#[test]
-fn test_negative_latitude_range_southern_hemisphere() {
-    // Test latitude range entirely in southern hemisphere
-    let mut cmd = sunce_command();
-
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "-40:-30:5",
-        "150",
-        "2024-12-21T12:00:00",
-        "position",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-    assert!(
-        output.status.success(),
-        "Should handle negative latitude range"
-    );
-
-    // Expected: latitude -40, -35, -30 (3 values)
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 3, "Should produce 3 latitude points");
-}
-
-#[test]
-fn test_both_coordinate_ranges_crossing_zero() {
-    // Test both coordinates crossing zero simultaneously
-    let mut cmd = sunce_command();
-
-    cmd.args([
-        "--format=csv",
-        "--no-headers",
-        "-2:2:2",
-        "-2:2:2",
-        "2024-06-21T12:00:00",
-        "position",
-    ]);
-
-    let output = cmd.output().expect("Failed to execute command");
-    assert!(
-        output.status.success(),
-        "Should handle both coordinates crossing zero"
-    );
-
-    // Expected: lat -2, 0, 2 (3 values) × lon -2, 0, 2 (3 values) = 9 combinations
-    let line_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-    assert_eq!(line_count, 9, "Should produce 3x3 grid");
-}
-
-#[test]
-fn test_extreme_negative_coordinates() {
-    // Test near south pole
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "-89.5",
-            "0",
-            "2024-12-21T12:00:00",
-            "position",
-        ])
-        .assert_success();
-
-    // Test date line crossing with negative coordinates
-    SunceTest::new()
-        .args([
-            "--format=csv",
-            "-45.0",
-            "-179.9",
-            "2024-06-21T12:00:00",
-            "position",
-        ])
-        .assert_success();
 }

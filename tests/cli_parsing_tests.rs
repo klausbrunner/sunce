@@ -1,40 +1,60 @@
 use predicates::prelude::*;
 
 mod common;
-use common::sunce_command;
+use common::{parse_csv_no_headers_output, sunce_command};
+
+fn assert_success(args: &[&str], stdin: Option<&str>) {
+    let mut cmd = sunce_command();
+    cmd.args(args);
+    if let Some(stdin) = stdin {
+        cmd.write_stdin(stdin);
+    }
+    cmd.assert().success();
+}
+
+fn assert_failure(args: &[&str], expected_stderr: &str) {
+    sunce_command()
+        .args(args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(expected_stderr));
+}
+
+fn step_rows(step: &str) -> Vec<Vec<String>> {
+    let output = sunce_command()
+        .args([
+            "52.0",
+            "13.4",
+            "2024-01-01",
+            "position",
+            step,
+            "--format=csv",
+            "--no-headers",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    parse_csv_no_headers_output(&String::from_utf8(output.stdout).unwrap())
+}
 
 #[test]
-fn test_options_before_positionals() {
-    sunce_command()
-        .args([
+fn test_position_option_placement_variants() {
+    for args in [
+        vec![
             "--format=csv",
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "position",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_options_after_positionals() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "position",
             "--format=csv",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_options_mixed_positions() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "--format=csv",
             "52.0",
             "13.4",
@@ -42,43 +62,22 @@ fn test_options_mixed_positions() {
             "2024-01-01T12:00:00",
             "position",
             "--no-refraction",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_command_specific_option_before_command() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "--algorithm=grena3",
             "position",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_command_specific_option_after_command() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "position",
             "--algorithm=grena3",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_global_and_command_options_mixed() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "--format=csv",
             "52.0",
             "13.4",
@@ -86,169 +85,22 @@ fn test_global_and_command_options_mixed() {
             "--step=1h",
             "position",
             "--no-headers",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_step_with_full_datetime_rejected() {
-    sunce_command()
-        .args([
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "--step=1h",
-            "position",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Option --step requires date-only input",
-        ));
-}
-
-#[test]
-fn test_negative_step_rejected() {
-    sunce_command()
-        .args(["52.0", "13.4", "2024-01-01", "--step=-1h", "position"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Step must be positive"));
-}
-
-#[test]
-fn test_invalid_option_for_position_command() {
-    sunce_command()
-        .args(["52.0", "13.4", "2024-01-01", "--twilight", "position"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--twilight not valid for position",
-        ));
-}
-
-#[test]
-fn test_invalid_option_for_sunrise_command() {
-    sunce_command()
-        .args(["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--step not valid for sunrise"));
-}
-
-#[test]
-fn test_horizon_invalid_for_position() {
-    sunce_command()
-        .args(["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--horizon not valid for position"));
-}
-
-#[test]
-fn test_algorithm_invalid_for_sunrise() {
-    sunce_command()
-        .args([
-            "52.0",
-            "13.4",
-            "2024-01-01",
-            "sunrise",
-            "--algorithm=grena3",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--algorithm not valid for sunrise",
-        ));
-}
-
-#[test]
-fn test_invalid_timezone_datetime_surfaces_error() {
-    sunce_command()
-        .args([
-            "40.0",
-            "-74.0",
-            "2024-03-10T02:30:00",
-            "--timezone=America/New_York",
-            "position",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Datetime does not exist in timezone",
-        ));
-}
-
-#[test]
-fn test_invalid_refraction_inputs_surface_error() {
-    sunce_command()
-        .args([
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-            "--pressure=-10",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Invalid refraction parameters"));
-}
-
-#[test]
-fn test_options_anywhere_with_file_input() {
-    sunce_command()
-        .args(["--format=json", "@-", "position", "--no-headers"])
-        .write_stdin("52.0 13.4 2024-01-01T12:00:00\n")
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_deltat_before_and_after_positionals() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "--deltat=69.2",
             "position",
-        ])
-        .assert()
-        .success();
-
-    sunce_command()
-        .args([
+        ],
+        vec![
             "--deltat=69.2",
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "position",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_multiple_deltat_still_errors() {
-    sunce_command()
-        .args([
-            "--deltat=69.2",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "--deltat=70.0",
-            "position",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot be used multiple times"));
-}
-
-#[test]
-fn test_all_position_options_anywhere() {
-    sunce_command()
-        .args([
+        ],
+        vec![
             "--format=csv",
             "52.0",
             "--algorithm=grena3",
@@ -259,15 +111,16 @@ fn test_all_position_options_anywhere() {
             "--temperature=20.0",
             "--pressure=1000.0",
             "--step=2h",
-        ])
-        .assert()
-        .success();
+        ],
+    ] {
+        assert_success(&args, None);
+    }
 }
 
 #[test]
-fn test_sunrise_with_options_anywhere() {
-    sunce_command()
-        .args([
+fn test_sunrise_option_placement_variants() {
+    assert_success(
+        &[
             "--format=csv",
             "52.0",
             "13.4",
@@ -275,55 +128,176 @@ fn test_sunrise_with_options_anywhere() {
             "2024-01-01",
             "sunrise",
             "--horizon=-6.0",
-        ])
+        ],
+        None,
+    );
+    assert_success(
+        &["--format=json", "@-", "position", "--no-headers"],
+        Some("52.0 13.4 2024-01-01T12:00:00\n"),
+    );
+}
+
+#[test]
+fn test_invalid_cli_combinations() {
+    for (args, expected_stderr) in [
+        (
+            vec![
+                "52.0",
+                "13.4",
+                "2024-01-01T12:00:00",
+                "--step=1h",
+                "position",
+            ],
+            "Option --step requires date-only input",
+        ),
+        (
+            vec!["52.0", "13.4", "2024-01-01", "--step=-1h", "position"],
+            "Step must be positive",
+        ),
+        (
+            vec!["52.0", "13.4", "2024-01-01", "--twilight", "position"],
+            "--twilight not valid for position",
+        ),
+        (
+            vec!["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"],
+            "--step not valid for sunrise",
+        ),
+        (
+            vec!["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"],
+            "--horizon not valid for position",
+        ),
+        (
+            vec![
+                "52.0",
+                "13.4",
+                "2024-01-01",
+                "sunrise",
+                "--algorithm=grena3",
+            ],
+            "--algorithm not valid for sunrise",
+        ),
+        (
+            vec![
+                "40.0",
+                "-74.0",
+                "2024-03-10T02:30:00",
+                "--timezone=America/New_York",
+                "position",
+            ],
+            "Datetime does not exist in timezone",
+        ),
+        (
+            vec![
+                "52.0",
+                "13.4",
+                "2024-01-01T12:00:00",
+                "position",
+                "--pressure=-10",
+            ],
+            "Invalid refraction parameters",
+        ),
+        (
+            vec![
+                "--deltat=69.2",
+                "52.0",
+                "13.4",
+                "2024-01-01T12:00:00",
+                "--deltat=70.0",
+                "position",
+            ],
+            "cannot be used multiple times",
+        ),
+    ] {
+        assert_failure(&args, expected_stderr);
+    }
+}
+
+#[test]
+fn test_help_and_version_paths() {
+    sunce_command()
+        .arg("--help")
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("Usage:"));
+
+    sunce_command()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sunce"));
+
+    sunce_command()
+        .args(["help", "position"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Calculates topocentric solar coordinates.",
+        ));
+
+    sunce_command()
+        .args(["help", "sunrise"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Calculates sunrise, transit, sunset",
+        ));
+
+    sunce_command()
+        .args(["help", "nonsense"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Unknown command: nonsense"));
 }
 
 #[test]
-fn test_step_without_unit() {
-    let output = sunce_command()
-        .args([
-            "52.0",
-            "13.4",
-            "2024-01-01",
-            "position",
-            "--step=3600",
-            "--format=csv",
-            "--no-headers",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-
-    assert_eq!(lines.len(), 24);
-    assert!(lines[0].contains("2024-01-01T00:00:00"));
-    assert!(lines[1].contains("2024-01-01T01:00:00"));
+fn test_unknown_option_and_argument_shape_errors() {
+    for (args, expected_stderr) in [
+        (vec!["--wat"], "Unknown option: --wat"),
+        (vec!["52.0"], "No command found"),
+        (vec!["52.0", "2024-01-01"], "No command found"),
+        (
+            vec!["52.0", "13.4", "2024-01-01", "extra", "position"],
+            "Too many arguments",
+        ),
+        (
+            vec!["@coords.txt", "13.4", "2024-01-01", "position"],
+            "Coordinate files must be provided as a single @file argument",
+        ),
+        (
+            vec!["52:53", "13.4", "2024-01-01T12:00:00", "position"],
+            "Range must be start:end:step",
+        ),
+        (
+            vec!["52:53:0", "13.4", "2024-01-01T12:00:00", "position"],
+            "Range step must be non-zero",
+        ),
+        (
+            vec!["52:53:-1", "13.4", "2024-01-01T12:00:00", "position"],
+            "Range step must be positive for ascending ranges",
+        ),
+        (
+            vec!["53:52:1", "13.4", "2024-01-01T12:00:00", "position"],
+            "Range step must be negative for descending ranges",
+        ),
+    ] {
+        assert_failure(&args, expected_stderr);
+    }
 }
 
 #[test]
-fn test_step_with_unit_still_works() {
-    let output = sunce_command()
-        .args([
-            "52.0",
-            "13.4",
-            "2024-01-01",
-            "position",
-            "--step=1h",
-            "--format=csv",
-            "--no-headers",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-
-    assert_eq!(lines.len(), 24);
-    assert!(lines[0].contains("2024-01-01T00:00:00"));
-    assert!(lines[1].contains("2024-01-01T01:00:00"));
+fn test_step_without_unit_and_with_unit_both_work() {
+    for step in ["--step=3600", "--step=1h"] {
+        let rows = step_rows(step);
+        assert_eq!(rows.len(), 24);
+        assert!(
+            rows[0]
+                .iter()
+                .any(|field| field.contains("2024-01-01T00:00:00"))
+        );
+        assert!(
+            rows[1]
+                .iter()
+                .any(|field| field.contains("2024-01-01T01:00:00"))
+        );
+    }
 }

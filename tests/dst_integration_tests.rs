@@ -1,511 +1,433 @@
 mod common;
 use chrono::{DateTime, FixedOffset};
-use common::{csv_row_map, parse_csv_output, parse_json_output, sunce_command};
+use common::{
+    parse_csv_no_headers_output, parse_csv_output_maps, parse_csv_single_record_map,
+    parse_json_output, sunce_command,
+};
 use serde_json::Value;
+use std::collections::HashMap;
 
-fn csv_single_record(output: std::process::Output) -> std::collections::HashMap<String, String> {
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let (headers, rows) = parse_csv_output(&stdout);
-    assert_eq!(rows.len(), 1, "expected one CSV record");
-    csv_row_map(&headers, &rows[0])
+type SeriesCase<'a> = (Vec<&'a str>, Vec<&'a str>, Option<&'a str>, Option<&'a str>);
+type NamedZoneCase<'a> = (Vec<&'a str>, Vec<&'a str>, Option<&'a str>);
+
+fn output_text(args: &[&str], envs: &[(&str, Option<&str>)]) -> String {
+    let mut cmd = sunce_command();
+    for (key, value) in envs {
+        match value {
+            Some(value) => {
+                cmd.env(key, value);
+            }
+            None => {
+                cmd.env_remove(key);
+            }
+        }
+    }
+    let output = cmd
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8(output).unwrap()
 }
 
-fn csv_datetimes(output: std::process::Output) -> Vec<String> {
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let (headers, rows) = parse_csv_output(&stdout);
-    rows.iter()
-        .map(|row| {
-            let record = csv_row_map(&headers, row);
-            record["dateTime"].clone()
-        })
+fn csv_row(args: &[&str], envs: &[(&str, Option<&str>)]) -> HashMap<String, String> {
+    parse_csv_single_record_map(&output_text(args, envs))
+}
+
+fn csv_datetimes(args: &[&str], envs: &[(&str, Option<&str>)]) -> Vec<String> {
+    parse_csv_output_maps(&output_text(args, envs))
+        .into_iter()
+        .map(|row| row["dateTime"].clone())
         .collect()
 }
 
-fn no_header_csv_datetimes(stdout: &str) -> Vec<String> {
-    common::parse_csv_no_headers_output(stdout)
+fn no_header_datetimes(args: &[&str], envs: &[(&str, Option<&str>)]) -> Vec<String> {
+    parse_csv_no_headers_output(&output_text(args, envs))
         .into_iter()
         .map(|row| {
             row.into_iter()
                 .find(|field| DateTime::<FixedOffset>::parse_from_rfc3339(field).is_ok())
-                .unwrap_or_else(|| panic!("datetime field not found"))
+                .expect("datetime field not found")
         })
         .collect()
 }
 
 #[test]
-fn test_dst_spring_forward_single_datetime() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03-31T02:00:00",
-        "position",
-    ]);
+fn test_fixed_offset_single_datetimes() {
+    for (args, expected) in [
+        (
+            vec![
+                "--timezone=+01:00",
+                "--show-inputs",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03-31T02:00:00",
+                "position",
+            ],
+            "2024-03-31T02:00:00+01:00",
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--show-inputs",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-10-27T02:00:00",
+                "position",
+            ],
+            "2024-10-27T02:00:00+01:00",
+        ),
+        (
+            vec![
+                "--timezone=+02:00",
+                "--show-inputs",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-07-15T12:00:00",
+                "position",
+            ],
+            "2024-07-15T12:00:00+02:00",
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--show-inputs",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-01-15T12:00:00",
+                "position",
+            ],
+            "2024-01-15T12:00:00+01:00",
+        ),
+        (
+            vec![
+                "--timezone=-05:00",
+                "--show-inputs",
+                "--format=CSV",
+                "40.7",
+                "-74.0",
+                "2024-03-10T02:00:00",
+                "position",
+            ],
+            "2024-03-10T02:00:00-05:00",
+        ),
+        (
+            vec![
+                "--timezone=+02:00",
+                "--show-inputs",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03-31T02:00:00",
+                "position",
+            ],
+            "2024-03-31T02:00:00+02:00",
+        ),
+    ] {
+        let row = csv_row(&args, &[]);
+        assert_eq!(row.get("dateTime").map(String::as_str), Some(expected));
+    }
 
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-03-31T02:00:00+01:00")
-    );
-    assert_eq!(record.get("azimuth").map(String::as_str), Some("31.6478"));
-}
-
-#[test]
-fn test_dst_spring_forward_time_series() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03-31",
-        "position",
-        "--step=1h",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-03-31T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T01:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T02:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T03:00:00+01:00".to_string()));
-}
-
-#[test]
-fn test_dst_fall_back_single_datetime() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-10-27T02:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-10-27T02:00:00+01:00")
-    );
-}
-
-#[test]
-fn test_dst_fall_back_time_series() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-10-27",
-        "position",
-        "--step=1h",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-10-27T01:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T02:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T03:00:00+01:00".to_string()));
-}
-
-#[test]
-fn test_dst_normal_summer_time() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+02:00",
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-07-15T12:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-07-15T12:00:00+02:00")
-    );
-}
-
-#[test]
-fn test_dst_normal_winter_time() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-01-15T12:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-01-15T12:00:00+01:00")
-    );
-}
-
-#[test]
-fn test_dst_different_timezone_us_eastern() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=-05:00",
-        "--show-inputs",
-        "--format=CSV",
-        "40.7",
-        "-74.0",
-        "2024-03-10T02:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-03-10T02:00:00-05:00")
-    );
-}
-
-#[test]
-fn test_dst_timezone_override() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+02:00",
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03-31T02:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    assert_eq!(
-        record.get("dateTime").map(String::as_str),
-        Some("2024-03-31T02:00:00+02:00")
-    );
-}
-
-#[test]
-fn test_named_timezone_override_uses_dst_offset_summer() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=America/New_York",
-        "--format=json",
-        "--no-show-inputs",
-        "0",
-        "0",
-        "2025-06-21T12:00:00Z",
-        "position",
-    ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let json = parse_json_output(&stdout);
-    assert_eq!(
-        json.get("dateTime").and_then(Value::as_str),
-        Some("2025-06-21T08:00:00-04:00")
-    );
-}
-
-#[test]
-fn test_named_timezone_override_uses_dst_offset_winter() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=America/New_York",
-        "--format=json",
-        "--no-show-inputs",
-        "0",
-        "0",
-        "2025-01-15T12:00:00Z",
-        "position",
-    ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let json = parse_json_output(&stdout);
-    assert_eq!(
-        json.get("dateTime").and_then(Value::as_str),
-        Some("2025-01-15T07:00:00-05:00")
-    );
-}
-
-#[test]
-fn test_system_timezone_detection_without_tz_env_summer() {
-    let mut cmd = sunce_command();
-    cmd.env_remove("TZ")
-        .env("SUNCE_SYSTEM_TIMEZONE", "Europe/Berlin")
-        .args([
-            "--format=json",
-            "--no-show-inputs",
-            "0",
-            "0",
-            "2024-07-01T12:00:00",
+    let spring = csv_row(
+        &[
+            "--timezone=+01:00",
+            "--show-inputs",
+            "--format=CSV",
+            "52.0",
+            "13.4",
+            "2024-03-31T02:00:00",
             "position",
-        ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let json = parse_json_output(&stdout);
-    assert_eq!(
-        json.get("dateTime").and_then(Value::as_str),
-        Some("2024-07-01T12:00:00+02:00")
+        ],
+        &[],
     );
+    assert_eq!(spring.get("azimuth").map(String::as_str), Some("31.6478"));
 }
 
 #[test]
-fn test_system_timezone_detection_without_tz_env_winter() {
-    let mut cmd = sunce_command();
-    cmd.env_remove("TZ")
-        .env("SUNCE_SYSTEM_TIMEZONE", "Europe/Berlin")
-        .args([
-            "--format=json",
-            "--no-show-inputs",
-            "0",
-            "0",
-            "2024-01-10T12:00:00",
+fn test_fixed_offset_time_series_are_stable() {
+    let cases: [SeriesCase<'_>; 6] = [
+        (
+            vec![
+                "--timezone=+01:00",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03-31",
+                "position",
+                "--step=1h",
+            ],
+            vec![
+                "2024-03-31T00:00:00+01:00",
+                "2024-03-31T01:00:00+01:00",
+                "2024-03-31T02:00:00+01:00",
+                "2024-03-31T03:00:00+01:00",
+            ],
+            None,
+            None,
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-10-27",
+                "position",
+                "--step=1h",
+            ],
+            vec![
+                "2024-10-27T01:00:00+01:00",
+                "2024-10-27T02:00:00+01:00",
+                "2024-10-27T03:00:00+01:00",
+            ],
+            None,
+            None,
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03",
+                "position",
+                "--step=24h",
+            ],
+            vec!["2024-03-30T00:00:00+01:00", "2024-03-31T00:00:00+01:00"],
+            None,
+            Some("+01:00"),
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024",
+                "position",
+                "--step=24h",
+            ],
+            vec![
+                "2024-03-30T00:00:00+01:00",
+                "2024-04-01T00:00:00+01:00",
+                "2024-10-26T00:00:00+01:00",
+                "2024-10-28T00:00:00+01:00",
+            ],
+            None,
+            None,
+        ),
+        (
+            vec![
+                "--timezone=+01:00",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03-31",
+                "position",
+                "--step=30m",
+            ],
+            vec![
+                "2024-03-31T01:00:00+01:00",
+                "2024-03-31T02:00:00+01:00",
+                "2024-03-31T02:30:00+01:00",
+                "2024-03-31T03:00:00+01:00",
+            ],
+            None,
+            Some("+01:00"),
+        ),
+        (
+            vec![
+                "--timezone=UTC",
+                "--format=CSV",
+                "52.0",
+                "13.4",
+                "2024-03-31",
+                "position",
+                "--step=1h",
+            ],
+            vec![
+                "2024-03-31T01:00:00+00:00",
+                "2024-03-31T02:00:00+00:00",
+                "2024-03-31T03:00:00+00:00",
+            ],
+            None,
+            None,
+        ),
+    ];
+    for (args, expected, absent_prefix, required_suffix) in cases {
+        let datetimes = csv_datetimes(&args, &[]);
+        for datetime in expected {
+            assert!(datetimes.contains(&datetime.to_string()));
+        }
+        if let Some(prefix) = absent_prefix {
+            assert!(!datetimes.iter().any(|ts| ts.starts_with(prefix)));
+        }
+        if let Some(suffix) = required_suffix {
+            assert!(datetimes.iter().all(|ts| ts.ends_with(suffix)));
+        }
+    }
+}
+
+#[test]
+fn test_named_timezones_apply_real_dst_rules() {
+    let cases: [NamedZoneCase<'_>; 3] = [
+        (
+            vec![
+                "--timezone=Europe/Berlin",
+                "--format=CSV",
+                "--no-headers",
+                "52.0",
+                "13.4",
+                "2024-03-31",
+                "position",
+                "--step=1h",
+            ],
+            vec![
+                "2024-03-31T00:00:00+01:00",
+                "2024-03-31T01:00:00+01:00",
+                "2024-03-31T03:00:00+02:00",
+                "2024-03-31T04:00:00+02:00",
+            ],
+            Some("2024-03-31T02:00:00"),
+        ),
+        (
+            vec![
+                "--timezone=Europe/Berlin",
+                "--format=CSV",
+                "--no-headers",
+                "52.0",
+                "13.4",
+                "2024-10-27",
+                "position",
+                "--step=1h",
+            ],
+            vec![
+                "2024-10-27T01:00:00+02:00",
+                "2024-10-27T02:00:00+02:00",
+                "2024-10-27T02:00:00+01:00",
+                "2024-10-27T03:00:00+01:00",
+                "2024-10-27T04:00:00+01:00",
+            ],
+            None,
+        ),
+        (
+            vec![
+                "--timezone=America/New_York",
+                "--format=CSV",
+                "--no-headers",
+                "40.7",
+                "-74.0",
+                "2024-03-10",
+                "position",
+                "--step=1h",
+            ],
+            vec!["2024-03-10T01:00:00-05:00", "2024-03-10T03:00:00-04:00"],
+            Some("2024-03-10T02:00:00"),
+        ),
+    ];
+    for (args, expected, missing_prefix) in cases {
+        let datetimes = no_header_datetimes(&args, &[]);
+        for datetime in expected {
+            assert!(datetimes.contains(&datetime.to_string()));
+        }
+        if let Some(prefix) = missing_prefix {
+            assert!(!datetimes.iter().any(|ts| ts.starts_with(prefix)));
+        }
+    }
+}
+
+#[test]
+fn test_named_timezone_override_offsets() {
+    for (datetime, expected) in [
+        ("2025-06-21T12:00:00Z", "2025-06-21T08:00:00-04:00"),
+        ("2025-01-15T12:00:00Z", "2025-01-15T07:00:00-05:00"),
+    ] {
+        let json = parse_json_output(&output_text(
+            &[
+                "--timezone=America/New_York",
+                "--format=json",
+                "--no-show-inputs",
+                "0",
+                "0",
+                datetime,
+                "position",
+            ],
+            &[],
+        ));
+        assert_eq!(json.get("dateTime").and_then(Value::as_str), Some(expected));
+    }
+}
+
+#[test]
+fn test_system_timezone_detection_paths() {
+    for (datetime, expected) in [
+        ("2024-07-01T12:00:00", "2024-07-01T12:00:00+02:00"),
+        ("2024-01-10T12:00:00", "2024-01-10T12:00:00+01:00"),
+    ] {
+        let json = parse_json_output(&output_text(
+            &[
+                "--format=json",
+                "--no-show-inputs",
+                "0",
+                "0",
+                datetime,
+                "position",
+            ],
+            &[
+                ("TZ", None),
+                ("SUNCE_SYSTEM_TIMEZONE", Some("Europe/Berlin")),
+            ],
+        ));
+        assert_eq!(json.get("dateTime").and_then(Value::as_str), Some(expected));
+    }
+
+    let row = csv_row(
+        &[
+            "--show-inputs",
+            "--format=CSV",
+            "52.0",
+            "13.4",
+            "2024-01-15T12:00:00",
             "position",
-        ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let json = parse_json_output(&stdout);
-    assert_eq!(
-        json.get("dateTime").and_then(Value::as_str),
-        Some("2024-01-10T12:00:00+01:00")
+        ],
+        &[],
     );
-}
-
-#[test]
-fn test_dst_partial_date_time_series() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03",
-        "position",
-        "--step=24h",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-03-30T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T00:00:00+01:00".to_string()));
-    assert!(datetimes.iter().all(|ts| ts.ends_with("+01:00")));
-}
-
-#[test]
-fn test_dst_year_time_series() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024",
-        "position",
-        "--step=24h",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-03-30T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-04-01T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-26T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-28T00:00:00+01:00".to_string()));
-}
-
-#[test]
-fn test_dst_edge_case_31st_march_exact_time() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=+01:00",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03-31",
-        "position",
-        "--step=30m",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-03-31T01:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T02:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T02:30:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T03:00:00+01:00".to_string()));
-    assert!(datetimes.iter().all(|ts| ts.ends_with("+01:00")));
-}
-
-#[test]
-fn test_dst_comparison_with_utc() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=UTC",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-03-31",
-        "position",
-        "--step=1h",
-    ]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(datetimes.contains(&"2024-03-31T01:00:00+00:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T02:00:00+00:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T03:00:00+00:00".to_string()));
-}
-
-#[test]
-fn test_dst_named_timezone_spring_forward() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=Europe/Berlin",
-        "--format=CSV",
-        "--no-headers",
-        "52.0",
-        "13.4",
-        "2024-03-31",
-        "position",
-        "--step=1h",
-    ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let datetimes = no_header_csv_datetimes(&stdout);
-
-    assert!(datetimes.contains(&"2024-03-31T00:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T01:00:00+01:00".to_string()));
-    assert!(
-        !datetimes
-            .iter()
-            .any(|ts| ts.starts_with("2024-03-31T02:00:00"))
-    );
-    assert!(datetimes.contains(&"2024-03-31T03:00:00+02:00".to_string()));
-    assert!(datetimes.contains(&"2024-03-31T04:00:00+02:00".to_string()));
-}
-
-#[test]
-fn test_dst_named_timezone_fall_back() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=Europe/Berlin",
-        "--format=CSV",
-        "--no-headers",
-        "52.0",
-        "13.4",
-        "2024-10-27",
-        "position",
-        "--step=1h",
-    ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let datetimes = no_header_csv_datetimes(&stdout);
-
-    assert!(datetimes.contains(&"2024-10-27T01:00:00+02:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T02:00:00+02:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T02:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T03:00:00+01:00".to_string()));
-    assert!(datetimes.contains(&"2024-10-27T04:00:00+01:00".to_string()));
-}
-
-#[test]
-fn test_dst_named_timezone_us_eastern() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--timezone=America/New_York",
-        "--format=CSV",
-        "--no-headers",
-        "40.7",
-        "-74.0",
-        "2024-03-10",
-        "position",
-        "--step=1h",
-    ]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let datetimes = no_header_csv_datetimes(&stdout);
-
-    assert!(datetimes.contains(&"2024-03-10T01:00:00-05:00".to_string()));
-    assert!(
-        !datetimes
-            .iter()
-            .any(|ts| ts.starts_with("2024-03-10T02:00:00"))
-    );
-    assert!(datetimes.contains(&"2024-03-10T03:00:00-04:00".to_string()));
-}
-
-#[test]
-fn test_system_timezone_detection() {
-    let mut cmd = sunce_command();
-    cmd.args([
-        "--show-inputs",
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-01-15T12:00:00",
-        "position",
-    ]);
-
-    let record = csv_single_record(cmd.output().unwrap());
-    let datetime = record.get("dateTime").unwrap();
+    let datetime = row.get("dateTime").unwrap();
     assert!(datetime.starts_with("2024-01-15T12:00:00"));
     assert!(datetime.contains('+') || datetime.contains('-'));
 }
 
 #[test]
-fn test_now_respects_tz_env() {
-    let mut cmd = sunce_command();
-    cmd.env("TZ", "America/New_York");
-    cmd.args(["--format=CSV", "40.7", "-74.0", "now", "position"]);
+fn test_now_respects_timezone_sources() {
+    for (envs, args, suffixes) in [
+        (
+            vec![("TZ", Some("America/New_York"))],
+            vec!["--format=CSV", "40.7", "-74.0", "now", "position"],
+            vec!["-05:00", "-04:00"],
+        ),
+        (
+            vec![("TZ", Some("+05:30"))],
+            vec!["--format=CSV", "28.6", "77.2", "now", "position"],
+            vec!["+05:30"],
+        ),
+    ] {
+        let datetimes = csv_datetimes(&args, &envs);
+        assert!(!datetimes.is_empty());
+        let datetime = &datetimes[0];
+        assert!(suffixes.iter().any(|suffix| datetime.ends_with(suffix)));
+        assert!(!datetime.ends_with("+00:00"));
+    }
 
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(!datetimes.is_empty());
-    let datetime = &datetimes[0];
-    assert!(datetime.ends_with("-05:00") || datetime.ends_with("-04:00"));
-    assert!(!datetime.ends_with("+00:00"));
-}
-
-#[test]
-fn test_now_respects_tz_env_fixed_offset() {
-    let mut cmd = sunce_command();
-    cmd.env("TZ", "+05:30");
-    cmd.args(["--format=CSV", "28.6", "77.2", "now", "position"]);
-
-    let datetimes = csv_datetimes(cmd.output().unwrap());
-    assert!(!datetimes.is_empty());
-    let datetime = &datetimes[0];
-    assert!(datetime.ends_with("+05:30"));
-    assert!(!datetime.ends_with("+00:00"));
-}
-
-#[test]
-fn test_now_table_format_shows_timezone() {
-    let mut cmd = sunce_command();
-    cmd.env("TZ", "Europe/Paris");
-    cmd.args(["48.8", "2.3", "now", "position"]);
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-    let output_str = String::from_utf8(output.stdout).unwrap();
-
-    let has_paris_tz = output_str.contains("+01:00") || output_str.contains("+02:00");
-    assert!(has_paris_tz);
-    assert!(output_str.contains("dateTime"));
+    let output = output_text(
+        &["48.8", "2.3", "now", "position"],
+        &[("TZ", Some("Europe/Paris"))],
+    );
+    assert!(output.contains("dateTime"));
+    assert!(output.contains("+01:00") || output.contains("+02:00"));
 }
