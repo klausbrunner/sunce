@@ -48,7 +48,7 @@ jobs:
 
       - name: Run clippy (Linux only)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy -- -D warnings -A dead_code
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Check docs (Linux only)
         if: matrix.os == 'ubuntu-latest'
