@@ -120,7 +120,7 @@ Run `sunce --help` for a brief usage summary.
 Standard smoke test (release build):
 
 ```bash
-target/release/sunce --perf --format=CSV --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null
+target/release/sunce --perf --format=csv --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null
 ```
 
 ## License
