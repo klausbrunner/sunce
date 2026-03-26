@@ -1,3 +1,5 @@
+//! Error types for CLI parsing, planning, and output handling.
+
 use std::fmt;
 
 #[derive(Debug)]
@@ -6,6 +8,8 @@ pub enum CliError {
     Exit(String),
     /// Print message to stderr and exit with code 1.
     Message(String),
+    /// Print message to stderr and exit with a specific code.
+    MessageWithCode(String, i32),
 }
 
 impl From<String> for CliError {
@@ -29,7 +33,9 @@ impl From<std::io::Error> for CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CliError::Exit(msg) | CliError::Message(msg) => f.write_str(msg),
+            CliError::Exit(msg) | CliError::Message(msg) | CliError::MessageWithCode(msg, _) => {
+                f.write_str(msg)
+            }
         }
     }
 }

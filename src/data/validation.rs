@@ -1,3 +1,5 @@
+//! Latitude and longitude validation helpers.
+
 fn ensure_within(value: f64, min: f64, max: f64, label: &str) -> Result<f64, String> {
     if value < min || value > max {
         Err(format!(

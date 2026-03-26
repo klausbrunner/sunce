@@ -1,3 +1,5 @@
+//! Input expansion for ranges, files, and cartesian products.
+
 use super::time_utils::{
     TimezoneInfo, convert_datetime_to_timezone, get_timezone_info, parse_datetime_string,
 };

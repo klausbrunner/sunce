@@ -1,83 +1,127 @@
-# Architecture Overview
+# Architecture
 
-Sunce is a streaming CLI for solar position and sunrise/sunset calculations. The pipeline is:
+Sunce is a streaming CLI for solar position and sunrise/sunset calculations. The top-level flow is:
 
-`CLI parse -> planning -> data expansion -> calculation -> output`
+`parse -> validate -> plan -> execute`
 
-Each stage works on iterators so large datasets can be processed without collecting all records in memory.
+The design goal is to keep each stage narrow:
 
-## Core Modules
+- parsing handles syntax and raw option values
+- validation applies command semantics and produces executable requests
+- planning decides execution shape
+- execution computes results and writes output
 
-- `src/main.rs`: entry point; wires parse/plan/compute/output and prints `--perf` stats.
-- `src/cli.rs`: manual argument parser; validates command-specific options and builds typed `DataSource`, `Command`, and `Parameters`.
-- `src/planner.rs`: derives `ComputePlan` and `OutputPlan` (cache/flush behavior).
-- `src/data/`: input expansion and validation (ranges, files, time parsing, timezone handling).
-- `src/compute.rs`: streaming calculations via `solar-positioning`; includes optional SPA time-part caching.
-- `src/output.rs`: shared row normalization plus text/CSV/JSON writers.
-- `src/parquet.rs` (feature-gated): Arrow/Parquet writer with Snappy compression.
+## Execution Modes
 
-## Commands and Inputs
+Sunce has two internal execution modes:
 
-Commands:
+- `stream`: expand inputs, compute records, and write text/CSV/JSON/Parquet output
+- `predicate`: evaluate one boolean condition for one explicit location and instant, optionally waiting until it becomes true
 
-- `position`: azimuth + zenith/elevation.
-- `sunrise`: sunrise/transit/sunset, plus optional twilight.
+This split is intentional. Predicate mode is not routed through the normal output pipeline.
 
-Input forms:
+## Module Boundaries
 
-- Separate args: `<lat> <lon> <time>`.
-- Paired file: `@file` with `lat lon datetime` per line.
-- Split files: `@coords @times`.
-- `@-` (stdin) is supported for one stream at a time.
+- `src/main.rs`: top-level dispatcher. It coordinates parse/validate/plan/execute and maps errors to exit codes.
+- `src/cli.rs`: manual CLI parser. It builds parsed commands and reports syntax-level errors.
+- `src/parsed.rs`: raw parsed command structures used between parsing and validation.
+- `src/validate.rs`: semantic validation. It turns parsed commands into valid stream requests or predicate jobs.
+- `src/planner.rs`: execution planning. It turns validated commands into either a stream plan or a predicate job.
+- `src/compute.rs`: stream orchestration and shared result types.
+- `src/position.rs`: solar position calculations and SPA cache support.
+- `src/sunrise.rs`: sunrise/twilight calculations, solar-state classification, and next-state transitions.
+- `src/predicate.rs`: predicate evaluation and wait-until logic.
+- `src/output.rs`: text/CSV/JSON output.
+- `src/parquet.rs`: Parquet output when the `parquet` feature is enabled.
+- `src/data/`: shared data types, validation helpers, time parsing, and input expansion.
 
-Supported time syntax includes full datetime, partial dates (`YYYY`, `YYYY-MM`), unix timestamps, and `now`.
+## Data Flow
 
-## Expansion and Streaming
+### Parse
 
-- Expansion produces `Iterator<Item = Result<(lat, lon, datetime), String>>`.
-- For location ranges, one coordinate axis is materialized (the smaller one) and the other axis streams, bounding memory.
-- Planner selects iteration order based on replayability (file/stdin/now) and enables per-record flushing for stdin and watch mode.
-- Unbounded watch mode (`now` + `--step`) is restricted to a single location.
+`cli` parses options and positional arguments into `ParsedCommand`. At this stage the program preserves raw user intent such as:
 
-## Calculation Layer
+- command choice (`position` or `sunrise`)
+- input shape (explicit values, files, ranges, `now`)
+- raw predicate flags
+- raw option usage
 
-- Uses `solar-positioning`:
-  - Position: SPA or Grena3.
-  - Sunrise: sunrise/sunset for selected horizon, or multi-horizon twilight set.
-- Refraction correction is validated before use.
-- For SPA position runs where beneficial, datetime-dependent SPA parts are cached in a bounded FIFO-style cache (`TIME_CACHE_CAPACITY = 2048`).
-- Output from compute remains a lazy result stream (`Result<CalculationResult, String>`).
+### Validate
 
-## Output Layer
+`validate` is the semantic boundary. It:
 
-Formats:
+- resolves whether a time input is a single instant or a range
+- enforces command-specific option rules
+- enforces predicate restrictions
+- produces either:
+  - a validated stream request (`position` or `sunrise`)
+  - a validated `PredicateJob`
 
-- `text`: aligned table output.
-- `csv`: comma-separated rows.
-- `json`: JSON Lines (one object per line).
-- `parquet` (feature `parquet`): columnar output.
+After validation, the program should not need to re-check CLI semantics elsewhere.
 
-Design notes:
+### Plan
 
-- Text and CSV are generated from shared row-value extraction to keep field order and precision aligned.
-- Datetime strings are emitted in RFC3339 without milliseconds.
-- `show-inputs` can be explicit or auto-enabled for multi-valued inputs (ranges/files/paired).
+`planner` converts validated commands into one of:
 
-## Timezones and Dates
+- `RunPlan::Stream`
+- `RunPlan::Predicate`
 
-- Explicit offsets in input are preserved unless `--timezone` override is supplied.
-- Without explicit timezone, resolution uses override -> `TZ` -> detected system timezone.
-- Named zones are handled with `chrono-tz`; fixed offsets are supported directly.
-- DST handling is done during local-time resolution; non-existent local times (gaps) return explicit errors.
+For stream mode, planning decides:
 
-## Errors and Exit Behavior
+- how inputs are expanded
+- whether SPA time caching is allowed
+- whether output should flush per record
 
-- Typed top-level errors: `CliError`, `PlannerError`, `OutputError`.
-- CLI exits:
-  - `CliError::Exit`: prints message to stdout and exits `0` (help/version/usage).
-  - `CliError::Message` and downstream failures: prints to stderr and exits `1`.
+### Execute
 
-## Build Features
+In stream mode:
 
-- Default feature set includes `parquet`.
-- `--no-default-features` builds without Parquet dependencies.
+- `data::expansion` produces a lazy stream of `(lat, lon, datetime)` records
+- `compute` dispatches to `position` or `sunrise`
+- `output` or `parquet` writes results incrementally
+
+In predicate mode:
+
+- `predicate` evaluates one condition against one resolved location/instant
+- optional `--wait` stays inside predicate mode
+
+## Streaming Model
+
+The normal command path is designed for bounded memory use:
+
+- input expansion is iterator-based
+- calculations stream record by record
+- outputs are written incrementally
+- large result sets are not collected in memory
+
+For location ranges, expansion materializes only the smaller coordinate dimension and streams the other, which keeps cartesian products practical without fully buffering them.
+
+## Solar Domain Split
+
+The solar domain logic is split by responsibility:
+
+- `position` owns topocentric solar position and elevation-angle derivation
+- `sunrise` owns sunrise/sunset/twilight event calculation and solar-state reasoning
+- `predicate` consumes those domain primitives but does not implement solar math itself
+
+This keeps command semantics and automation behavior out of the calculation modules.
+
+## Time and Timezone Rules
+
+Time parsing and timezone resolution are centralized in `data` and validation:
+
+- explicit offsets in input are preserved unless overridden
+- otherwise timezone resolution is: `--timezone` -> `TZ` -> system timezone
+- partial dates become ranges where appropriate
+- predicate mode requires one explicit instant
+
+DST gaps and ambiguous local times are handled during datetime resolution, not later in the compute path.
+
+## Output Design
+
+Stream output formats share one calculation pipeline. Formatting is separated from computation:
+
+- `compute` produces typed calculation results
+- `output` and `parquet` map those results into concrete encodings
+
+Predicate mode intentionally does not use these writers; it communicates through exit status.

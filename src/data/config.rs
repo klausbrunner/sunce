@@ -1,3 +1,5 @@
+//! Configuration types for commands, calculation options, and output settings.
+
 use chrono::Duration;
 use std::fmt;
 use std::str::FromStr;
@@ -158,6 +160,7 @@ pub struct Parameters {
     pub output: OutputOptions,
     pub environment: Environment,
     pub calculation: CalculationOptions,
+    pub wait: bool,
     pub perf: bool,
     pub step: Option<Step>,
     pub timezone: Option<TimezoneOverride>,
@@ -170,6 +173,7 @@ impl Default for Parameters {
             output: OutputOptions::default(),
             environment: Environment::default(),
             calculation: CalculationOptions::default(),
+            wait: false,
             perf: false,
             step: None,
             timezone: None,
@@ -181,6 +185,18 @@ impl Default for Parameters {
 pub enum Command {
     Position,
     Sunrise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Predicate {
+    IsDaylight,
+    IsCivilTwilight,
+    IsNauticalTwilight,
+    IsAstronomicalTwilight,
+    IsAstronomicalNight,
+    AfterSunset,
+    SunAbove(f64),
+    SunBelow(f64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -275,6 +291,7 @@ mod tests {
     fn parameter_defaults_are_sensible() {
         let defaults = Parameters::default();
         assert_eq!(defaults.deltat, Some(0.0));
+        assert!(!defaults.wait);
         assert!(!defaults.perf);
         assert!(defaults.step.is_none());
         assert!(defaults.timezone.is_none());

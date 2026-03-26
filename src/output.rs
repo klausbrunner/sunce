@@ -949,7 +949,6 @@ fn write_rows<W: std::io::Write, R: OutputRowExt>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compute;
     use crate::data::OutputFormat;
     use crate::data::config::OutputOptions;
     use chrono::{FixedOffset, TimeZone};
@@ -986,7 +985,7 @@ mod tests {
             ..Parameters::default()
         };
 
-        let calc = compute::calculate_position(52.0, 13.4, dt, &params).unwrap();
+        let calc = crate::position::calculate_position(52.0, 13.4, dt, &params).unwrap();
         let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
             Box::new(vec![Ok(calc)].into_iter());
 

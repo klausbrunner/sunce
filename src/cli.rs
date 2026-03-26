@@ -1,30 +1,23 @@
 //! Command-line parsing and validation.
 
 use crate::data::{
-    self, CalculationAlgorithm, Command, DataSource, InputPath, LocationSource, OutputFormat,
-    Parameters, Step, TimeSource, TimezoneOverride,
+    self, CalculationAlgorithm, Command, InputPath, LocationSource, OutputFormat, Parameters,
+    Predicate, Step, TimezoneOverride,
 };
 use crate::error::CliError;
+use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use std::path::PathBuf;
 
 const DELTAT_MULTIPLE_ERROR: &str = "Option --deltat cannot be used multiple times";
+const PREDICATE_MULTIPLE_ERROR: &str = "Predicate options cannot be used multiple times";
 
 type CliResult<T> = Result<T, CliError>;
 
-#[derive(Default)]
-struct CommandOptionUsage {
-    step: bool,
-    no_refraction: bool,
-    elevation_angle: bool,
-    elevation: bool,
-    temperature: bool,
-    pressure: bool,
-    algorithm: bool,
-    horizon: bool,
-    twilight: bool,
+fn predicate_error(message: impl Into<String>) -> CliError {
+    CliError::MessageWithCode(message.into(), 2)
 }
 
-pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameters)> {
+pub fn parse_cli(args: Vec<String>) -> CliResult<ParsedCommand> {
     if args.len() < 2 {
         return Err(CliError::Exit(
             "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|sunrise>".to_string(),
@@ -32,9 +25,10 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
     }
 
     let mut params = Parameters::default();
+    let mut predicate = None;
     let mut positional = Vec::new();
     let mut deltat_seen = false;
-    let mut option_usage = CommandOptionUsage::default();
+    let mut option_usage = ParsedOptionUsage::default();
 
     for arg in args.into_iter().skip(1) {
         if let Some(stripped) = arg.strip_prefix("--") {
@@ -46,6 +40,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
                 name,
                 value,
                 &mut params,
+                &mut predicate,
                 &mut deltat_seen,
                 &mut option_usage,
             )?;
@@ -64,15 +59,14 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<(DataSource, Command, Parameter
         return Err(CliError::Exit(message));
     }
 
-    let (command, data_source) = parse_positional_args(&positional, &params)?;
-
-    validate_command_options(command, &option_usage)?;
-
-    if params.output.show_inputs.is_none() {
-        params.output.show_inputs = Some(should_auto_show_inputs(&data_source));
-    }
-
-    Ok((data_source, command, params))
+    let (command, input) = parse_positional_args(&positional, &params)?;
+    Ok(ParsedCommand {
+        command,
+        input,
+        params,
+        predicate,
+        usage: option_usage,
+    })
 }
 
 fn parse_f64(label: &str, value: &str) -> CliResult<f64> {
@@ -85,25 +79,84 @@ fn parse_f64(label: &str, value: &str) -> CliResult<f64> {
     })
 }
 
+fn ensure_flag(opt: &str, value: Option<&str>) -> CliResult<()> {
+    if value.is_some() {
+        Err(format!("Option --{} does not take a value", opt).into())
+    } else {
+        Ok(())
+    }
+}
+
+fn set_predicate(predicate: Predicate, parsed: &mut Option<Predicate>) -> CliResult<()> {
+    if parsed.is_some() {
+        return Err(predicate_error(PREDICATE_MULTIPLE_ERROR));
+    }
+    *parsed = Some(predicate);
+    Ok(())
+}
+
+fn parse_predicate_option(name: &str, value: Option<&str>) -> CliResult<Option<Predicate>> {
+    let parsed = match name {
+        "is-daylight" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::IsDaylight)
+        }
+        "is-civil-twilight" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::IsCivilTwilight)
+        }
+        "is-nautical-twilight" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::IsNauticalTwilight)
+        }
+        "is-astronomical-twilight" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::IsAstronomicalTwilight)
+        }
+        "is-astronomical-night" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::IsAstronomicalNight)
+        }
+        "after-sunset" => {
+            ensure_flag(name, value)?;
+            Some(Predicate::AfterSunset)
+        }
+        "sun-above" => Some(Predicate::SunAbove(
+            parse_f64(
+                "sun-above",
+                value.ok_or_else(|| predicate_error("Option --sun-above requires a value"))?,
+            )
+            .map_err(|err| predicate_error(err.to_string()))?,
+        )),
+        "sun-below" => Some(Predicate::SunBelow(
+            parse_f64(
+                "sun-below",
+                value.ok_or_else(|| predicate_error("Option --sun-below requires a value"))?,
+            )
+            .map_err(|err| predicate_error(err.to_string()))?,
+        )),
+        _ => None,
+    };
+    Ok(parsed)
+}
+
 fn apply_option(
     name: &str,
     value: Option<&str>,
     params: &mut Parameters,
+    parsed_predicate: &mut Option<Predicate>,
     deltat_seen: &mut bool,
-    option_usage: &mut CommandOptionUsage,
+    option_usage: &mut ParsedOptionUsage,
 ) -> CliResult<()> {
-    let ensure_flag = |opt: &str, val: Option<&str>| -> CliResult<()> {
-        if val.is_some() {
-            Err(format!("Option --{} does not take a value", opt).into())
-        } else {
-            Ok(())
-        }
-    };
+    if let Some(predicate) = parse_predicate_option(name, value)? {
+        return set_predicate(predicate, parsed_predicate);
+    }
 
     match name {
         "format" => {
             let v = required_value("format", value)?;
             params.output.format = v.parse::<OutputFormat>().map_err(CliError::from)?;
+            option_usage.format = true;
         }
         "deltat" => {
             if *deltat_seen {
@@ -155,22 +208,31 @@ fn apply_option(
         "headers" => {
             ensure_flag("headers", value)?;
             params.output.headers = true;
+            option_usage.headers = true;
         }
         "no-headers" => {
             ensure_flag("no-headers", value)?;
             params.output.headers = false;
+            option_usage.headers = true;
         }
         "show-inputs" => {
             ensure_flag("show-inputs", value)?;
             params.output.show_inputs = Some(true);
+            option_usage.show_inputs = true;
         }
         "no-show-inputs" => {
             ensure_flag("no-show-inputs", value)?;
             params.output.show_inputs = Some(false);
+            option_usage.show_inputs = true;
         }
         "perf" => {
             ensure_flag("perf", value)?;
             params.perf = true;
+            option_usage.perf = true;
+        }
+        "wait" => {
+            ensure_flag("wait", value)?;
+            params.wait = true;
         }
         "no-refraction" => {
             ensure_flag("no-refraction", value)?;
@@ -266,7 +328,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
 fn parse_positional_args(
     positional_args: &[String],
     params: &Parameters,
-) -> CliResult<(Command, DataSource)> {
+) -> CliResult<(Command, ParsedInput)> {
     let command_index = positional_args
         .iter()
         .position(|arg| arg == "position" || arg == "sunrise")
@@ -282,19 +344,15 @@ fn parse_positional_args(
     };
     Ok((
         command,
-        parse_data_source(&positional_args[..command_index], params, command)?,
+        parse_data_source(&positional_args[..command_index], params)?,
     ))
 }
 
-fn parse_data_source(
-    args: &[String],
-    params: &Parameters,
-    command: Command,
-) -> CliResult<DataSource> {
+fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<ParsedInput> {
     match args.len() {
         1 => {
             if args[0].starts_with('@') {
-                parse_file_arg(&args[0]).map(DataSource::Paired)
+                parse_file_arg(&args[0]).map(ParsedInput::Paired)
             } else {
                 Err("Single argument must be a file (@file or @-)".into())
             }
@@ -303,49 +361,34 @@ fn parse_data_source(
             if !args[0].starts_with('@') {
                 Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into())
             } else {
-                Ok(DataSource::Separate(
+                Ok(ParsedInput::Separate(
                     LocationSource::File(parse_file_arg(&args[0])?),
                     if args[1].starts_with('@') {
-                        TimeSource::File(parse_file_arg(&args[1])?)
+                        ParsedTimeSource::File(parse_file_arg(&args[1])?)
                     } else {
-                        parse_time_arg(&args[1], params, command)?
+                        parse_time_arg(&args[1], params)?
                     },
                 ))
             }
         }
-        3 => Ok(DataSource::Separate(
+        3 => Ok(ParsedInput::Separate(
             parse_location_args(&args[0], &args[1])?,
-            parse_time_arg(&args[2], params, command)?,
+            parse_time_arg(&args[2], params)?,
         )),
         _ => Err("Too many arguments".into()),
     }
 }
 
-fn parse_time_arg(time_str: &str, params: &Parameters, command: Command) -> CliResult<TimeSource> {
+fn parse_time_arg(time_str: &str, _params: &Parameters) -> CliResult<ParsedTimeSource> {
     if time_str.starts_with('@') {
-        return Ok(TimeSource::File(parse_file_arg(time_str)?));
+        return Ok(ParsedTimeSource::File(parse_file_arg(time_str)?));
     }
 
     if time_str == "now" {
-        return Ok(TimeSource::Now);
+        return Ok(ParsedTimeSource::Now);
     }
 
-    let is_date_only = crate::data::time_utils::is_date_without_time(time_str);
-    if crate::data::time_utils::is_partial_date(time_str)
-        || (is_date_only && (command == Command::Position || params.step.is_some()))
-    {
-        return Ok(TimeSource::Range(time_str.to_string()));
-    }
-
-    if params.step.is_some() {
-        return Err(
-            "Option --step requires date-only input (YYYY, YYYY-MM, or YYYY-MM-DD) or 'now'".into(),
-        );
-    }
-
-    let dt = data::parse_datetime_string(time_str, params.timezone.as_ref().map(|tz| tz.as_str()))
-        .map_err(CliError::from)?;
-    Ok(TimeSource::Single(dt))
+    Ok(ParsedTimeSource::Value(time_str.to_string()))
 }
 
 fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
@@ -381,16 +424,6 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
     Ok(Some((start, end, step)))
 }
 
-fn should_auto_show_inputs(source: &DataSource) -> bool {
-    match source {
-        DataSource::Separate(loc, time) => {
-            matches!(loc, LocationSource::Range { .. } | LocationSource::File(_))
-                || matches!(time, TimeSource::Range(_) | TimeSource::File(_))
-        }
-        DataSource::Paired(_) => true,
-    }
-}
-
 fn get_version_text() -> String {
     format!(
         "sunce {}\n Build: {} ({})\n Built: {}\n Features: {}",
@@ -400,47 +433,6 @@ fn get_version_text() -> String {
         env!("BUILD_DATE"),
         env!("BUILD_FEATURES")
     )
-}
-
-fn validate_command_options(command: Command, usage: &CommandOptionUsage) -> CliResult<()> {
-    fn first_used(options: &[(bool, &'static str)]) -> Option<&'static str> {
-        options
-            .iter()
-            .find_map(|(used, name)| used.then_some(*name))
-    }
-
-    let invalid_option = match command {
-        Command::Position => {
-            first_used(&[(usage.horizon, "--horizon"), (usage.twilight, "--twilight")])
-        }
-        Command::Sunrise => first_used(&[
-            (usage.step, "--step"),
-            (usage.no_refraction, "--no-refraction"),
-            (usage.elevation_angle, "--elevation-angle"),
-            (usage.elevation, "--elevation"),
-            (usage.temperature, "--temperature"),
-            (usage.pressure, "--pressure"),
-            (usage.algorithm, "--algorithm"),
-        ]),
-    };
-
-    invalid_option
-        .map(|name| {
-            Err(format!(
-                "Option {} not valid for {} command",
-                name,
-                command_name(command)
-            )
-            .into())
-        })
-        .unwrap_or(Ok(()))
-}
-
-fn command_name(command: Command) -> &'static str {
-    match command {
-        Command::Position => "position",
-        Command::Sunrise => "sunrise",
-    }
 }
 
 fn get_help_text() -> String {
@@ -510,6 +502,18 @@ Options:
                         files, and position date-only inputs unless
                         --no-show-inputs is used.
   --perf                Print performance statistics to stderr.
+  Predicate mode (automation via exit status):
+    Works only with one explicit lat/lon pair and one explicit instant.
+    --wait                     With `now`, sleep until near the next matching
+                               transition, then poll until true.
+    --is-daylight              Exit 0 if the instant is daylight.
+    --is-civil-twilight        Exit 0 if the instant is in civil twilight.
+    --is-nautical-twilight     Exit 0 if the instant is in nautical twilight.
+    --is-astronomical-twilight Exit 0 if the instant is in astronomical twilight.
+    --is-astronomical-night    Exit 0 if the instant is outside astronomical twilight.
+    --after-sunset             Exit 0 from sunset until the next sunrise.
+    --sun-above=<degrees>      Exit 0 if the elevation angle is above the threshold.
+    --sun-below=<degrees>      Exit 0 if the elevation angle is below the threshold.
   --help                Show this help message and exit.
   --version             Print version information and exit.
 
@@ -547,6 +551,12 @@ Options:
   --temperature=<celsius>   Air temperature in C (refraction). Default: {}
   --step=<interval>         Time step for ranges and date-only inputs.
                             Examples: 30s, 15m, 2h, 1d
+  --sun-above=<degrees>     Predicate mode: exit 0 if elevation angle is above
+                            the threshold, 1 if not.
+  --sun-below=<degrees>     Predicate mode: exit 0 if elevation angle is below
+                            the threshold, 1 if not.
+  --wait                    Predicate mode: with `now`, sleep until near the
+                            next matching transition, then poll until true.
 
 Examples:
   sunce 52.0 13.4 2024-06-21T12:00:00 position
@@ -569,6 +579,16 @@ Calculates sunrise, transit, sunset and (optionally) twilight times.
 Options:
   --twilight                Include civil, nautical, and astronomical twilight times.
   --horizon=<degrees>       Custom horizon angle in degrees (ignored with --twilight).
+  --is-daylight             Predicate mode: exit 0 if the instant is daylight.
+  --is-civil-twilight       Predicate mode: exit 0 if the instant is in civil twilight.
+  --is-nautical-twilight    Predicate mode: exit 0 if the instant is in nautical twilight.
+  --is-astronomical-twilight Predicate mode: exit 0 if the instant is in astronomical twilight.
+  --is-astronomical-night   Predicate mode: exit 0 if the instant is outside
+                            astronomical twilight.
+  --after-sunset            Predicate mode: exit 0 from sunset until the next
+                            sunrise.
+  --wait                    Predicate mode: with `now`, sleep until near the
+                            next matching transition, then poll until true.
 
 Examples:
   sunce 52.0 13.4 2024-06-21 sunrise

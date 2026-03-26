@@ -1,18 +1,10 @@
 # sunce
 
-`sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, and streaming, and produces machine-friendly output (CSV, JSON Lines, or Parquet) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
+`sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, streaming, predicate checks, and produces machine-friendly output (CSV, JSON Lines, or Parquet) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
 ## Status
 
-This project aims to be an improved, largely compatible replacement for the Java-based [solarpos](https://github.com/klausbrunner/solarpos). It is under active development; while the core functionality is stable, some features are still being added and the command-line interface may change.
-
-## Use cases
-
-- Solar-energy operations: compute sun angles and event times for panel tracking, production estimates, and scheduling.
-- Astronomical and simulation tools: provide precise solar positions for rendering and sky models.
-- Geospatial processing: integrate into GIS or ETL pipelines via command-line streaming and CSV/JSON output.
-
-See [https://github.com/klausbrunner/sunpath-r](https://github.com/klausbrunner/sunpath-r) for some example uses of `sunce` in R.
+Under active development as of 2026. While the core functionality is stable, some features are still being added and the command-line interface may change.
 
 ## Requirements and installation
 
@@ -97,11 +89,6 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `json` – JSON Lines (one JSON object per line), great for post-processing with `jq` or similar tools.
 - `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics (opt-out feature).
 
-## Commands
-
-- `position` – sun position (azimuth/zenith) for the given timestamp or a generated time series.
-- `sunrise` – sunrise/transit/sunset for the given date or date range; add `--twilight` to also emit civil/nautical/astronomical twilight times.
-
 ## Key options
 
 - `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or a TZ database name (e.g., `Europe/Berlin`).
@@ -112,6 +99,39 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `--step=<duration>` – time step for `position` time series sampling (integer seconds or a suffix like `10m`, `1h`, `1d`).
 
 Run `sunce --help` for a brief usage summary.
+
+## Predicate mode
+
+For automation, `sunce` can evaluate one solar condition for one explicit location and one explicit instant and report the result via the process exit code:
+
+- `0` – predicate is true
+- `1` – predicate is false
+- `2` – usage or runtime error
+
+This mode is intentionally strict: it only works with a single latitude/longitude pair and one explicit instant (`now`, full datetime, or unix timestamp). Ranges, date-only inputs, and file/stdin inputs are rejected.
+
+Add `--wait` to keep checking a predicate on `now` until it becomes true. `--wait` is only valid together with a predicate and `now`.
+
+Use `--after-sunset` for the practical "has the sun set yet?" check. `--is-astronomical-night` is stricter and only becomes true after astronomical twilight ends.
+
+Examples:
+
+```bash
+# Exit 0 during daylight, 1 otherwise
+sunce 52.522 13.413 now sunrise --is-daylight
+
+# Exit 0 when the sun is above 10 degrees elevation
+sunce 52.522 13.413 now position --sun-above=10
+
+# Exit 0 during civil twilight, 1 otherwise
+sunce --timezone=Europe/Berlin 52.522 13.413 2026-03-26T06:00:00 sunrise --is-civil-twilight
+
+# Exit 0 from sunset until sunrise
+sunce 52.522 13.413 now sunrise --after-sunset
+
+# Wait until the sun is above 5 degrees elevation
+sunce 52.522 13.413 now position --sun-above=5 --wait
+```
 
 ## Performance
 

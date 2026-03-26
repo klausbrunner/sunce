@@ -1,6 +1,6 @@
 [package]
 name = "sunce"
-version = "0.3.8"
+version = "0.3.9-dev"
 edition = "2024"
 rust-version = "1.93"
 description = "High-performance command-line solar position calculator"

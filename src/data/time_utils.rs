@@ -1,3 +1,5 @@
+//! Date, time, duration, and timezone parsing utilities.
+
 use chrono::{
     DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
 };

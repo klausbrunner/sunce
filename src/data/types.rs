@@ -1,3 +1,5 @@
+//! Core input and stream data types used across the program.
+
 use chrono::{DateTime, FixedOffset};
 use std::path::PathBuf;
 
