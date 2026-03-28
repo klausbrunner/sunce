@@ -3,16 +3,16 @@
 use crate::compute::CalculationResult;
 use crate::data::{Command, OutputFormat, Parameters};
 use crate::error::OutputError;
+use ahash::AHashMap;
 use chrono::{DateTime, FixedOffset};
 use serde::Serializer;
 use serde::ser::SerializeMap;
 use solar_positioning::SunriseResult;
-use std::collections::HashMap;
 
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
 
-type DateTimeCache = HashMap<DateTime<FixedOffset>, String>;
-type FixedDecimalCache = HashMap<(u64, u32), String>;
+type DateTimeCache = AHashMap<DateTime<FixedOffset>, String>;
+type FixedDecimalCache = AHashMap<(u64, u32), String>;
 
 pub(crate) fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
     dt.format(RFC3339_NO_MILLIS).to_string()
@@ -23,9 +23,41 @@ fn round_f64(value: f64, decimals: u32) -> f64 {
     (value * factor).round() / factor
 }
 
-fn format_f64_fixed(value: f64, decimals: u32) -> String {
+fn push_u64_decimal(out: &mut String, mut value: u64) {
+    let mut buf = [0_u8; 20];
+    let mut idx = buf.len();
+
+    loop {
+        idx -= 1;
+        buf[idx] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+
+    out.push_str(std::str::from_utf8(&buf[idx..]).unwrap());
+}
+
+fn push_zero_padded_u64(out: &mut String, mut value: u64, width: usize) {
+    let mut buf = [b'0'; 20];
+    let mut idx = width;
+
+    while idx > 0 {
+        idx -= 1;
+        buf[idx] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+
+    out.push_str(std::str::from_utf8(&buf[..width]).unwrap());
+}
+
+fn format_f64_fixed_into(out: &mut String, value: f64, decimals: u32) {
+    out.clear();
+
     if !value.is_finite() {
-        return value.to_string();
+        out.push_str(&value.to_string());
+        return;
     }
 
     let (factor, denom) = match decimals {
@@ -40,52 +72,97 @@ fn format_f64_fixed(value: f64, decimals: u32) -> String {
 
     let scaled = (value * factor).round() as i64;
     let abs = scaled.abs();
-    let int_part = abs / denom;
-    let frac_part = abs % denom;
+    let int_part = (abs / denom) as u64;
+    let frac_part = (abs % denom) as u64;
 
     if decimals == 0 {
         if scaled < 0 {
-            format!("-{int_part}")
-        } else {
-            int_part.to_string()
+            out.push('-');
         }
-    } else if scaled < 0 {
-        format!(
-            "-{int_part}.{:0width$}",
-            frac_part,
-            width = decimals as usize
-        )
-    } else {
-        format!(
-            "{int_part}.{:0width$}",
-            frac_part,
-            width = decimals as usize
-        )
+        push_u64_decimal(out, int_part);
+        return;
     }
+
+    if scaled < 0 {
+        out.push('-');
+    }
+    push_u64_decimal(out, int_part);
+    out.push('.');
+    push_zero_padded_u64(out, frac_part, decimals as usize);
 }
 
-fn cached_f64_fixed(cache: &mut FixedDecimalCache, value: f64, decimals: u32) -> String {
+fn format_f64_fixed(value: f64, decimals: u32) -> String {
+    let mut out = String::with_capacity(24);
+    format_f64_fixed_into(&mut out, value, decimals);
+    out
+}
+
+fn ensure_field(out: &mut Vec<String>, idx: usize) -> &mut String {
+    if idx == out.len() {
+        out.push(String::new());
+    }
+    let field = &mut out[idx];
+    field.clear();
+    field
+}
+
+fn set_field(out: &mut Vec<String>, idx: usize, value: &str) {
+    ensure_field(out, idx).push_str(value);
+}
+
+fn set_cached_f64_fixed(
+    out: &mut Vec<String>,
+    idx: usize,
+    cache: &mut FixedDecimalCache,
+    value: f64,
+    decimals: u32,
+) {
     let key = (value.to_bits(), decimals);
-    if let Some(cached) = cache.get(&key) {
-        return cached.clone();
-    }
-    let formatted = format_f64_fixed(value, decimals);
-    cache.insert(key, formatted.clone());
-    formatted
+    let formatted = cache
+        .entry(key)
+        .or_insert_with(|| format_f64_fixed(value, decimals));
+    set_field(out, idx, formatted);
 }
 
-fn cached_datetime(cache: &mut DateTimeCache, dt: &DateTime<FixedOffset>) -> String {
-    cache
-        .entry(*dt)
-        .or_insert_with(|| format_rfc3339(dt))
-        .clone()
+fn set_cached_datetime(
+    out: &mut Vec<String>,
+    idx: usize,
+    cache: &mut DateTimeCache,
+    dt: &DateTime<FixedOffset>,
+) {
+    let formatted = cache.entry(*dt).or_insert_with(|| format_rfc3339(dt));
+    set_field(out, idx, formatted);
 }
 
-fn cached_optional_datetime(
+fn set_cached_optional_datetime(
+    out: &mut Vec<String>,
+    idx: usize,
     cache: &mut DateTimeCache,
     dt: Option<&DateTime<FixedOffset>>,
-) -> String {
-    dt.map(|dt| cached_datetime(cache, dt)).unwrap_or_default()
+) {
+    if let Some(dt) = dt {
+        set_cached_datetime(out, idx, cache, dt);
+    } else {
+        set_field(out, idx, "");
+    }
+}
+
+fn set_formatted_f64(out: &mut Vec<String>, idx: usize, value: f64, decimals: u32) {
+    format_f64_fixed_into(ensure_field(out, idx), value, decimals);
+}
+
+fn cached_datetime<'a>(cache: &'a mut DateTimeCache, dt: &DateTime<FixedOffset>) -> &'a str {
+    cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
+}
+
+fn cached_optional_datetime<'a>(
+    cache: &'a mut DateTimeCache,
+    dt: Option<&DateTime<FixedOffset>>,
+) -> Option<&'a str> {
+    match dt {
+        Some(dt) => Some(cached_datetime(cache, dt)),
+        None => None,
+    }
 }
 
 fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Option<&T>) {
@@ -136,41 +213,54 @@ impl PositionRow {
         fixed_decimal_cache: &mut FixedDecimalCache,
         out: &mut Vec<String>,
     ) {
-        out.clear();
+        let mut idx = 0;
 
         if layout.show_inputs {
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.lat, 5));
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.lon, 5));
-            out.push(cached_f64_fixed(
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lat, 5);
+            idx += 1;
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lon, 5);
+            idx += 1;
+            set_cached_f64_fixed(
+                out,
+                idx,
                 fixed_decimal_cache,
                 params.environment.elevation,
                 3,
-            ));
+            );
+            idx += 1;
             if layout.include_refraction {
-                out.push(cached_f64_fixed(
+                set_cached_f64_fixed(
+                    out,
+                    idx,
                     fixed_decimal_cache,
                     params.environment.pressure,
                     3,
-                ));
-                out.push(cached_f64_fixed(
+                );
+                idx += 1;
+                set_cached_f64_fixed(
+                    out,
+                    idx,
                     fixed_decimal_cache,
                     params.environment.temperature,
                     3,
-                ));
+                );
+                idx += 1;
             }
         }
 
-        out.push(cached_datetime(datetime_cache, &self.datetime));
+        set_cached_datetime(out, idx, datetime_cache, &self.datetime);
+        idx += 1;
 
         if layout.show_inputs {
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.deltat, 3));
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.deltat, 3);
+            idx += 1;
         }
 
-        out.push(format_f64_fixed(self.azimuth, 4));
-        out.push(format_f64_fixed(
-            self.angle(layout.uses_elevation_angle()),
-            4,
-        ));
+        set_formatted_f64(out, idx, self.azimuth, 4);
+        idx += 1;
+        set_formatted_f64(out, idx, self.angle(layout.uses_elevation_angle()), 4);
+        idx += 1;
+        out.truncate(idx);
     }
 
     fn write_json_line(
@@ -206,7 +296,8 @@ impl PositionRow {
             }
         }
 
-        map.serialize_entry("dateTime", &cached_datetime(datetime_cache, &self.datetime))
+        let datetime = cached_datetime(datetime_cache, &self.datetime);
+        map.serialize_entry("dateTime", &datetime)
             .map_err(|e| e.to_string())?;
 
         if layout.show_inputs {
@@ -253,54 +344,46 @@ impl SunriseRow {
         fixed_decimal_cache: &mut FixedDecimalCache,
         out: &mut Vec<String>,
     ) {
-        out.clear();
+        let mut idx = 0;
 
         if layout.show_inputs {
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.lat, 5));
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.lon, 5));
-            out.push(cached_datetime(datetime_cache, &self.date_time));
-            out.push(cached_f64_fixed(fixed_decimal_cache, self.deltat, 3));
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lat, 5);
+            idx += 1;
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lon, 5);
+            idx += 1;
+            set_cached_datetime(out, idx, datetime_cache, &self.date_time);
+            idx += 1;
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.deltat, 3);
+            idx += 1;
         } else {
-            out.push(cached_datetime(datetime_cache, &self.date_time));
+            set_cached_datetime(out, idx, datetime_cache, &self.date_time);
+            idx += 1;
         }
 
-        out.push(self.type_label.to_string());
-        out.push(cached_optional_datetime(
-            datetime_cache,
-            self.sunrise.as_ref(),
-        ));
-        out.push(cached_datetime(datetime_cache, &self.transit));
-        out.push(cached_optional_datetime(
-            datetime_cache,
-            self.sunset.as_ref(),
-        ));
+        set_field(out, idx, self.type_label);
+        idx += 1;
+        set_cached_optional_datetime(out, idx, datetime_cache, self.sunrise.as_ref());
+        idx += 1;
+        set_cached_datetime(out, idx, datetime_cache, &self.transit);
+        idx += 1;
+        set_cached_optional_datetime(out, idx, datetime_cache, self.sunset.as_ref());
+        idx += 1;
 
         if layout.include_twilight {
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.civil_start.as_ref(),
-            ));
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.civil_end.as_ref(),
-            ));
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.nautical_start.as_ref(),
-            ));
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.nautical_end.as_ref(),
-            ));
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.astro_start.as_ref(),
-            ));
-            out.push(cached_optional_datetime(
-                datetime_cache,
-                self.astro_end.as_ref(),
-            ));
+            set_cached_optional_datetime(out, idx, datetime_cache, self.civil_start.as_ref());
+            idx += 1;
+            set_cached_optional_datetime(out, idx, datetime_cache, self.civil_end.as_ref());
+            idx += 1;
+            set_cached_optional_datetime(out, idx, datetime_cache, self.nautical_start.as_ref());
+            idx += 1;
+            set_cached_optional_datetime(out, idx, datetime_cache, self.nautical_end.as_ref());
+            idx += 1;
+            set_cached_optional_datetime(out, idx, datetime_cache, self.astro_start.as_ref());
+            idx += 1;
+            set_cached_optional_datetime(out, idx, datetime_cache, self.astro_end.as_ref());
+            idx += 1;
         }
+        out.truncate(idx);
     }
 
     fn write_json_line(
@@ -323,91 +406,51 @@ impl SunriseRow {
                 .map_err(|e| e.to_string())?;
             map.serialize_entry("longitude", &self.lon)
                 .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "dateTime",
-                &cached_datetime(datetime_cache, &self.date_time),
-            )
-            .map_err(|e| e.to_string())?;
+            let date_time = cached_datetime(datetime_cache, &self.date_time);
+            map.serialize_entry("dateTime", &date_time)
+                .map_err(|e| e.to_string())?;
             map.serialize_entry("deltaT", &self.deltat)
                 .map_err(|e| e.to_string())?;
         } else {
-            map.serialize_entry(
-                "dateTime",
-                &cached_datetime(datetime_cache, &self.date_time),
-            )
-            .map_err(|e| e.to_string())?;
+            let date_time = cached_datetime(datetime_cache, &self.date_time);
+            map.serialize_entry("dateTime", &date_time)
+                .map_err(|e| e.to_string())?;
         }
 
         map.serialize_entry("type", &self.type_label)
             .map_err(|e| e.to_string())?;
-        map.serialize_entry(
-            "sunrise",
-            &self
-                .sunrise
-                .as_ref()
-                .map(|dt| cached_datetime(datetime_cache, dt)),
-        )
-        .map_err(|e| e.to_string())?;
-        map.serialize_entry("transit", &cached_datetime(datetime_cache, &self.transit))
+        let sunrise = cached_optional_datetime(datetime_cache, self.sunrise.as_ref());
+        map.serialize_entry("sunrise", &sunrise)
             .map_err(|e| e.to_string())?;
-        map.serialize_entry(
-            "sunset",
-            &self
-                .sunset
-                .as_ref()
-                .map(|dt| cached_datetime(datetime_cache, dt)),
-        )
-        .map_err(|e| e.to_string())?;
+        let transit = cached_datetime(datetime_cache, &self.transit);
+        map.serialize_entry("transit", &transit)
+            .map_err(|e| e.to_string())?;
+        let sunset = cached_optional_datetime(datetime_cache, self.sunset.as_ref());
+        map.serialize_entry("sunset", &sunset)
+            .map_err(|e| e.to_string())?;
 
         if layout.include_twilight {
-            map.serialize_entry(
-                "civil_start",
-                &self
-                    .civil_start
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "civil_end",
-                &self
-                    .civil_end
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "nautical_start",
-                &self
-                    .nautical_start
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "nautical_end",
-                &self
-                    .nautical_end
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "astronomical_start",
-                &self
-                    .astro_start
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
-            map.serialize_entry(
-                "astronomical_end",
-                &self
-                    .astro_end
-                    .as_ref()
-                    .map(|dt| cached_datetime(datetime_cache, dt)),
-            )
-            .map_err(|e| e.to_string())?;
+            let civil_start = cached_optional_datetime(datetime_cache, self.civil_start.as_ref());
+            map.serialize_entry("civil_start", &civil_start)
+                .map_err(|e| e.to_string())?;
+            let civil_end = cached_optional_datetime(datetime_cache, self.civil_end.as_ref());
+            map.serialize_entry("civil_end", &civil_end)
+                .map_err(|e| e.to_string())?;
+            let nautical_start =
+                cached_optional_datetime(datetime_cache, self.nautical_start.as_ref());
+            map.serialize_entry("nautical_start", &nautical_start)
+                .map_err(|e| e.to_string())?;
+            let nautical_end = cached_optional_datetime(datetime_cache, self.nautical_end.as_ref());
+            map.serialize_entry("nautical_end", &nautical_end)
+                .map_err(|e| e.to_string())?;
+            let astronomical_start =
+                cached_optional_datetime(datetime_cache, self.astro_start.as_ref());
+            map.serialize_entry("astronomical_start", &astronomical_start)
+                .map_err(|e| e.to_string())?;
+            let astronomical_end =
+                cached_optional_datetime(datetime_cache, self.astro_end.as_ref());
+            map.serialize_entry("astronomical_end", &astronomical_end)
+                .map_err(|e| e.to_string())?;
         }
 
         map.end().map_err(|e| e.to_string())?;

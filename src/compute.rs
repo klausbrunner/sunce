@@ -1,10 +1,7 @@
 //! Stream orchestration and shared calculation result types.
 
 use crate::data::{CalculationAlgorithm, Command, CoordTimeStream, Parameters};
-use crate::position::{
-    SpaCache, TIME_CACHE_CAPACITY, calculate_position as calculate_position_impl,
-    refraction_correction, time_cache_get,
-};
+use crate::position::{SpaCache, TIME_CACHE_CAPACITY, refraction_correction, time_cache_get};
 use crate::sunrise::calculate_sunrise as calculate_sunrise_impl;
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::SolarPosition;
@@ -94,12 +91,16 @@ pub fn calculate_stream(
 ) -> CalculationStream {
     match command {
         Command::Position => {
+            let refraction = match refraction_correction(&params) {
+                Ok(value) => value,
+                Err(err) => return Box::new(std::iter::once(Err(err))),
+            };
+
             if params.calculation.algorithm == CalculationAlgorithm::Spa && allow_time_cache {
                 use solar_positioning::spa;
 
                 let mut time_cache: SpaCache = SpaCache::default();
                 let mut time_cache_order: VecDeque<DateTime<FixedOffset>> = VecDeque::new();
-                let params = params.clone();
 
                 Box::new(data.map(move |item| {
                     item.and_then(|(lat, lon, dt)| {
@@ -114,7 +115,6 @@ pub fn calculate_stream(
                             Err(err) => return Err(err),
                         };
 
-                        let refraction = refraction_correction(&params)?;
                         let position = spa::spa_with_time_dependent_parts(
                             lat,
                             lon,
@@ -134,9 +134,35 @@ pub fn calculate_stream(
                     })
                 }))
             } else {
-                let params = params.clone();
                 Box::new(data.map(move |item| {
-                    item.and_then(|(lat, lon, dt)| calculate_position_impl(lat, lon, dt, &params))
+                    item.and_then(|(lat, lon, dt)| {
+                        let deltat = crate::position::resolve_deltat(dt, &params);
+                        let position =
+                            if params.calculation.algorithm == CalculationAlgorithm::Grena3 {
+                                solar_positioning::grena3::solar_position(
+                                    dt, lat, lon, deltat, refraction,
+                                )
+                                .map_err(|e| format!("Failed to calculate solar position: {}", e))?
+                            } else {
+                                solar_positioning::spa::solar_position(
+                                    dt,
+                                    lat,
+                                    lon,
+                                    params.environment.elevation,
+                                    deltat,
+                                    refraction,
+                                )
+                                .map_err(|e| format!("Failed to calculate solar position: {}", e))?
+                            };
+
+                        Ok(CalculationResult::Position {
+                            lat,
+                            lon,
+                            datetime: dt,
+                            position,
+                            deltat,
+                        })
+                    })
                 }))
             }
         }

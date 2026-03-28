@@ -6,27 +6,24 @@ use crate::output::{
     PositionLayout, SunriseLayout, format_rfc3339, normalize_position_result,
     normalize_sunrise_result,
 };
+use ahash::AHashMap;
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
-type DateTimeCache = HashMap<chrono::DateTime<chrono::FixedOffset>, String>;
+type DateTimeCache = AHashMap<chrono::DateTime<chrono::FixedOffset>, String>;
 
-fn cached_datetime(
-    cache: &mut DateTimeCache,
+fn cached_datetime<'a>(
+    cache: &'a mut DateTimeCache,
     dt: &chrono::DateTime<chrono::FixedOffset>,
-) -> String {
-    cache
-        .entry(*dt)
-        .or_insert_with(|| format_rfc3339(dt))
-        .clone()
+) -> &'a str {
+    cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
 }
 
 fn append_time(
