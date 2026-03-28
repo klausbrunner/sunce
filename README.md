@@ -1,6 +1,8 @@
 # sunce
 
-`sunce` is a command-line application for computing topocentric solar coordinates and solar events such as sunrise, sunset, transit, and twilight. It is designed for scripting and bulk processing: the tool supports time series, geographic sweeps, file input, streaming, predicate checks, and produces machine-friendly output (CSV, JSON Lines, or Parquet) for use in data pipelines. Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
+`sunce` is a command-line tool for solar position and solar event calculations. It computes topocentric solar coordinates (`position`) and daily solar events such as sunrise, sunset, transit, and twilight (`sunrise`). It is designed for scripting and bulk processing: ranges, file input, streaming, predicate checks, and machine-friendly output (`csv`, JSON Lines, `parquet`).
+
+Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
 ## Status
 
@@ -20,9 +22,18 @@ To install from a checked-out copy of this repository:
 cargo install --path .
 ```
 
-`sunce` currently requires Rust 1.93+ (see `rust-toolchain.toml`).
+`sunce` currently requires Rust 1.90+.
 
 Native executables are provided for Linux, macOS, and Windows.
+
+## Mental model
+
+- `position` answers: "Where is the Sun at this instant?"
+- `sunrise` answers: "What are this day's solar event times?"
+- A full datetime means one instant.
+- A date-only or partial date may expand into a time series.
+- Latitude/longitude ranges and file inputs expand into multiple records.
+- Output formats are different views of the same logical result.
 
 ## Quick start
 
@@ -34,9 +45,15 @@ sunce 40.42 -3.70 now --timezone=UTC sunrise
 sunce 59.334 18.063 2026-01-15T12:30:00+01:00 position
 ```
 
-### Example commands
+## Common tasks
 
 ```bash
+# One position fix
+sunce 52.522 13.413 2026-03-28T12:00:00+01:00 position
+
+# One day's solar events
+sunce 52.522 13.413 2026-03-28 sunrise
+
 # Time series: positions in Berlin every 10 minutes, CSV output, with delta-T estimate
 sunce --format=csv --deltat --timezone=Europe/Berlin 52.522 13.413 2023-03-26 position --step=10m
 
@@ -49,6 +66,13 @@ sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twiligh
 # High-performance data processing: large datasets with Parquet output (Snappy compressed)
 sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
 ```
+
+## Input semantics
+
+- `position` with a date-only input like `2026-03-28` expands to a time series for that day. Year-month and year inputs expand further.
+- `sunrise` treats a date-like input as a day or day series and returns event times for those days.
+- `now` means the current instant. With `position --step`, it becomes a live stream and requires one explicit latitude/longitude pair.
+- `--timezone` overrides timezone interpretation for parsing and output.
 
 ## File input and streaming
 
@@ -74,24 +98,20 @@ cat coords.txt | sunce @- 2023-06-21T12:00:00 position
 generate-times | sunce 52.0 25.0 @- position
 ```
 
-Files may include blank lines and comments (lines starting with `#`). Both space-separated and CSV style are accepted.
-
-## Time series and geographic sweeps
-
-- **Time ranges:** pass a year (e.g., `2026`) or year-month (`2026-06`) to obtain a daily series for that period when using the `sunrise` command. For `position`, year ranges default to daily steps; month and day ranges default to hourly steps unless `--step` is provided.
-- **Geographic ranges:** use `start:end:step` syntax for latitude and/or longitude to define a grid (e.g., `40.0:45.0:0.5`). Geographic sweeps combine with time series to produce spatio-temporal datasets.
-- **Watch mode:** combine `now` with `--step` to periodically track sun position in real-time (e.g., `sunce 52.5 13.4 now position --step=1s` updates every second). Press Ctrl+C to stop.
+Files may include blank lines and comments (lines starting with `#`). Both space-separated and CSV-style input are accepted.
 
 ## Output formats
 
 - `text` (default) – readable text for quick checks.
 - `csv` – comma-separated values with headers by default; use `--no-headers` to omit them.
-- `json` – JSON Lines (one JSON object per line), great for post-processing with `jq` or similar tools.
-- `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics (opt-out feature).
+- `json` – JSON Lines (one JSON object per line), good for `jq` and similar tools.
+- `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics.
+
+Field names are intended to be stable across formats where the underlying data is the same. For example, `dateTime`, `azimuth`, `zenith`, `sunrise`, and `civil_start` mean the same thing in CSV, JSON, and Parquet.
 
 ## Key options
 
-- `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or a TZ database name (e.g., `Europe/Berlin`).
+- `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or an IANA name (e.g., `Europe/Berlin`).
 - `--deltat[=<seconds>]` – default is `0` seconds when omitted. Provide an explicit value with `--deltat=<seconds>` or pass the option without a value to request an automatic estimate. For background on delta-T see [solar-positioning](https://crates.io/crates/solar-positioning).
 - `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
 - `--[no-]headers` – include/omit header row for CSV output (default: headers on).
@@ -100,7 +120,7 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 
 Run `sunce --help` for a brief usage summary.
 
-## Predicate mode
+## Automation and predicate mode
 
 For automation, `sunce` can evaluate one solar condition for one explicit location and one explicit instant and report the result via the process exit code:
 
@@ -110,7 +130,7 @@ For automation, `sunce` can evaluate one solar condition for one explicit locati
 
 This mode is intentionally strict: it only works with a single latitude/longitude pair and one explicit instant (`now`, full datetime, or unix timestamp). Ranges, date-only inputs, and file/stdin inputs are rejected.
 
-Add `--wait` to keep checking a predicate on `now` until it becomes true. `--wait` is only valid together with a predicate and `now`.
+Add `--wait` to keep checking a predicate on `now` until it becomes true. `--wait` is only valid together with a predicate and `now`. Completion is usually within seconds, not guaranteed at the exact transition.
 
 Use `--after-sunset` for the practical "has the sun set yet?" check. `--is-astronomical-night` is stricter and only becomes true after astronomical twilight ends.
 
@@ -131,6 +151,14 @@ sunce 52.522 13.413 now sunrise --after-sunset
 
 # Wait until the sun is above 5 degrees elevation
 sunce 52.522 13.413 now position --sun-above=5 --wait
+```
+
+For shell scripts:
+
+```bash
+if sunce 52.522 13.413 now sunrise --after-sunset; then
+  echo "Sun has set"
+fi
 ```
 
 ## Performance

@@ -504,16 +504,20 @@ Options:
   --perf                Print performance statistics to stderr.
   Predicate mode (automation via exit status):
     Works only with one explicit lat/lon pair and one explicit instant.
-    --wait                     With `now`, sleep until near the next matching
-                               transition, then poll until true.
-    --is-daylight              Exit 0 if the instant is daylight.
-    --is-civil-twilight        Exit 0 if the instant is in civil twilight.
-    --is-nautical-twilight     Exit 0 if the instant is in nautical twilight.
-    --is-astronomical-twilight Exit 0 if the instant is in astronomical twilight.
-    --is-astronomical-night    Exit 0 if the instant is outside astronomical twilight.
-    --after-sunset             Exit 0 from sunset until the next sunrise.
-    --sun-above=<degrees>      Exit 0 if the elevation angle is above the threshold.
-    --sun-below=<degrees>      Exit 0 if the elevation angle is below the threshold.
+    Sunrise predicates:
+      --is-daylight              Exit 0 if the instant is daylight.
+      --is-civil-twilight        Exit 0 if the instant is in civil twilight.
+      --is-nautical-twilight     Exit 0 if the instant is in nautical twilight.
+      --is-astronomical-twilight Exit 0 if the instant is in astronomical twilight.
+      --is-astronomical-night    Exit 0 if the instant is outside astronomical twilight.
+      --after-sunset             Exit 0 from sunset until the next sunrise.
+    Position predicates:
+      --sun-above=<degrees>      Exit 0 if the elevation angle is above the threshold.
+      --sun-below=<degrees>      Exit 0 if the elevation angle is below the threshold.
+    Shared:
+      --wait                     With `now`, wait until the predicate becomes true.
+                                 Completion is usually within seconds, not
+                                 guaranteed at the exact transition.
   --help                Show this help message and exit.
   --version             Print version information and exit.
 
@@ -555,8 +559,10 @@ Options:
                             the threshold, 1 if not.
   --sun-below=<degrees>     Predicate mode: exit 0 if elevation angle is below
                             the threshold, 1 if not.
-  --wait                    Predicate mode: with `now`, sleep until near the
-                            next matching transition, then poll until true.
+  --wait                    Predicate mode: with `now`, wait until the
+                            predicate becomes true. Completion is usually
+                            within seconds, not guaranteed at the exact
+                            transition.
 
 Examples:
   sunce 52.0 13.4 2024-06-21T12:00:00 position
@@ -587,8 +593,10 @@ Options:
                             astronomical twilight.
   --after-sunset            Predicate mode: exit 0 from sunset until the next
                             sunrise.
-  --wait                    Predicate mode: with `now`, sleep until near the
-                            next matching transition, then poll until true.
+  --wait                    Predicate mode: with `now`, wait until the
+                            predicate becomes true. Completion is usually
+                            within seconds, not guaranteed at the exact
+                            transition.
 
 Examples:
   sunce 52.0 13.4 2024-06-21 sunrise
