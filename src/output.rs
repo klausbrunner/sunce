@@ -848,7 +848,7 @@ pub fn dispatch_output(
         OutputFormat::Parquet => {
             let stdout = std::io::stdout();
             return write_parquet_output(results, command, params, stdout)
-                .map_err(|e| OutputError(e.to_string()));
+                .map_err(|e| OutputError::from(e.to_string()));
         }
         _ => {}
     }

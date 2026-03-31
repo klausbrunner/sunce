@@ -46,43 +46,6 @@ pub enum CalculationResult {
     },
 }
 
-pub fn solar_elevation_at(
-    lat: f64,
-    lon: f64,
-    dt: DateTime<FixedOffset>,
-    params: &Parameters,
-) -> Result<f64, String> {
-    crate::position::solar_elevation_at(lat, lon, dt, params)
-}
-
-pub fn next_state_transition(
-    target: SolarState,
-    lat: f64,
-    lon: f64,
-    now: DateTime<FixedOffset>,
-    params: &Parameters,
-) -> Result<DateTime<FixedOffset>, String> {
-    crate::sunrise::next_state_transition(target, lat, lon, now, params)
-}
-
-pub fn solar_state_at(
-    lat: f64,
-    lon: f64,
-    dt: DateTime<FixedOffset>,
-    params: &Parameters,
-) -> Result<SolarState, String> {
-    crate::sunrise::solar_state_at(lat, lon, dt, params)
-}
-
-pub fn is_after_sunset(
-    lat: f64,
-    lon: f64,
-    dt: DateTime<FixedOffset>,
-    params: &Parameters,
-) -> Result<bool, String> {
-    crate::sunrise::is_after_sunset(lat, lon, dt, params)
-}
-
 pub fn calculate_stream(
     data: CoordTimeStream,
     command: Command,

@@ -1,6 +1,7 @@
 //! Error types for CLI parsing, planning, and output handling.
 
 use std::fmt;
+use std::io;
 
 #[derive(Debug)]
 pub enum CliError {
@@ -10,6 +11,10 @@ pub enum CliError {
     Message(String),
     /// Print message to stderr and exit with a specific code.
     MessageWithCode(String, i32),
+}
+
+pub fn predicate_error(message: impl Into<String>) -> CliError {
+    CliError::MessageWithCode(message.into(), 2)
 }
 
 impl From<String> for CliError {
@@ -41,55 +46,31 @@ impl fmt::Display for CliError {
 }
 
 #[derive(Debug)]
-pub struct PlannerError(pub String);
+pub struct StringError(pub String);
 
-impl From<String> for PlannerError {
+impl From<String> for StringError {
     fn from(value: String) -> Self {
         Self(value)
     }
 }
 
-impl From<&str> for PlannerError {
+impl From<&str> for StringError {
     fn from(value: &str) -> Self {
         Self(value.to_string())
     }
 }
 
-impl From<std::io::Error> for PlannerError {
-    fn from(value: std::io::Error) -> Self {
+impl From<io::Error> for StringError {
+    fn from(value: io::Error) -> Self {
         Self(value.to_string())
     }
 }
 
-impl fmt::Display for PlannerError {
+impl fmt::Display for StringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-#[derive(Debug)]
-pub struct OutputError(pub String);
-
-impl From<String> for OutputError {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for OutputError {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<std::io::Error> for OutputError {
-    fn from(value: std::io::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl fmt::Display for OutputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub type PlannerError = StringError;
+pub type OutputError = StringError;

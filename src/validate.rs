@@ -1,7 +1,7 @@
 //! Semantic validation that turns parsed CLI input into executable commands.
 
 use crate::data::{self, Command, DataSource, LocationSource, Parameters, Predicate, TimeSource};
-use crate::error::CliError;
+use crate::error::{CliError, predicate_error};
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use crate::predicate::{PredicateCheck, PredicateJob, PredicateTime};
 
@@ -34,10 +34,6 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
             validate_sunrise(parsed.input, parsed.params, parsed.predicate, parsed.usage)
         }
     }
-}
-
-fn predicate_error(message: impl Into<String>) -> CliError {
-    CliError::MessageWithCode(message.into(), 2)
 }
 
 fn validate_input(

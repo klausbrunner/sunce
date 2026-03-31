@@ -4,7 +4,7 @@ use crate::data::{
     self, CalculationAlgorithm, Command, InputPath, LocationSource, OutputFormat, Parameters,
     Predicate, Step, TimezoneOverride,
 };
-use crate::error::CliError;
+use crate::error::{CliError, predicate_error};
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use std::path::PathBuf;
 
@@ -12,10 +12,6 @@ const DELTAT_MULTIPLE_ERROR: &str = "Option --deltat cannot be used multiple tim
 const PREDICATE_MULTIPLE_ERROR: &str = "Predicate options cannot be used multiple times";
 
 type CliResult<T> = Result<T, CliError>;
-
-fn predicate_error(message: impl Into<String>) -> CliError {
-    CliError::MessageWithCode(message.into(), 2)
-}
 
 pub fn parse_cli(args: Vec<String>) -> CliResult<ParsedCommand> {
     if args.len() < 2 {

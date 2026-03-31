@@ -14,6 +14,23 @@ mod predicate;
 mod sunrise;
 mod validate;
 
+fn exit_with_cli_error(err: crate::error::CliError) -> ! {
+    match err {
+        crate::error::CliError::Exit(message) => {
+            println!("{}", message);
+            std::process::exit(0);
+        }
+        crate::error::CliError::Message(message) => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+        crate::error::CliError::MessageWithCode(message, code) => {
+            eprintln!("Error: {}", message);
+            std::process::exit(code);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -79,30 +96,8 @@ fn main() {
                     }
                 }
             }
-            Err(crate::error::CliError::Exit(message)) => {
-                println!("{}", message);
-                std::process::exit(0);
-            }
-            Err(crate::error::CliError::Message(message)) => {
-                eprintln!("Error: {}", message);
-                std::process::exit(1);
-            }
-            Err(crate::error::CliError::MessageWithCode(message, code)) => {
-                eprintln!("Error: {}", message);
-                std::process::exit(code);
-            }
+            Err(err) => exit_with_cli_error(err),
         },
-        Err(crate::error::CliError::Exit(message)) => {
-            println!("{}", message);
-            std::process::exit(0);
-        }
-        Err(crate::error::CliError::Message(message)) => {
-            eprintln!("Error: {}", message);
-            std::process::exit(1);
-        }
-        Err(crate::error::CliError::MessageWithCode(message, code)) => {
-            eprintln!("Error: {}", message);
-            std::process::exit(code);
-        }
+        Err(err) => exit_with_cli_error(err),
     }
 }

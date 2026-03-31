@@ -1,7 +1,9 @@
 //! Predicate evaluation and wait-until logic for automation use cases.
 
-use crate::compute::{self, SolarState};
+use crate::compute::SolarState;
 use crate::data::{Parameters, Predicate as CliPredicate};
+use crate::position::solar_elevation_at;
+use crate::sunrise::{is_after_sunset, next_state_transition, solar_state_at};
 use chrono::{DateTime, FixedOffset};
 
 const ANGLE_WAIT_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -115,14 +117,14 @@ pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
     match job.check {
         PredicateCheck::State(predicate) => Ok(state_matches(
             predicate,
-            compute::solar_state_at(job.lat, job.lon, now, &job.params)?,
+            solar_state_at(job.lat, job.lon, now, &job.params)?,
         )),
-        PredicateCheck::AfterSunset => compute::is_after_sunset(job.lat, job.lon, now, &job.params),
+        PredicateCheck::AfterSunset => is_after_sunset(job.lat, job.lon, now, &job.params),
         PredicateCheck::ElevationAbove(threshold) => {
-            Ok(compute::solar_elevation_at(job.lat, job.lon, now, &job.params)? > threshold)
+            Ok(solar_elevation_at(job.lat, job.lon, now, &job.params)? > threshold)
         }
         PredicateCheck::ElevationBelow(threshold) => {
-            Ok(compute::solar_elevation_at(job.lat, job.lon, now, &job.params)? < threshold)
+            Ok(solar_elevation_at(job.lat, job.lon, now, &job.params)? < threshold)
         }
     }
 }
@@ -131,11 +133,11 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
     match job.check {
         PredicateCheck::AfterSunset => loop {
             let now = resolve_time(&job.time, &job.params)?;
-            if compute::is_after_sunset(job.lat, job.lon, now, &job.params)? {
+            if is_after_sunset(job.lat, job.lon, now, &job.params)? {
                 return Ok(());
             }
 
-            let target = compute::next_state_transition(
+            let target = next_state_transition(
                 SolarState::CivilTwilight,
                 job.lat,
                 job.lon,
@@ -152,7 +154,7 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
         },
         PredicateCheck::ElevationAbove(threshold) => loop {
             let now = resolve_time(&job.time, &job.params)?;
-            let elevation = compute::solar_elevation_at(job.lat, job.lon, now, &job.params)?;
+            let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
             if elevation > threshold {
                 return Ok(());
             }
@@ -160,7 +162,7 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
         },
         PredicateCheck::ElevationBelow(threshold) => loop {
             let now = resolve_time(&job.time, &job.params)?;
-            let elevation = compute::solar_elevation_at(job.lat, job.lon, now, &job.params)?;
+            let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
             if elevation < threshold {
                 return Ok(());
             }
@@ -170,18 +172,13 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
             let now = resolve_time(&job.time, &job.params)?;
             if state_matches(
                 predicate,
-                compute::solar_state_at(job.lat, job.lon, now, &job.params)?,
+                solar_state_at(job.lat, job.lon, now, &job.params)?,
             ) {
                 return Ok(());
             }
 
-            let target = compute::next_state_transition(
-                target_state(predicate),
-                job.lat,
-                job.lon,
-                now,
-                &job.params,
-            )?;
+            let target =
+                next_state_transition(target_state(predicate), job.lat, job.lon, now, &job.params)?;
             loop {
                 let now = resolve_time(&job.time, &job.params)?;
                 if now >= target {
