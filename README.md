@@ -25,6 +25,7 @@ cargo install --path .
 `sunce` currently requires Rust 1.90+.
 
 Native executables are provided for Linux, macOS, and Windows.
+AMD64/x86-64 release binaries target the v3 baseline.
 
 ## Mental model
 
