@@ -205,13 +205,13 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
     match source {
         LocationSource::Single(lat, lon) => Ok(Box::new(std::iter::once(Ok((lat, lon))))),
         LocationSource::Range { lat, lon } => {
-            let lat_values: Vec<f64> = coord_range_iter(lat.0, lat.1, lat.2).collect();
             let (lon_start, lon_end, lon_step) = lon;
             let lat_count = range_point_count(lat.0, lat.1, lat.2);
             let lon_count = range_point_count(lon_start, lon_end, lon_step);
 
             if lat_count <= lon_count {
-                let lat_coords: Arc<[f64]> = Arc::from(lat_values);
+                let lat_coords: Arc<[f64]> =
+                    Arc::from(coord_range_iter(lat.0, lat.1, lat.2).collect::<Vec<_>>());
                 Ok(Box::new(
                     coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
                         let lat_coords = Arc::clone(&lat_coords);

@@ -490,7 +490,7 @@ impl PositionLayout {
         position_angle_label(self.elevation_angle)
     }
 
-    fn csv_headers(self) -> Vec<&'static str> {
+    pub(crate) fn csv_headers(self) -> Vec<&'static str> {
         let mut headers = Vec::with_capacity(if self.show_inputs {
             if self.include_refraction { 9 } else { 7 }
         } else {
@@ -527,7 +527,7 @@ impl SunriseLayout {
         }
     }
 
-    fn csv_headers(self) -> Vec<&'static str> {
+    pub(crate) fn csv_headers(self) -> Vec<&'static str> {
         let mut headers = Vec::with_capacity(if self.show_inputs {
             if self.include_twilight { 14 } else { 8 }
         } else if self.include_twilight {

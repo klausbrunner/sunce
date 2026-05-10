@@ -422,55 +422,36 @@ fn write_batch<W: Write + Send>(
         .map_err(|e| parquet_error(format!("Failed to write batch: {e}")))
 }
 
+fn parquet_field(name: &'static str) -> Field {
+    let data_type = match name {
+        "latitude" | "longitude" | "elevation" | "pressure" | "temperature" | "deltaT"
+        | "azimuth" | "zenith" | "elevation-angle" => DataType::Float64,
+        _ => DataType::Utf8,
+    };
+    let nullable = matches!(
+        name,
+        "sunrise"
+            | "sunset"
+            | "civil_start"
+            | "civil_end"
+            | "nautical_start"
+            | "nautical_end"
+            | "astronomical_start"
+            | "astronomical_end"
+    );
+    Field::new(name, data_type, nullable)
+}
+
+fn build_schema(columns: Vec<&'static str>) -> Arc<Schema> {
+    Arc::new(Schema::new(
+        columns.into_iter().map(parquet_field).collect::<Vec<_>>(),
+    ))
+}
+
 fn build_position_schema(layout: PositionLayout) -> Arc<Schema> {
-    let mut fields = Vec::new();
-
-    if layout.show_inputs {
-        fields.push(Field::new("latitude", DataType::Float64, false));
-        fields.push(Field::new("longitude", DataType::Float64, false));
-        fields.push(Field::new("elevation", DataType::Float64, false));
-        if layout.include_refraction {
-            fields.push(Field::new("pressure", DataType::Float64, false));
-            fields.push(Field::new("temperature", DataType::Float64, false));
-        }
-    }
-
-    fields.push(Field::new("dateTime", DataType::Utf8, false));
-    if layout.show_inputs {
-        fields.push(Field::new("deltaT", DataType::Float64, false));
-    }
-    fields.push(Field::new("azimuth", DataType::Float64, false));
-    fields.push(Field::new(layout.angle_label(), DataType::Float64, false));
-
-    Arc::new(Schema::new(fields))
+    build_schema(layout.csv_headers())
 }
 
 fn build_sunrise_schema(layout: SunriseLayout) -> Arc<Schema> {
-    let mut fields = Vec::new();
-
-    if layout.show_inputs {
-        fields.push(Field::new("latitude", DataType::Float64, false));
-        fields.push(Field::new("longitude", DataType::Float64, false));
-    }
-
-    fields.push(Field::new("dateTime", DataType::Utf8, false));
-    if layout.show_inputs {
-        fields.push(Field::new("deltaT", DataType::Float64, false));
-    }
-
-    fields.push(Field::new("type", DataType::Utf8, false));
-    fields.push(Field::new("sunrise", DataType::Utf8, true));
-    fields.push(Field::new("transit", DataType::Utf8, false));
-    fields.push(Field::new("sunset", DataType::Utf8, true));
-
-    if layout.include_twilight {
-        fields.push(Field::new("civil_start", DataType::Utf8, true));
-        fields.push(Field::new("civil_end", DataType::Utf8, true));
-        fields.push(Field::new("nautical_start", DataType::Utf8, true));
-        fields.push(Field::new("nautical_end", DataType::Utf8, true));
-        fields.push(Field::new("astronomical_start", DataType::Utf8, true));
-        fields.push(Field::new("astronomical_end", DataType::Utf8, true));
-    }
-
-    Arc::new(Schema::new(fields))
+    build_schema(layout.csv_headers())
 }

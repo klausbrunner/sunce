@@ -50,6 +50,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Run tests without default features (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked --no-default-features --verbose
+
+      - name: Run clippy without default features (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
       - name: Check docs (Linux only)
         if: matrix.os == 'ubuntu-latest'
         run: cargo doc --no-deps --document-private-items
