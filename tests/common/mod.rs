@@ -1,3 +1,5 @@
+// This module is compiled separately into each integration test crate, and
+// individual test files intentionally use different helper subsets.
 #![allow(dead_code)]
 
 use assert_cmd::Command;
@@ -110,29 +112,6 @@ pub fn custom_position(lat: &str, lon: &str, datetime: &str) -> SunceTest {
     SunceTest::new().args([lat, lon, datetime, "position"])
 }
 
-/// Quick helper for position with elevation angle
-pub fn position_test_with_elevation() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-        "--elevation-angle",
-    ])
-}
-
-/// Quick helper for coordinate ranges test
-pub fn coordinate_range_test() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "52:53:1",
-        "13:14:1",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
 /// Quick helper for time series with step
 pub fn time_series_test(date: &str, step: &str) -> SunceTest {
     SunceTest::new().args([
@@ -145,104 +124,6 @@ pub fn time_series_test(date: &str, step: &str) -> SunceTest {
     ])
 }
 
-/// Quick helper for show-inputs test (latitude range)
-pub fn show_inputs_lat_range_test() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "52:53:1",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
-/// Quick helper for show-inputs test with explicit disable
-pub fn show_inputs_disabled_test() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "--no-show-inputs",
-        "52:53:1",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
-/// Quick helper for environmental parameters test
-pub fn environmental_params_test() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "--show-inputs",
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-        "--elevation=1000",
-        "--pressure=900",
-        "--temperature=25",
-    ])
-}
-
-/// Quick helper for position with no refraction
-pub fn position_no_refraction_test() -> SunceTest {
-    SunceTest::new().args([
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-        "--no-refraction",
-    ])
-}
-
-/// Quick helper for position with timezone
-pub fn position_with_timezone(tz: &str) -> SunceTest {
-    SunceTest::new().args([
-        &format!("--timezone={}", tz),
-        "--show-inputs",
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
-/// Quick helper for combined range and time series test
-pub fn combined_range_time_test() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "52:53:1",
-        "13:14:1",
-        "2024-01-01",
-        "position",
-        "--step=12h",
-    ])
-}
-
-/// Quick helper for CSV output without headers
-pub fn position_csv_no_headers() -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "--no-headers",
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
-/// Quick helper for delta T test
-pub fn position_with_deltat(deltat: &str) -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "--show-inputs",
-        &format!("--deltat={}", deltat),
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
 /// Quick helper for delta T estimation
 pub fn position_with_deltat_estimation() -> SunceTest {
     SunceTest::new().args([
@@ -251,33 +132,6 @@ pub fn position_with_deltat_estimation() -> SunceTest {
         "13.4",
         "2024-01-01T12:00:00",
         "position",
-    ])
-}
-
-/// Quick helper for missing arguments test
-pub fn missing_args_test() -> SunceTest {
-    SunceTest::new().args(["52.0"])
-}
-
-/// Quick helper for invalid step test
-pub fn invalid_step_test() -> SunceTest {
-    SunceTest::new().args([
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-        "--step=invalid",
-    ])
-}
-
-/// Quick helper for invalid algorithm test
-pub fn invalid_algorithm_test() -> SunceTest {
-    SunceTest::new().args([
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-        "--algorithm=INVALID",
     ])
 }
 

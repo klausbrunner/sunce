@@ -1,7 +1,7 @@
 //! Latitude and longitude validation helpers.
 
 fn ensure_within(value: f64, min: f64, max: f64, label: &str) -> Result<f64, String> {
-    if value < min || value > max {
+    if !value.is_finite() || value < min || value > max {
         Err(format!(
             "{} must be between {} and {} degrees, got {}",
             label, min, max, value

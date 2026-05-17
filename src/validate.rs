@@ -237,11 +237,6 @@ fn validate_position_predicate_mode(
                     "Option --elevation-angle not valid in predicate mode",
                 ));
             }
-            if !threshold.is_finite() {
-                return Err(predicate_error(
-                    "Elevation threshold must be a finite number",
-                ));
-            }
             if !(-90.0..=90.0).contains(&threshold) {
                 return Err(predicate_error(
                     "Elevation threshold must be between -90 and 90 degrees",
@@ -289,7 +284,6 @@ fn validate_sunrise_predicate_mode(
 
 fn validate_position_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
     validate_command_options(
-        usage,
         &[(usage.horizon, "--horizon"), (usage.twilight, "--twilight")],
         "position",
     )
@@ -297,7 +291,6 @@ fn validate_position_options(usage: &ParsedOptionUsage) -> Result<(), CliError> 
 
 fn validate_sunrise_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
     validate_command_options(
-        usage,
         &[
             (usage.step, "--step"),
             (usage.no_refraction, "--no-refraction"),
@@ -312,7 +305,6 @@ fn validate_sunrise_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
 }
 
 fn validate_command_options(
-    usage: &ParsedOptionUsage,
     disallowed: &[(bool, &'static str)],
     command_name: &'static str,
 ) -> Result<(), CliError> {
@@ -322,7 +314,6 @@ fn validate_command_options(
             .find_map(|(used, name)| used.then_some(*name))
     }
 
-    let _ = usage;
     first_used(disallowed)
         .map(|name| Err(format!("Option {} not valid for {} command", name, command_name).into()))
         .unwrap_or(Ok(()))

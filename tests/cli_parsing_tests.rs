@@ -469,11 +469,11 @@ fn test_predicate_flag_parsing_and_validation() {
             ),
             (
                 &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=NaN"),
-                "Elevation threshold must be a finite number",
+                "Invalid sun above value: expected finite number",
             ),
             (
                 &position_predicate_args("2024-03-21T12:00:00Z", "--sun-below=inf"),
-                "Elevation threshold must be a finite number",
+                "Invalid sun below value: expected finite number",
             ),
             (
                 &[

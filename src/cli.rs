@@ -55,7 +55,7 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<ParsedCommand> {
         return Err(CliError::Exit(message));
     }
 
-    let (command, input) = parse_positional_args(&positional, &params)?;
+    let (command, input) = parse_positional_args(&positional)?;
     Ok(ParsedCommand {
         command,
         input,
@@ -66,13 +66,15 @@ pub fn parse_cli(args: Vec<String>) -> CliResult<ParsedCommand> {
 }
 
 fn parse_f64(label: &str, value: &str) -> CliResult<f64> {
-    value.parse::<f64>().map_err(|_| {
-        CliError::from(format!(
-            "Invalid {} value: {}",
-            label.replace('-', " "),
-            value
-        ))
-    })
+    let label = label.replace('-', " ");
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| CliError::from(format!("Invalid {} value: {}", label, value)))?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(format!("Invalid {} value: expected finite number", label).into())
+    }
 }
 
 fn ensure_flag(opt: &str, value: Option<&str>) -> CliResult<()> {
@@ -160,9 +162,7 @@ fn apply_option(
             }
             *deltat_seen = true;
             params.deltat = match value {
-                Some(v) => Some(v.parse::<f64>().map_err(|_| {
-                    CliError::from("Invalid deltat value: expected floating point number")
-                })?),
+                Some(v) => Some(parse_f64("deltat", v)?),
                 None => None,
             };
         }
@@ -321,10 +321,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
     }
 }
 
-fn parse_positional_args(
-    positional_args: &[String],
-    params: &Parameters,
-) -> CliResult<(Command, ParsedInput)> {
+fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, ParsedInput)> {
     let command_index = positional_args
         .iter()
         .position(|arg| arg == "position" || arg == "sunrise")
@@ -340,11 +337,11 @@ fn parse_positional_args(
     };
     Ok((
         command,
-        parse_data_source(&positional_args[..command_index], params)?,
+        parse_data_source(&positional_args[..command_index])?,
     ))
 }
 
-fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<ParsedInput> {
+fn parse_data_source(args: &[String]) -> CliResult<ParsedInput> {
     match args.len() {
         1 => {
             if args[0].starts_with('@') {
@@ -362,20 +359,20 @@ fn parse_data_source(args: &[String], params: &Parameters) -> CliResult<ParsedIn
                     if args[1].starts_with('@') {
                         ParsedTimeSource::File(parse_file_arg(&args[1])?)
                     } else {
-                        parse_time_arg(&args[1], params)?
+                        parse_time_arg(&args[1])?
                     },
                 ))
             }
         }
         3 => Ok(ParsedInput::Separate(
             parse_location_args(&args[0], &args[1])?,
-            parse_time_arg(&args[2], params)?,
+            parse_time_arg(&args[2])?,
         )),
         _ => Err("Too many arguments".into()),
     }
 }
 
-fn parse_time_arg(time_str: &str, _params: &Parameters) -> CliResult<ParsedTimeSource> {
+fn parse_time_arg(time_str: &str) -> CliResult<ParsedTimeSource> {
     if time_str.starts_with('@') {
         return Ok(ParsedTimeSource::File(parse_file_arg(time_str)?));
     }
@@ -395,7 +392,7 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
         return Err(format!("Range must be start:end:step, got: {}", s).into());
     };
 
-    let (start, end, step) = (
+    let (start, end, step): (f64, f64, f64) = (
         start_str
             .parse()
             .map_err(|_| CliError::from(format!("Invalid range start: {}", start_str)))?,
@@ -407,8 +404,8 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
             .map_err(|_| CliError::from(format!("Invalid range step: {}", step_str)))?,
     );
 
-    if step == 0.0 {
-        return Err("Range step must be non-zero".into());
+    if !step.is_finite() || step == 0.0 {
+        return Err("Range step must be non-zero and finite".into());
     }
     if start < end && step < 0.0 {
         return Err("Range step must be positive for ascending ranges".into());
