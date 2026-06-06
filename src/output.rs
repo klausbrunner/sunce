@@ -165,6 +165,10 @@ fn cached_optional_datetime<'a>(
     }
 }
 
+fn write_json_f64<W: std::io::Write + ?Sized>(writer: &mut W, value: f64) -> Result<(), String> {
+    serde_json::to_writer(writer, &value).map_err(|e| e.to_string())
+}
+
 fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Option<&T>) {
     match result {
         SunriseResult::RegularDay {
@@ -270,51 +274,92 @@ impl PositionRow {
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String> {
-        let field_count = match (layout.show_inputs, layout.include_refraction) {
-            (true, true) => 9,
-            (true, false) => 7,
-            (false, _) => 3,
-        };
-
-        let mut serializer = serde_json::Serializer::new(&mut *writer);
-        let mut map = serializer
-            .serialize_map(Some(field_count))
-            .map_err(|e| e.to_string())?;
+        let mut separator = b'{';
 
         if layout.show_inputs {
-            map.serialize_entry("latitude", &self.lat)
-                .map_err(|e| e.to_string())?;
-            map.serialize_entry("longitude", &self.lon)
-                .map_err(|e| e.to_string())?;
-            map.serialize_entry("elevation", &params.environment.elevation)
-                .map_err(|e| e.to_string())?;
+            write_position_json_number(writer, &mut separator, b"\"latitude\":", self.lat)?;
+            write_position_json_number(writer, &mut separator, b"\"longitude\":", self.lon)?;
+            write_position_json_number(
+                writer,
+                &mut separator,
+                b"\"elevation\":",
+                params.environment.elevation,
+            )?;
             if layout.include_refraction {
-                map.serialize_entry("pressure", &params.environment.pressure)
-                    .map_err(|e| e.to_string())?;
-                map.serialize_entry("temperature", &params.environment.temperature)
-                    .map_err(|e| e.to_string())?;
+                write_position_json_number(
+                    writer,
+                    &mut separator,
+                    b"\"pressure\":",
+                    params.environment.pressure,
+                )?;
+                write_position_json_number(
+                    writer,
+                    &mut separator,
+                    b"\"temperature\":",
+                    params.environment.temperature,
+                )?;
             }
         }
 
         let datetime = cached_datetime(datetime_cache, &self.datetime);
-        map.serialize_entry("dateTime", &datetime)
-            .map_err(|e| e.to_string())?;
+        write_position_json_string(writer, &mut separator, b"\"dateTime\":\"", datetime)?;
 
         if layout.show_inputs {
-            map.serialize_entry("deltaT", &self.deltat)
-                .map_err(|e| e.to_string())?;
+            write_position_json_number(writer, &mut separator, b"\"deltaT\":", self.deltat)?;
         }
 
-        map.serialize_entry("azimuth", &round_f64(self.azimuth, 4))
-            .map_err(|e| e.to_string())?;
-        map.serialize_entry(
-            layout.angle_label(),
-            &round_f64(self.angle(layout.uses_elevation_angle()), 4),
-        )
-        .map_err(|e| e.to_string())?;
-        map.end().map_err(|e| e.to_string())?;
-        writeln!(writer).map_err(|e| e.to_string())
+        write_position_json_number(
+            writer,
+            &mut separator,
+            b"\"azimuth\":",
+            round_f64(self.azimuth, 4),
+        )?;
+        let angle_key = if layout.uses_elevation_angle() {
+            b"\"elevation-angle\":" as &[u8]
+        } else {
+            b"\"zenith\":"
+        };
+        write_position_json_number(
+            writer,
+            &mut separator,
+            angle_key,
+            round_f64(self.angle(layout.uses_elevation_angle()), 4),
+        )?;
+        writer.write_all(b"}\n").map_err(|e| e.to_string())
     }
+}
+
+fn write_position_json_prefix<W: std::io::Write + ?Sized>(
+    writer: &mut W,
+    separator: &mut u8,
+    key: &[u8],
+) -> Result<(), String> {
+    writer.write_all(&[*separator]).map_err(|e| e.to_string())?;
+    *separator = b',';
+    writer.write_all(key).map_err(|e| e.to_string())
+}
+
+fn write_position_json_number<W: std::io::Write + ?Sized>(
+    writer: &mut W,
+    separator: &mut u8,
+    key: &[u8],
+    value: f64,
+) -> Result<(), String> {
+    write_position_json_prefix(writer, separator, key)?;
+    write_json_f64(writer, value)
+}
+
+fn write_position_json_string<W: std::io::Write + ?Sized>(
+    writer: &mut W,
+    separator: &mut u8,
+    key: &[u8],
+    value: &str,
+) -> Result<(), String> {
+    write_position_json_prefix(writer, separator, key)?;
+    writer
+        .write_all(value.as_bytes())
+        .map_err(|e| e.to_string())?;
+    writer.write_all(b"\"").map_err(|e| e.to_string())
 }
 
 #[derive(Clone)]

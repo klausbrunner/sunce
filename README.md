@@ -27,7 +27,7 @@ cargo install --path .
 Native executables are provided for Linux, macOS, and Windows.
 AMD64/x86-64 release binaries target the v3 baseline.
 
-## Mental model
+## Commands
 
 - `position` answers: "Where is the Sun at this instant?"
 - `sunrise` answers: "What are this day's solar event times?"
