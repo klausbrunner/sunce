@@ -1,6 +1,6 @@
 # sunce
 
-`sunce` is a command-line tool for solar position and solar event calculations. It computes topocentric solar coordinates (`position`) and daily solar events such as sunrise, sunset, transit, and twilight (`sunrise`). It is designed for scripting and bulk processing: ranges, file input, streaming, predicate checks, and machine-friendly output (CSV, JSON Lines, Parquet).
+`sunce` is a command-line tool for solar position and solar event calculations. It computes topocentric solar coordinates (`position`) and daily solar events such as sunrise, sunset, transit, and twilight (`sunrise`). It is designed for scripting and bulk processing: coordinate and time ranges (also combined), file input, streaming, predicate checks, and machine-friendly output (CSV, JSON Lines, Parquet). The tool is fully self-contained and does not call any external services.
 
 Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
@@ -26,15 +26,6 @@ cargo install --path .
 
 Native executables are provided for Linux, macOS, and Windows.
 AMD64/x86-64 release binaries target the v3 baseline.
-
-## Commands
-
-- `position` answers: "Where is the Sun at this instant?"
-- `sunrise` answers: "What are this day's solar event times?"
-- A full datetime means one instant.
-- A date-only or partial date may expand into a time series.
-- Latitude/longitude ranges and file inputs expand into multiple records.
-- Output formats are different views of the same logical result.
 
 ## Quick start
 
