@@ -290,6 +290,9 @@ fn validate_position_options(usage: &ParsedOptionUsage) -> Result<(), CliError> 
 }
 
 fn validate_sunrise_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
+    if usage.horizon && usage.twilight {
+        return Err("Option --horizon cannot be used with --twilight".into());
+    }
     validate_command_options(
         &[
             (usage.step, "--step"),

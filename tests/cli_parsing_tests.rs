@@ -172,8 +172,11 @@ fn test_sunrise_option_placement_variants() {
             "--twilight",
             "2024-01-01",
             "sunrise",
-            "--horizon=-6.0",
         ],
+        None,
+    );
+    assert_success(
+        &["52.0", "13.4", "2024-01-01", "sunrise", "--horizon=-6.0"],
         None,
     );
     assert_success(
@@ -206,6 +209,17 @@ fn test_invalid_cli_combinations() {
         (
             &["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"],
             "--step not valid for sunrise",
+        ),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-01-01",
+                "sunrise",
+                "--twilight",
+                "--horizon=-6.0",
+            ],
+            "Option --horizon cannot be used with --twilight",
         ),
         (
             &["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"],

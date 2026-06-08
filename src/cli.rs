@@ -490,7 +490,7 @@ Options:
   --format=<format>     Output format: {}. Default: {}
   --timezone=<tz>       Timezone offset (+01:00) or IANA name (Europe/Berlin).
                         Overrides timezone for parsing and output.
-  --[no-]headers        Include headers in CSV output. Default: {}
+  --[no-]headers        Include headers in text/CSV output. Default: {}
   --[no-]show-inputs    Include inputs in output. Auto-enabled for ranges,
                         files, and position date-only inputs unless
                         --no-show-inputs is used.
@@ -577,7 +577,7 @@ Calculates sunrise, transit, sunset and (optionally) twilight times.
 
 Options:
   --twilight                Include civil, nautical, and astronomical twilight times.
-  --horizon=<degrees>       Custom horizon angle in degrees (ignored with --twilight).
+  --horizon=<degrees>       Custom horizon angle in degrees. Not valid with --twilight.
   --is-daylight             Predicate mode: exit 0 if the instant is daylight.
   --is-civil-twilight       Predicate mode: exit 0 if the instant is in civil twilight.
   --is-nautical-twilight    Predicate mode: exit 0 if the instant is in nautical twilight.

@@ -106,7 +106,7 @@ Field names are intended to be stable across formats where the underlying data i
 - `--timezone=<tz>` – timezone as an offset (e.g., `+01:00`) or an IANA name (e.g., `Europe/Berlin`).
 - `--deltat[=<seconds>]` – default is `0` seconds when omitted. Provide an explicit value with `--deltat=<seconds>` or pass the option without a value to request an automatic estimate. For background on delta-T see [solar-positioning](https://crates.io/crates/solar-positioning).
 - `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
-- `--[no-]headers` – include/omit header row for CSV output (default: headers on).
+- `--[no-]headers` – include/omit headers for text and CSV output.
 - `--[no-]show-inputs` – include input parameters in the output.
 - `--step=<duration>` – time step for `position` time series sampling (integer seconds or a suffix like `10m`, `1h`, `1d`).
 
