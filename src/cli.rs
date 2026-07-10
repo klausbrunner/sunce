@@ -329,6 +329,13 @@ fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, Pars
     if command_index == 0 {
         return Err("Need at least command and one argument".into());
     }
+    if command_index + 1 != positional_args.len() {
+        return Err(format!(
+            "Unexpected arguments after command: {}",
+            positional_args[command_index + 1..].join(" ")
+        )
+        .into());
+    }
 
     let command = match positional_args[command_index].as_str() {
         "position" => Command::Position,

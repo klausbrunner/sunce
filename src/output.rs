@@ -10,6 +10,8 @@ use serde::ser::SerializeMap;
 use solar_positioning::SunriseResult;
 
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
+const DATETIME_CACHE_CAPACITY: usize = 2048;
+const FIXED_DECIMAL_CACHE_CAPACITY: usize = 256;
 
 type DateTimeCache = AHashMap<DateTime<FixedOffset>, String>;
 type FixedDecimalCache = AHashMap<(u64, u32), String>;
@@ -118,6 +120,9 @@ fn set_cached_f64_fixed(
     decimals: u32,
 ) {
     let key = (value.to_bits(), decimals);
+    if cache.len() >= FIXED_DECIMAL_CACHE_CAPACITY && !cache.contains_key(&key) {
+        cache.clear();
+    }
     let formatted = cache
         .entry(key)
         .or_insert_with(|| format_f64_fixed(value, decimals));
@@ -130,7 +135,7 @@ fn set_cached_datetime(
     cache: &mut DateTimeCache,
     dt: &DateTime<FixedOffset>,
 ) {
-    let formatted = cache.entry(*dt).or_insert_with(|| format_rfc3339(dt));
+    let formatted = cached_datetime(cache, dt);
     set_field(out, idx, formatted);
 }
 
@@ -152,6 +157,9 @@ fn set_formatted_f64(out: &mut Vec<String>, idx: usize, value: f64, decimals: u3
 }
 
 fn cached_datetime<'a>(cache: &'a mut DateTimeCache, dt: &DateTime<FixedOffset>) -> &'a str {
+    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(dt) {
+        cache.clear();
+    }
     cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
 }
 
@@ -898,10 +906,20 @@ pub fn dispatch_output(
         _ => {}
     }
 
-    use std::io::{BufWriter, Write};
     let stdout = std::io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-    let result = match command {
+    dispatch_buffered_output(results, command, params, flush_each_record, stdout.lock())
+}
+
+fn dispatch_buffered_output<W: std::io::Write>(
+    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
+    command: Command,
+    params: &Parameters,
+    flush_each_record: bool,
+    output: W,
+) -> Result<usize, OutputError> {
+    use std::io::{BufWriter, Write};
+    let mut writer = BufWriter::new(output);
+    let count = match command {
         Command::Position => write_rows::<_, PositionRow>(
             results,
             params,
@@ -916,9 +934,9 @@ pub fn dispatch_output(
             &mut writer,
             flush_each_record,
         ),
-    };
-    let _ = writer.flush();
-    result
+    }?;
+    writer.flush().map_err(OutputError::from)?;
+    Ok(count)
 }
 
 fn row_from_result<R: OutputRowExt>(
@@ -950,8 +968,8 @@ fn write_rows<W: std::io::Write, R: OutputRowExt>(
     let headers = R::headers(layout);
     let mut count = 0;
     let mut header_written = false;
-    let mut datetime_cache = DateTimeCache::with_capacity(2048);
-    let mut fixed_decimal_cache = FixedDecimalCache::with_capacity(256);
+    let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
+    let mut fixed_decimal_cache = FixedDecimalCache::with_capacity(FIXED_DECIMAL_CACHE_CAPACITY);
     let mut row_values = Vec::new();
 
     if params.output.format == OutputFormat::Text {
@@ -1046,6 +1064,7 @@ mod tests {
     struct MockWriter {
         buf: Vec<u8>,
         flushes: usize,
+        fail_flush: bool,
     }
 
     impl Write for MockWriter {
@@ -1056,7 +1075,11 @@ mod tests {
 
         fn flush(&mut self) -> std::io::Result<()> {
             self.flushes += 1;
-            Ok(())
+            if self.fail_flush {
+                Err(std::io::Error::other("flush failed"))
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -1089,6 +1112,52 @@ mod tests {
 
         assert_eq!(writer.flushes, 1);
         assert!(!writer.buf.is_empty());
+    }
+
+    #[test]
+    fn dispatch_reports_final_flush_failure() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+        let params = Parameters {
+            output: OutputOptions {
+                format: OutputFormat::Csv,
+                ..OutputOptions::default()
+            },
+            ..Parameters::default()
+        };
+        let calc = crate::position::calculate_position(52.0, 13.4, dt, &params).unwrap();
+        let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
+            Box::new(std::iter::once(Ok(calc)));
+        let writer = MockWriter {
+            fail_flush: true,
+            ..MockWriter::default()
+        };
+
+        let err = dispatch_buffered_output(results, Command::Position, &params, false, writer)
+            .expect_err("flush failure must be reported");
+
+        assert_eq!(err.to_string(), "flush failed");
+    }
+
+    #[test]
+    fn formatting_caches_stay_bounded() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let start = tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let mut datetime_cache = DateTimeCache::new();
+        for seconds in 0..=DATETIME_CACHE_CAPACITY {
+            cached_datetime(
+                &mut datetime_cache,
+                &(start + chrono::Duration::seconds(seconds as i64)),
+            );
+        }
+        assert!(datetime_cache.len() <= DATETIME_CACHE_CAPACITY);
+
+        let mut decimal_cache = FixedDecimalCache::new();
+        let mut fields = Vec::new();
+        for value in 0..=FIXED_DECIMAL_CACHE_CAPACITY {
+            set_cached_f64_fixed(&mut fields, 0, &mut decimal_cache, value as f64, 3);
+        }
+        assert!(decimal_cache.len() <= FIXED_DECIMAL_CACHE_CAPACITY);
     }
 
     fn split_csv_line(buf: Vec<u8>) -> Vec<String> {

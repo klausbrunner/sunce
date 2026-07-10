@@ -41,6 +41,15 @@ fn validate_input(
     params: &Parameters,
     mode: ValidationMode,
 ) -> Result<DataSource, CliError> {
+    if params.step.is_some()
+        && matches!(
+            &input,
+            ParsedInput::Paired(_) | ParsedInput::Separate(_, ParsedTimeSource::File(_))
+        )
+    {
+        return Err("Option --step is not valid with file input".into());
+    }
+
     match input {
         ParsedInput::Paired(path) => Ok(DataSource::Paired(path)),
         ParsedInput::Separate(loc, time) => Ok(DataSource::Separate(

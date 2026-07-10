@@ -7,7 +7,7 @@ use super::types::{
     CoordTimeResult, CoordTimeStream, InputPath, LocationSource, LocationStream, TimeSource,
 };
 use super::{Command, Step, TimezoneOverride, validate_latitude, validate_longitude};
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Days, Duration, FixedOffset, NaiveDate, NaiveDateTime, Utc};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
@@ -15,17 +15,21 @@ use std::sync::Arc;
 type TimeIter = Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>;
 
 struct CoordRangeIter {
-    next: Option<f64>,
+    start: f64,
     end: f64,
     step: f64,
+    index: usize,
+    done: bool,
 }
 
 impl CoordRangeIter {
     fn new(start: f64, end: f64, step: f64) -> Self {
         Self {
-            next: Some(start),
+            start,
             end,
             step,
+            index: 0,
+            done: false,
         }
     }
 }
@@ -34,19 +38,75 @@ impl Iterator for CoordRangeIter {
     type Item = f64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current = self.next?;
-        if self.step == 0.0 || (current - self.end).abs() < f64::EPSILON {
-            self.next = None;
-            return Some(current);
+        if self.done {
+            return None;
         }
 
-        let next = current + self.step;
-        self.next = if self.step > 0.0 {
-            (next <= self.end + self.step * 0.5).then_some(next)
+        let candidate = self.start + self.step * self.index as f64;
+        let tolerance = f64::EPSILON * candidate.abs().max(self.end.abs()).max(1.0) * 8.0;
+        let past_end = if self.step >= 0.0 {
+            candidate > self.end + tolerance
         } else {
-            (next >= self.end + self.step * 0.5).then_some(next)
+            candidate < self.end - tolerance
         };
+        if past_end {
+            self.done = true;
+            return None;
+        }
+
+        let current = if (candidate - self.end).abs() <= tolerance {
+            self.end
+        } else {
+            candidate
+        };
+
+        if self.step == 0.0 || current == self.end {
+            self.done = true;
+        } else if let Some(next_index) = self.index.checked_add(1) {
+            self.index = next_index;
+        } else {
+            self.done = true;
+        }
+
         Some(current)
+    }
+}
+
+struct CalendarDayIter {
+    tz: TimezoneInfo,
+    next: Option<NaiveDate>,
+    end: NaiveDate,
+}
+
+impl CalendarDayIter {
+    fn new(start: NaiveDate, end: NaiveDate, tz: TimezoneInfo) -> Self {
+        Self {
+            tz,
+            next: Some(start),
+            end,
+        }
+    }
+}
+
+impl Iterator for CalendarDayIter {
+    type Item = Result<DateTime<FixedOffset>, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let date = self.next?;
+        self.next = if date < self.end {
+            date.checked_add_days(Days::new(1))
+        } else {
+            None
+        };
+
+        let midnight = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight must be constructible");
+        Some(
+            self.tz
+                .to_datetime_from_local(&midnight)
+                .ok_or_else(|| format!("Midnight does not exist in timezone for {date}")),
+        )
     }
 }
 
@@ -277,7 +337,7 @@ pub fn expand_time_source(
                     Step(chrono::Duration::hours(1))
                 }
             });
-            expand_partial_date(partial_date, step, override_tz)
+            expand_partial_date(partial_date, step, override_tz, command)
         }
         TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
@@ -415,10 +475,19 @@ fn expand_partial_date(
     date_str: String,
     step: Step,
     override_tz: Option<TimezoneOverride>,
+    command: Command,
 ) -> Result<TimeIter, String> {
     let step_duration: chrono::Duration = step.into();
     let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
     let bounds = naive_bounds_from_partial(&date_str)?;
+
+    if command == Command::Sunrise {
+        return Ok(Box::new(CalendarDayIter::new(
+            bounds.start.date(),
+            bounds.end.date(),
+            tz_info,
+        )));
+    }
 
     let start_dt = to_local_datetime(&tz_info, bounds.start, "Start", &date_str)?;
     let end_dt = to_local_datetime(&tz_info, bounds.end, "End", &date_str)?;
@@ -620,5 +689,39 @@ mod tests {
         assert_eq!(collected.len(), 6);
         assert_eq!(collected.first().copied(), Some((53.0, 13.0)));
         assert_eq!(collected.last().copied(), Some((52.0, 11.0)));
+    }
+
+    #[test]
+    fn range_does_not_overshoot_endpoint() {
+        let source = LocationSource::Range {
+            lat: (0.0, 1.0, 0.6),
+            lon: (0.0, 0.0, 0.0),
+        };
+
+        let collected = expand_location_source(source)
+            .expect("expand range")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect coordinates");
+
+        assert_eq!(collected, vec![(0.0, 0.0), (0.6, 0.0)]);
+    }
+
+    #[test]
+    fn sunrise_ranges_stay_at_local_midnight_across_dst() {
+        let times = expand_time_source(
+            TimeSource::Range("2026-03".to_string()),
+            None,
+            Some("Europe/Berlin".parse().expect("valid timezone")),
+            Command::Sunrise,
+        )
+        .expect("expand month")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect datetimes");
+
+        for date in ["2026-03-29", "2026-03-30", "2026-03-31"] {
+            assert!(times.iter().any(|dt| {
+                dt.format("%Y-%m-%dT%H:%M:%S").to_string() == format!("{date}T00:00:00")
+            }));
+        }
     }
 }

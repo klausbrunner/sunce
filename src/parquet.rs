@@ -17,12 +17,16 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
+const DATETIME_CACHE_CAPACITY: usize = 2048;
 type DateTimeCache = AHashMap<chrono::DateTime<chrono::FixedOffset>, String>;
 
 fn cached_datetime<'a>(
     cache: &'a mut DateTimeCache,
     dt: &chrono::DateTime<chrono::FixedOffset>,
 ) -> &'a str {
+    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(dt) {
+        cache.clear();
+    }
     cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
 }
 
@@ -341,7 +345,7 @@ fn write_position_parquet<W: Write + Send>(
     let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
     let mut builders = PositionBatchBuilders::new(layout);
-    let mut datetime_cache = DateTimeCache::with_capacity(2048);
+    let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
     let mut batch_count = 0;
     let mut total_count = 0;
 
@@ -382,7 +386,7 @@ fn write_sunrise_parquet<W: Write + Send>(
     let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
     let mut builders = SunriseBatchBuilders::new(layout);
-    let mut datetime_cache = DateTimeCache::with_capacity(2048);
+    let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
     let mut batch_count = 0;
     let mut total_count = 0;
 

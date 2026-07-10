@@ -163,6 +163,30 @@ fn test_position_option_placement_variants() {
 }
 
 #[test]
+fn test_rejects_trailing_positional_arguments() {
+    assert_failure(
+        &[
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+            "unexpected",
+        ],
+        "Unexpected arguments after command: unexpected",
+    );
+}
+
+#[test]
+fn test_rejects_step_for_file_inputs() {
+    for args in [
+        vec!["@-", "position", "--step=1h"],
+        vec!["52.0", "13.4", "@-", "position", "--step=1h"],
+    ] {
+        assert_failure(&args, "Option --step is not valid with file input");
+    }
+}
+
+#[test]
 fn test_sunrise_option_placement_variants() {
     assert_success(
         &[
