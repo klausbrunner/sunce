@@ -5,7 +5,6 @@
 use assert_cmd::Command;
 use chrono::{DateTime, FixedOffset};
 use csv::ReaderBuilder;
-use predicates::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -58,31 +57,9 @@ impl SunceTest {
         self.cmd.assert().success()
     }
 
-    /// Assert the command succeeds and contains text in stdout
-    pub fn assert_success_contains(mut self, text: &str) -> assert_cmd::assert::Assert {
-        self.cmd
-            .assert()
-            .success()
-            .stdout(predicate::str::contains(text))
-    }
-
-    /// Assert the command succeeds and contains all texts in stdout
-    pub fn assert_success_contains_all(mut self, texts: &[&str]) -> assert_cmd::assert::Assert {
-        let mut assertion = self.cmd.assert().success();
-        for text in texts {
-            assertion = assertion.stdout(predicate::str::contains(*text));
-        }
-        assertion
-    }
-
     /// Assert the command fails
     pub fn assert_failure(mut self) -> assert_cmd::assert::Assert {
         self.cmd.assert().failure()
-    }
-
-    /// Get the raw command for complex assertions (when helpers aren't enough)
-    pub fn command(self) -> Command {
-        self.cmd
     }
 
     /// Get command output for inspection
@@ -110,29 +87,6 @@ pub fn position_test_with_format(format: &str) -> SunceTest {
 /// Quick helper for custom coordinates
 pub fn custom_position(lat: &str, lon: &str, datetime: &str) -> SunceTest {
     SunceTest::new().args([lat, lon, datetime, "position"])
-}
-
-/// Quick helper for time series with step
-pub fn time_series_test(date: &str, step: &str) -> SunceTest {
-    SunceTest::new().args([
-        "--format=CSV",
-        "52.0",
-        "13.4",
-        date,
-        "position",
-        &format!("--step={}", step),
-    ])
-}
-
-/// Quick helper for delta T estimation
-pub fn position_with_deltat_estimation() -> SunceTest {
-    SunceTest::new().args([
-        "--deltat",
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
 }
 
 /// Parse command stdout as JSON.

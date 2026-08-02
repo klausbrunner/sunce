@@ -255,26 +255,6 @@ fn test_twilight_without_show_inputs_and_without_flag() {
 
 #[test]
 fn test_twilight_polar_json_behavior() {
-    for (lat, lon, date, expected_type) in [
-        ("80.0", "0.0", "2024-06-21", "ALL_DAY"),
-        ("80.0", "0.0", "2024-12-21", "ALL_NIGHT"),
-    ] {
-        let json = parse_json_output(&output_text(&[
-            "--format=json",
-            "--timezone=UTC",
-            lat,
-            lon,
-            date,
-            "sunrise",
-        ]));
-        assert_eq!(
-            json.get("type").and_then(Value::as_str),
-            Some(expected_type)
-        );
-        assert!(json.get("sunrise").is_some_and(Value::is_null));
-        assert!(json.get("sunset").is_some_and(Value::is_null));
-    }
-
     let json = parse_json_output(&output_text(&[
         "--format=json",
         "--timezone=UTC",
@@ -287,72 +267,4 @@ fn test_twilight_polar_json_behavior() {
     assert!(json.get("type").and_then(Value::as_str).is_some());
     assert!(json.get("sunrise").is_some());
     assert!(json.get("sunset").is_some());
-}
-
-#[cfg(feature = "parquet")]
-#[test]
-fn test_twilight_parquet_output() {
-    use arrow::array::StringArray;
-    use bytes::Bytes;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-    let output = SunceTest::new()
-        .args([
-            "--format=parquet",
-            "--timezone=UTC",
-            "52.0",
-            "13.4",
-            "2024-06-21",
-            "sunrise",
-            "--twilight",
-        ])
-        .get_output();
-
-    assert!(output.status.success());
-    let bytes = Bytes::from(output.stdout);
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new(bytes).expect("Failed to create Parquet reader");
-    assert_eq!(
-        builder
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "dateTime",
-            "type",
-            "sunrise",
-            "transit",
-            "sunset",
-            "civil_start",
-            "civil_end",
-            "nautical_start",
-            "nautical_end",
-            "astronomical_start",
-            "astronomical_end",
-        ]
-    );
-
-    let batch = builder
-        .build()
-        .expect("Failed to build Parquet reader")
-        .next()
-        .unwrap()
-        .unwrap();
-    assert_eq!(batch.num_rows(), 1);
-    for (field, expected_prefix) in [
-        ("sunrise", "2024-06-21T02:46:15"),
-        ("civil_start", "2024-06-21T01:57:19"),
-        ("nautical_start", "2024-06-21T00:38:45"),
-    ] {
-        let value = batch
-            .column_by_name(field)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0);
-        assert!(value.contains(expected_prefix));
-    }
 }

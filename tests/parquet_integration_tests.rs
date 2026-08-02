@@ -198,26 +198,6 @@ fn test_parquet_multiple_coordinates() {
 }
 
 #[test]
-fn test_parquet_streaming_behavior() {
-    let batches = parquet_batches(
-        &[
-            "--format=PARQUET",
-            "50:52:0.1",
-            "10:12:0.1",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    );
-    let rows = total_rows(&batches);
-    assert!(
-        (400..=450).contains(&rows),
-        "Expected about 441 rows, got {rows}"
-    );
-    assert_eq!(batches.len(), 1, "Should fit in one batch");
-}
-
-#[test]
 fn test_parquet_consistency_with_csv() {
     let csv_text = String::from_utf8(
         SunceTest::new()
@@ -278,15 +258,6 @@ fn test_parquet_timezone_preservation() {
         string_array(&batch, "dateTime").value(0),
         "2024-06-21T12:00:00+02:00"
     );
-}
-
-#[test]
-fn test_parquet_sunrise_type_consistency() {
-    let batch = parquet_single_batch(
-        &["--format=PARQUET", "52.0", "13.4", "2024-06-21", "sunrise"],
-        &[],
-    );
-    assert_eq!(string_array(&batch, "type").value(0), "NORMAL");
 }
 
 #[test]

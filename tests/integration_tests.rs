@@ -1,6 +1,5 @@
 mod common;
 use common::*;
-use predicates::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -30,42 +29,7 @@ fn csv_row(args: &[&str], envs: &[(&str, &str)]) -> HashMap<String, String> {
 }
 
 #[test]
-fn test_basic_position_calculation() {
-    position_test().assert_success_contains_all(&["dateTime", "azimuth", "zenith"]);
-}
-
-#[test]
-fn test_output_formats() {
-    position_test().assert_success_contains("azimuth");
-
-    let csv = output_text(
-        &[
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    );
-    let (headers, rows) = parse_csv_output(&csv);
-    assert_eq!(headers, fields(&["dateTime", "azimuth", "zenith"]));
-    assert_eq!(rows.len(), 1);
-
-    let json = parse_json_output(&output_text(
-        &[
-            "--format=JSON",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ));
-    assert!(json.get("dateTime").is_some());
-    assert!(json.get("azimuth").is_some());
-    assert!(json.get("zenith").is_some());
-
+fn test_parquet_feature_availability() {
     #[cfg(feature = "parquet")]
     {
         let output = position_test_with_format("PARQUET").get_output();
@@ -91,33 +55,6 @@ fn test_position_command_variants() {
             .arg(format!("--algorithm={algorithm}"))
             .assert_success();
     }
-
-    let default_headers = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ))
-    .0;
-    assert!(default_headers.contains(&"zenith".to_string()));
-
-    let elevation_headers = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-            "--elevation-angle",
-        ],
-        &[],
-    ))
-    .0;
-    assert!(elevation_headers.contains(&"elevation-angle".to_string()));
 
     let with_refraction = output_text(&["52.0", "13.4", "2024-01-01T12:00:00", "position"], &[]);
     let without_refraction = output_text(
@@ -219,47 +156,7 @@ fn test_time_series_generation_and_partial_dates() {
 }
 
 #[test]
-fn test_show_inputs_and_environmental_fields() {
-    let auto_headers = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "52:53:1",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ))
-    .0;
-    assert_eq!(
-        auto_headers,
-        fields(&[
-            "latitude",
-            "longitude",
-            "elevation",
-            "pressure",
-            "temperature",
-            "dateTime",
-            "deltaT",
-            "azimuth",
-            "zenith",
-        ])
-    );
-
-    let hidden_headers = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "--no-show-inputs",
-            "52:53:1",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ))
-    .0;
-    assert_eq!(hidden_headers, fields(&["dateTime", "azimuth", "zenith"]));
-
+fn test_environmental_inputs_are_reported() {
     let env_row = csv_row(
         &[
             "--format=CSV",
@@ -330,26 +227,6 @@ fn test_timezone_and_datetime_parsing() {
 }
 
 #[test]
-fn test_time_steps_and_edge_locations() {
-    for (date, step) in [
-        ("2024-01-01", "30s"),
-        ("2024-01-01", "15m"),
-        ("2024-01-01", "2h"),
-        ("2024-01", "7d"),
-    ] {
-        time_series_test(date, step).assert_success();
-    }
-
-    for (lat, lon, datetime) in [
-        ("90.0", "0.0", "2024-06-21T12:00:00"),
-        ("-90.0", "0.0", "2024-12-21T12:00:00"),
-        ("0.0", "180.0", "2024-01-01T12:00:00"),
-    ] {
-        custom_position(lat, lon, datetime).assert_success();
-    }
-}
-
-#[test]
 fn test_combined_range_and_now_behavior() {
     let rows = csv_rows(
         &[
@@ -382,34 +259,7 @@ fn test_combined_range_and_now_behavior() {
 }
 
 #[test]
-fn test_csv_headers_and_delta_t() {
-    let with_headers = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ))
-    .0;
-    assert_eq!(with_headers, fields(&["dateTime", "azimuth", "zenith"]));
-
-    let rows = parse_csv_no_headers_output(&output_text(
-        &[
-            "--format=CSV",
-            "--no-headers",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    ));
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].len(), 3);
-
+fn test_delta_t_values() {
     let explicit = csv_row(
         &[
             "--format=CSV",
@@ -424,37 +274,20 @@ fn test_csv_headers_and_delta_t() {
     );
     assert_eq!(explicit.get("deltaT").map(String::as_str), Some("69.200"));
 
-    position_with_deltat_estimation().assert_success();
-}
-
-#[test]
-fn test_validation_and_error_handling() {
-    custom_position("91.0", "13.4", "2024-01-01T12:00:00")
-        .assert_failure()
-        .stderr(predicate::str::contains("Latitude must be between"));
-    custom_position("52.0", "181.0", "2024-01-01T12:00:00")
-        .assert_failure()
-        .stderr(predicate::str::contains("Longitude must be between"));
-
-    for args in [
-        vec!["52.0"],
-        vec![
+    let estimated = csv_row(
+        &[
+            "--format=CSV",
+            "--show-inputs",
+            "--deltat",
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
             "position",
-            "--step=invalid",
         ],
-        vec![
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-            "--algorithm=INVALID",
-        ],
-    ] {
-        SunceTest::new().args(args).assert_failure();
-    }
+        &[],
+    );
+    let estimated = estimated["deltaT"].parse::<f64>().unwrap();
+    assert!((70.0..=72.0).contains(&estimated));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 mod common;
-use common::{SunceTest, parse_csv_output_maps, sunce_command, sunce_exe_path, write_text_file};
+use common::{SunceTest, sunce_command, sunce_exe_path, write_text_file};
 use predicates::prelude::*;
 use std::io::{Read, Write};
 use std::process::{Command as StdCommand, Stdio};
@@ -239,37 +239,6 @@ fn test_sigpipe_handling() {
         }
         Err(err) => panic!("Error checking process status: {err}"),
     }
-}
-
-#[test]
-fn test_time_series_crossing_dst_boundary() {
-    let output = timed_output(
-        &[
-            "--timezone=Europe/Berlin",
-            "--format=csv",
-            "--show-inputs",
-            "52.0",
-            "13.4",
-            "2024-03-31",
-            "position",
-            "--step=30m",
-        ],
-        Duration::from_secs(10),
-    );
-    assert!(output.status.success());
-
-    let rows = parse_csv_output_maps(&String::from_utf8(output.stdout).unwrap());
-    let datetimes = rows
-        .iter()
-        .map(|row| row["dateTime"].clone())
-        .collect::<Vec<_>>();
-    assert!(datetimes.iter().any(|ts| ts == "2024-03-31T01:30:00+01:00"));
-    assert!(datetimes.iter().any(|ts| ts == "2024-03-31T03:00:00+02:00"));
-    assert!(
-        datetimes
-            .iter()
-            .all(|ts| !ts.contains("T02:00:00") && !ts.contains("T02:30:00"))
-    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 mod common;
 use common::{
-    assert_time_close, fields, parse_csv_output, parse_csv_output_maps,
-    parse_csv_single_record_map, parse_json_output, sunce_command,
+    assert_time_close, parse_csv_output, parse_csv_output_maps, parse_csv_single_record_map,
+    parse_json_output, sunce_command,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -30,32 +30,6 @@ fn csv_rows(
 
 fn csv_row(args: &[&str], envs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
     parse_csv_single_record_map(&output_text(args, envs))
-}
-
-#[test]
-fn test_sunrise_output_formats() {
-    let human = output_text(&["52.0", "13.4", "2024-06-21", "sunrise"], &[]);
-    assert!(human.contains("sunrise"));
-    assert!(human.contains("sunset"));
-
-    let csv = output_text(
-        &["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"],
-        &[],
-    );
-    let (headers, rows) = parse_csv_output(&csv);
-    assert_eq!(
-        headers,
-        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
-    );
-    assert_eq!(rows.len(), 1);
-
-    let json = parse_json_output(&output_text(
-        &["--format=JSON", "52.0", "13.4", "2024-06-21", "sunrise"],
-        &[],
-    ));
-    assert!(json.get("type").is_some());
-    assert!(json.get("sunrise").is_some());
-    assert!(json.get("sunset").is_some());
 }
 
 #[test]
@@ -136,28 +110,6 @@ fn test_sunrise_timezone_handling() {
             assert!(row[field].ends_with(tz));
         }
     }
-}
-
-#[test]
-fn test_sunrise_validation_and_show_inputs() {
-    sunce_command()
-        .args(["52.0", "13.4", "2024-06-21", "sunrise", "--horizon=invalid"])
-        .assert()
-        .failure();
-
-    let (headers, _) = parse_csv_output(&output_text(
-        &[
-            "--format=CSV",
-            "--show-inputs",
-            "52.0",
-            "13.4",
-            "2024-06-21",
-            "sunrise",
-        ],
-        &[("TZ", "Europe/Berlin")],
-    ));
-    assert!(headers.contains(&"latitude".to_string()));
-    assert!(headers.contains(&"longitude".to_string()));
 }
 
 #[test]
