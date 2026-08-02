@@ -1,7 +1,10 @@
 //! Stream orchestration and shared calculation result types.
 
 use crate::data::{CalculationAlgorithm, Command, CoordTimeStream, Parameters};
-use crate::position::{SpaCache, TIME_CACHE_CAPACITY, refraction_correction, time_cache_get};
+use crate::position::{
+    SpaCache, TIME_CACHE_CAPACITY, calculate_position_with_refraction, refraction_correction,
+    time_cache_get,
+};
 use crate::sunrise::calculate_sunrise as calculate_sunrise_impl;
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::SolarPosition;
@@ -99,31 +102,15 @@ pub fn calculate_stream(
             } else {
                 Box::new(data.map(move |item| {
                     item.and_then(|(lat, lon, dt)| {
-                        let deltat = crate::position::resolve_deltat(dt, &params);
-                        let position =
-                            if params.calculation.algorithm == CalculationAlgorithm::Grena3 {
-                                solar_positioning::grena3::solar_position(
-                                    dt, lat, lon, deltat, refraction,
-                                )
-                                .map_err(|e| format!("Failed to calculate solar position: {}", e))?
-                            } else {
-                                solar_positioning::spa::solar_position(
-                                    dt,
-                                    lat,
-                                    lon,
-                                    params.environment.elevation,
-                                    deltat,
-                                    refraction,
-                                )
-                                .map_err(|e| format!("Failed to calculate solar position: {}", e))?
-                            };
+                        let calculation =
+                            calculate_position_with_refraction(lat, lon, dt, &params, refraction)?;
 
                         Ok(CalculationResult::Position {
                             lat,
                             lon,
                             datetime: dt,
-                            position,
-                            deltat,
+                            position: calculation.position,
+                            deltat: calculation.deltat,
                         })
                     })
                 }))

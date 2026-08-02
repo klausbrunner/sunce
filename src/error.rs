@@ -46,31 +46,28 @@ impl fmt::Display for CliError {
 }
 
 #[derive(Debug)]
-pub struct StringError(pub String);
+pub struct OutputError(pub String);
 
-impl From<String> for StringError {
+impl From<String> for OutputError {
     fn from(value: String) -> Self {
         Self(value)
     }
 }
 
-impl From<&str> for StringError {
+impl From<&str> for OutputError {
     fn from(value: &str) -> Self {
         Self(value.to_string())
     }
 }
 
-impl From<io::Error> for StringError {
+impl From<io::Error> for OutputError {
     fn from(value: io::Error) -> Self {
         Self(value.to_string())
     }
 }
 
-impl fmt::Display for StringError {
+impl fmt::Display for OutputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
-
-pub type PlannerError = StringError;
-pub type OutputError = StringError;

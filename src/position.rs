@@ -1,6 +1,5 @@
 //! Solar position calculations and SPA time-cache helpers.
 
-use crate::compute::CalculationResult;
 use crate::data::{CalculationAlgorithm, Parameters};
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::RefractionCorrection;
@@ -12,6 +11,11 @@ pub(crate) const TIME_CACHE_CAPACITY: usize = 2048;
 pub(crate) type SpaTimeParts = Arc<solar_positioning::spa::SpaTimeDependent>;
 pub(crate) type SpaCacheValue = Result<(SpaTimeParts, f64), String>;
 pub(crate) type SpaCache = HashMap<DateTime<FixedOffset>, SpaCacheValue>;
+
+pub(crate) struct PositionCalculation {
+    pub position: solar_positioning::SolarPosition,
+    pub deltat: f64,
+}
 
 pub(crate) fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
     params
@@ -36,27 +40,36 @@ pub(crate) fn refraction_correction(
     }
 }
 
-pub fn solar_elevation_at(
+pub(crate) fn solar_elevation_at(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
 ) -> Result<f64, String> {
-    let CalculationResult::Position { position, .. } = calculate_position(lat, lon, dt, params)?
-    else {
-        unreachable!();
-    };
-    Ok(90.0 - position.zenith_angle())
+    Ok(90.0
+        - calculate_position(lat, lon, dt, params)?
+            .position
+            .zenith_angle())
 }
 
-pub fn calculate_position(
+pub(crate) fn calculate_position(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
-) -> Result<CalculationResult, String> {
-    let deltat = resolve_deltat(dt, params);
+) -> Result<PositionCalculation, String> {
     let refraction = refraction_correction(params)?;
+    calculate_position_with_refraction(lat, lon, dt, params, refraction)
+}
+
+pub(crate) fn calculate_position_with_refraction(
+    lat: f64,
+    lon: f64,
+    dt: DateTime<FixedOffset>,
+    params: &Parameters,
+    refraction: Option<RefractionCorrection>,
+) -> Result<PositionCalculation, String> {
+    let deltat = resolve_deltat(dt, params);
 
     let position = if params.calculation.algorithm == CalculationAlgorithm::Grena3 {
         solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
@@ -73,13 +86,7 @@ pub fn calculate_position(
         .map_err(|e| format!("Failed to calculate solar position: {}", e))?
     };
 
-    Ok(CalculationResult::Position {
-        lat,
-        lon,
-        datetime: dt,
-        position,
-        deltat,
-    })
+    Ok(PositionCalculation { position, deltat })
 }
 
 pub(crate) fn time_cache_get(

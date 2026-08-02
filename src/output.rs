@@ -190,11 +190,28 @@ fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Optio
     }
 }
 
-fn sunrise_type_str(result: &SunriseResult<impl std::any::Any>) -> &'static str {
-    match result {
-        SunriseResult::RegularDay { .. } => "NORMAL",
-        SunriseResult::AllDay { .. } => "ALL_DAY",
-        SunriseResult::AllNight { .. } => "ALL_NIGHT",
+#[derive(Clone, Copy)]
+pub(crate) enum SunriseKind {
+    Normal,
+    AllDay,
+    AllNight,
+}
+
+impl SunriseKind {
+    fn from_result(result: &SunriseResult<impl std::any::Any>) -> Self {
+        match result {
+            SunriseResult::RegularDay { .. } => Self::Normal,
+            SunriseResult::AllDay { .. } => Self::AllDay,
+            SunriseResult::AllNight { .. } => Self::AllNight,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "NORMAL",
+            Self::AllDay => "ALL_DAY",
+            Self::AllNight => "ALL_NIGHT",
+        }
     }
 }
 
@@ -376,7 +393,7 @@ pub(crate) struct SunriseRow {
     pub lon: f64,
     pub date_time: DateTime<FixedOffset>,
     pub deltat: f64,
-    pub type_label: &'static str,
+    pub kind: SunriseKind,
     pub sunrise: Option<DateTime<FixedOffset>>,
     pub transit: DateTime<FixedOffset>,
     pub sunset: Option<DateTime<FixedOffset>>,
@@ -413,7 +430,7 @@ impl SunriseRow {
             idx += 1;
         }
 
-        set_field(out, idx, self.type_label);
+        set_field(out, idx, self.kind.label());
         idx += 1;
         set_cached_optional_datetime(out, idx, datetime_cache, self.sunrise.as_ref());
         idx += 1;
@@ -447,7 +464,7 @@ impl SunriseRow {
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String> {
         let field_count =
-            if layout.show_inputs { 8 } else { 5 } + usize::from(layout.include_twilight) * 6;
+            (if layout.show_inputs { 8 } else { 5 }) + usize::from(layout.include_twilight) * 6;
 
         let mut serializer = serde_json::Serializer::new(&mut *writer);
         let mut map = serializer
@@ -470,7 +487,7 @@ impl SunriseRow {
                 .map_err(|e| e.to_string())?;
         }
 
-        map.serialize_entry("type", &self.type_label)
+        map.serialize_entry("type", &self.kind.label())
             .map_err(|e| e.to_string())?;
         let sunrise = cached_optional_datetime(datetime_cache, self.sunrise.as_ref());
         map.serialize_entry("sunrise", &sunrise)
@@ -744,7 +761,7 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
                 lon: *lon,
                 date_time: *date,
                 deltat: *deltat,
-                type_label: sunrise_type_str(result),
+                kind: SunriseKind::from_result(result),
                 sunrise: sunrise.copied(),
                 transit: *transit,
                 sunset: sunset.copied(),
@@ -776,7 +793,7 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
                 lon: *lon,
                 date_time: *date,
                 deltat: *deltat,
-                type_label: sunrise_type_str(sunrise_sunset),
+                kind: SunriseKind::from_result(sunrise_sunset),
                 sunrise: sunrise.copied(),
                 transit: *transit,
                 sunset: sunset.copied(),
@@ -1083,6 +1100,22 @@ mod tests {
         }
     }
 
+    fn position_result(
+        lat: f64,
+        lon: f64,
+        datetime: DateTime<FixedOffset>,
+        params: &Parameters,
+    ) -> CalculationResult {
+        let calculation = crate::position::calculate_position(lat, lon, datetime, params).unwrap();
+        CalculationResult::Position {
+            lat,
+            lon,
+            datetime,
+            position: calculation.position,
+            deltat: calculation.deltat,
+        }
+    }
+
     #[test]
     fn streaming_text_flushes_each_record_when_requested() {
         let tz = FixedOffset::east_opt(0).unwrap();
@@ -1096,7 +1129,7 @@ mod tests {
             ..Parameters::default()
         };
 
-        let calc = crate::position::calculate_position(52.0, 13.4, dt, &params).unwrap();
+        let calc = position_result(52.0, 13.4, dt, &params);
         let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
             Box::new(vec![Ok(calc)].into_iter());
 
@@ -1125,7 +1158,7 @@ mod tests {
             },
             ..Parameters::default()
         };
-        let calc = crate::position::calculate_position(52.0, 13.4, dt, &params).unwrap();
+        let calc = position_result(52.0, 13.4, dt, &params);
         let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
             Box::new(std::iter::once(Ok(calc)));
         let writer = MockWriter {
@@ -1205,7 +1238,7 @@ mod tests {
             "52.00000".to_string(),
             "13.40000".to_string(),
             "0.000".to_string(),
-            "1013.000".to_string(),
+            "1013.250".to_string(),
             "15.000".to_string(),
             "2024-06-21T12:00:00+00:00".to_string(),
             "69.123".to_string(),
@@ -1239,7 +1272,7 @@ mod tests {
             lon: 13.4,
             date_time: dt,
             deltat: 69.123,
-            type_label: "NORMAL",
+            kind: SunriseKind::Normal,
             sunrise: Some(dt + chrono::Duration::hours(4)),
             transit: dt + chrono::Duration::hours(12),
             sunset: Some(dt + chrono::Duration::hours(20)),

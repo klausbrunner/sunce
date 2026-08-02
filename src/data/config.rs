@@ -132,7 +132,7 @@ impl Default for Environment {
             refraction: true,
             elevation: 0.0,
             temperature: 15.0,
-            pressure: 1013.0,
+            pressure: 1013.25,
         }
     }
 }
@@ -303,6 +303,6 @@ mod tests {
         assert!(defaults.environment.refraction);
         assert_eq!(defaults.environment.elevation, 0.0);
         assert_eq!(defaults.environment.temperature, 15.0);
-        assert_eq!(defaults.environment.pressure, 1013.0);
+        assert_eq!(defaults.environment.pressure, 1013.25);
     }
 }

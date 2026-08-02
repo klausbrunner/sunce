@@ -192,7 +192,7 @@ impl SunriseBatchBuilders {
         row: &crate::output::SunriseRow,
         layout: SunriseLayout,
         datetime_cache: &mut DateTimeCache,
-    ) -> io::Result<()> {
+    ) {
         if layout.show_inputs {
             self.latitude.as_mut().unwrap().append_value(row.lat);
             self.longitude.as_mut().unwrap().append_value(row.lon);
@@ -201,29 +201,10 @@ impl SunriseBatchBuilders {
 
         self.date_time
             .append_value(cached_datetime(datetime_cache, &row.date_time));
-        self.kind.append_value(row.type_label);
-
-        match row.type_label {
-            "NORMAL" => {
-                append_time(
-                    &mut self.sunrise,
-                    row.sunrise.as_ref().expect("sunrise expected"),
-                    datetime_cache,
-                );
-                append_time(&mut self.transit, &row.transit, datetime_cache);
-                append_time(
-                    &mut self.sunset,
-                    row.sunset.as_ref().expect("sunset expected"),
-                    datetime_cache,
-                );
-            }
-            "ALL_DAY" | "ALL_NIGHT" => {
-                self.sunrise.append_null();
-                append_time(&mut self.transit, &row.transit, datetime_cache);
-                self.sunset.append_null();
-            }
-            other => return Err(parquet_error(format!("Unknown sunrise type: {other}"))),
-        }
+        self.kind.append_value(row.kind.label());
+        append_nullable_time(&mut self.sunrise, row.sunrise.as_ref(), datetime_cache);
+        append_time(&mut self.transit, &row.transit, datetime_cache);
+        append_nullable_time(&mut self.sunset, row.sunset.as_ref(), datetime_cache);
 
         append_optional_time(
             &mut self.civil_start,
@@ -251,8 +232,6 @@ impl SunriseBatchBuilders {
             row.astro_end.as_ref(),
             datetime_cache,
         );
-
-        Ok(())
     }
 
     fn flush<W: Write + Send>(
@@ -289,6 +268,17 @@ fn append_optional_time(
             Some(time) => append_time(builder, time, datetime_cache),
             None => builder.append_null(),
         }
+    }
+}
+
+fn append_nullable_time(
+    builder: &mut StringBuilder,
+    time: Option<&chrono::DateTime<chrono::FixedOffset>>,
+    datetime_cache: &mut DateTimeCache,
+) {
+    match time {
+        Some(time) => append_time(builder, time, datetime_cache),
+        None => builder.append_null(),
     }
 }
 
@@ -394,7 +384,7 @@ fn write_sunrise_parquet<W: Write + Send>(
         let result = result.map_err(io::Error::other)?;
         let row = normalize_sunrise_result(&result)
             .ok_or_else(|| parquet_error("Unexpected calculation result for sunrise"))?;
-        builders.append_row(&row, layout, &mut datetime_cache)?;
+        builders.append_row(&row, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
 

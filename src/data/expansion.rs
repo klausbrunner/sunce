@@ -344,15 +344,14 @@ pub fn expand_time_source(
             let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
             if let Some(step_str) = step_override {
                 let step_duration: chrono::Duration = step_str.into();
+                let sleep_duration = step_duration
+                    .to_std()
+                    .expect("positive step must convert to std::time::Duration");
                 let mut first = true;
                 let tz_clone = tz_info.clone();
                 let iter = std::iter::from_fn(move || {
                     if !std::mem::take(&mut first) {
-                        std::thread::sleep(
-                            step_duration
-                                .to_std()
-                                .unwrap_or(std::time::Duration::from_secs(1)),
-                        );
+                        std::thread::sleep(sleep_duration);
                     }
                     Some(Ok(convert_datetime_to_timezone(Utc::now(), &tz_clone)))
                 });
