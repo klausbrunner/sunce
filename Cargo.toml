@@ -41,9 +41,6 @@ ahash = "0.8"
 default = ["parquet"]
 parquet = ["dep:arrow", "dep:parquet"]
 
-[build-dependencies]
-chrono = "0.4"
-
 [dev-dependencies]
 assert_cmd = "2.2"
 predicates = "3.1"

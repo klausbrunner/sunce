@@ -46,8 +46,8 @@ impl DataSource {
         }
     }
 
-    pub fn is_watch_mode(&self, step: &Option<crate::data::config::Step>) -> bool {
-        matches!(self, DataSource::Separate(_, TimeSource::Now)) && step.is_some()
+    pub fn is_watch_mode(&self, has_step: bool) -> bool {
+        matches!(self, DataSource::Separate(_, TimeSource::Now)) && has_step
     }
 }
 

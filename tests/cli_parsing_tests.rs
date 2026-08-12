@@ -304,7 +304,10 @@ fn test_help_and_version_paths() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("sunce"));
+        .stdout(predicate::str::contains("sunce"))
+        .stdout(predicate::str::contains("Build:"))
+        .stdout(predicate::str::contains("Features:"))
+        .stdout(predicate::str::contains("Built:").not());
 
     assert_help(
         &["help", "position"],

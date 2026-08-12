@@ -152,22 +152,19 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
                 std::thread::sleep(wait_duration_until(now, target)?);
             }
         },
-        PredicateCheck::ElevationAbove(threshold) => loop {
-            let now = resolve_time(&job.time, &job.params)?;
-            let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
-            if elevation > threshold {
-                return Ok(());
+        PredicateCheck::ElevationAbove(threshold) | PredicateCheck::ElevationBelow(threshold) => {
+            let wait_for_above = matches!(job.check, PredicateCheck::ElevationAbove(_));
+            loop {
+                let now = resolve_time(&job.time, &job.params)?;
+                let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
+                if (wait_for_above && elevation > threshold)
+                    || (!wait_for_above && elevation < threshold)
+                {
+                    return Ok(());
+                }
+                std::thread::sleep(angle_wait_duration(elevation, threshold));
             }
-            std::thread::sleep(angle_wait_duration(elevation, threshold));
-        },
-        PredicateCheck::ElevationBelow(threshold) => loop {
-            let now = resolve_time(&job.time, &job.params)?;
-            let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
-            if elevation < threshold {
-                return Ok(());
-            }
-            std::thread::sleep(angle_wait_duration(elevation, threshold));
-        },
+        }
         PredicateCheck::State(predicate) => loop {
             let now = resolve_time(&job.time, &job.params)?;
             if state_matches(

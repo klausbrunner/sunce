@@ -426,11 +426,10 @@ fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
 
 fn get_version_text() -> String {
     format!(
-        "sunce {}\n Build: {} ({})\n Built: {}\n Features: {}",
+        "sunce {}\n Build: {} ({})\n Features: {}",
         env!("CARGO_PKG_VERSION"),
         env!("BUILD_PROFILE"),
         env!("BUILD_TARGET"),
-        env!("BUILD_DATE"),
         env!("BUILD_FEATURES")
     )
 }

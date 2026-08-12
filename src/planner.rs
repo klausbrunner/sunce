@@ -30,8 +30,9 @@ fn build_stream_plan(request: StreamRequest) -> Result<RunPlan, String> {
         source,
         params,
     } = request;
-    let allow_time_cache = !source.is_watch_mode(&params.step);
-    let flush_each_record = source.uses_stdin() || source.is_watch_mode(&params.step);
+    let watch_mode = source.is_watch_mode(params.step.is_some());
+    let allow_time_cache = !watch_mode;
+    let flush_each_record = source.uses_stdin() || watch_mode;
     let data_iter = match source {
         DataSource::Separate(loc_source, time_source) => data::expand_cartesian_product(
             loc_source,

@@ -320,15 +320,14 @@ fn validate_command_options(
     disallowed: &[(bool, &'static str)],
     command_name: &'static str,
 ) -> Result<(), CliError> {
-    fn first_used(options: &[(bool, &'static str)]) -> Option<&'static str> {
-        options
-            .iter()
-            .find_map(|(used, name)| used.then_some(*name))
+    if let Some(name) = disallowed
+        .iter()
+        .find_map(|(used, name)| used.then_some(*name))
+    {
+        Err(format!("Option {} not valid for {} command", name, command_name).into())
+    } else {
+        Ok(())
     }
-
-    first_used(disallowed)
-        .map(|name| Err(format!("Option {} not valid for {} command", name, command_name).into()))
-        .unwrap_or(Ok(()))
 }
 
 fn should_auto_show_inputs(source: &DataSource) -> bool {
