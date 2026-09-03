@@ -1,4 +1,4 @@
-//! Error types for CLI parsing, planning, and output handling.
+//! Error types for CLI parsing, validation, and output handling.
 
 use std::fmt;
 use std::io;
@@ -25,12 +25,6 @@ impl From<String> for CliError {
 
 impl From<&str> for CliError {
     fn from(value: &str) -> Self {
-        Self::Message(value.to_string())
-    }
-}
-
-impl From<std::io::Error> for CliError {
-    fn from(value: std::io::Error) -> Self {
         Self::Message(value.to_string())
     }
 }

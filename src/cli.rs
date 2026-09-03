@@ -263,16 +263,13 @@ fn required_value<'a>(flag: &'static str, value: Option<&'a str>) -> CliResult<&
     value.ok_or_else(|| CliError::from(format!("Option --{} requires a value", flag)))
 }
 
-fn parse_file_arg(arg: &str) -> CliResult<InputPath> {
-    let Some(stripped) = arg.strip_prefix('@') else {
-        return Err("Not a file argument".into());
-    };
-
+fn parse_file_arg(arg: &str) -> InputPath {
+    let stripped = &arg[1..];
     if stripped == "-" {
-        return Ok(InputPath::Stdin);
+        InputPath::Stdin
+    } else {
+        InputPath::File(PathBuf::from(stripped))
     }
-
-    Ok(InputPath::File(PathBuf::from(stripped)))
 }
 
 fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource> {
@@ -352,7 +349,7 @@ fn parse_data_source(args: &[String]) -> CliResult<ParsedInput> {
     match args.len() {
         1 => {
             if args[0].starts_with('@') {
-                parse_file_arg(&args[0]).map(ParsedInput::Paired)
+                Ok(ParsedInput::Paired(parse_file_arg(&args[0])))
             } else {
                 Err("Single argument must be a file (@file or @-)".into())
             }
@@ -362,9 +359,9 @@ fn parse_data_source(args: &[String]) -> CliResult<ParsedInput> {
                 Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into())
             } else {
                 Ok(ParsedInput::Separate(
-                    LocationSource::File(parse_file_arg(&args[0])?),
+                    LocationSource::File(parse_file_arg(&args[0])),
                     if args[1].starts_with('@') {
-                        ParsedTimeSource::File(parse_file_arg(&args[1])?)
+                        ParsedTimeSource::File(parse_file_arg(&args[1]))
                     } else {
                         parse_time_arg(&args[1])?
                     },
@@ -381,7 +378,7 @@ fn parse_data_source(args: &[String]) -> CliResult<ParsedInput> {
 
 fn parse_time_arg(time_str: &str) -> CliResult<ParsedTimeSource> {
     if time_str.starts_with('@') {
-        return Ok(ParsedTimeSource::File(parse_file_arg(time_str)?));
+        return Ok(ParsedTimeSource::File(parse_file_arg(time_str)));
     }
 
     if time_str == "now" {

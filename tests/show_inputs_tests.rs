@@ -1,13 +1,8 @@
 mod common;
 use common::{fields, parse_csv_output, parse_json_output, sunce_command, write_text_file};
 
-fn csv_headers(args: &[&str], stdin: Option<&str>) -> Vec<String> {
-    let mut cmd = sunce_command();
-    cmd.args(args);
-    if let Some(stdin) = stdin {
-        cmd.write_stdin(stdin);
-    }
-    let output = cmd.output().unwrap();
+fn csv_headers(args: &[&str]) -> Vec<String> {
+    let output = sunce_command().args(args).output().unwrap();
     assert!(output.status.success());
     parse_csv_output(&String::from_utf8(output.stdout).unwrap()).0
 }
@@ -51,16 +46,13 @@ fn test_position_auto_show_inputs_rules() {
     let full = position_show_inputs_headers();
 
     assert_eq!(
-        csv_headers(
-            &[
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-06-21T12:00:00",
-                "position"
-            ],
-            None,
-        ),
+        csv_headers(&[
+            "--format=CSV",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00",
+            "position",
+        ]),
         minimal
     );
 
@@ -75,7 +67,7 @@ fn test_position_auto_show_inputs_rules() {
         vec!["--format=CSV", "52.0", "13.4", "2024-06", "position"],
         vec!["--format=CSV", "52.0", "13.4", "2024-06-21", "position"],
     ] {
-        assert_eq!(csv_headers(&args, None), full);
+        assert_eq!(csv_headers(&args), full);
     }
 }
 
@@ -87,62 +79,46 @@ fn test_position_input_sources_auto_enable_show_inputs() {
     write_text_file(&coords, "52.0,13.4\n");
     write_text_file(&paired, "52.0,13.4,2024-06-21T12:00:00\n");
 
-    for (args, stdin) in [
-        (
-            vec![
-                "--format=CSV",
-                &format!("@{}", coords.display()),
-                "2024-06-21T12:00:00",
-                "position",
-            ],
-            None,
-        ),
-        (
-            vec![
-                "--format=CSV",
-                &format!("@{}", paired.display()),
-                "position",
-            ],
-            None,
-        ),
-        (
-            vec!["--format=CSV", "@-", "2024-06-21T12:00:00", "position"],
-            Some("52.0,13.4\n"),
-        ),
+    for args in [
+        vec![
+            "--format=CSV",
+            &format!("@{}", coords.display()),
+            "2024-06-21T12:00:00",
+            "position",
+        ],
+        vec![
+            "--format=CSV",
+            &format!("@{}", paired.display()),
+            "position",
+        ],
     ] {
-        assert_eq!(csv_headers(&args, stdin), position_show_inputs_headers());
+        assert_eq!(csv_headers(&args), position_show_inputs_headers());
     }
 }
 
 #[test]
 fn test_position_show_inputs_overrides() {
     assert_eq!(
-        csv_headers(
-            &[
-                "--format=CSV",
-                "--no-show-inputs",
-                "52:53:1",
-                "13.4",
-                "2024-06-21T12:00:00",
-                "position",
-            ],
-            None,
-        ),
+        csv_headers(&[
+            "--format=CSV",
+            "--no-show-inputs",
+            "52:53:1",
+            "13.4",
+            "2024-06-21T12:00:00",
+            "position",
+        ]),
         fields(&["dateTime", "azimuth", "zenith"])
     );
 
     assert_eq!(
-        csv_headers(
-            &[
-                "--format=CSV",
-                "--show-inputs",
-                "52.0",
-                "13.4",
-                "2024-06-21T12:00:00",
-                "position",
-            ],
-            None,
-        ),
+        csv_headers(&[
+            "--format=CSV",
+            "--show-inputs",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00",
+            "position",
+        ]),
         position_show_inputs_headers()
     );
 }
@@ -150,18 +126,15 @@ fn test_position_show_inputs_overrides() {
 #[test]
 fn test_refraction_fields_are_omitted_when_disabled() {
     assert_eq!(
-        csv_headers(
-            &[
-                "--format=CSV",
-                "--show-inputs",
-                "--no-refraction",
-                "52.0",
-                "13.4",
-                "2024-06-21T12:00:00",
-                "position",
-            ],
-            None,
-        ),
+        csv_headers(&[
+            "--format=CSV",
+            "--show-inputs",
+            "--no-refraction",
+            "52.0",
+            "13.4",
+            "2024-06-21T12:00:00",
+            "position",
+        ]),
         fields(&[
             "latitude",
             "longitude",
@@ -200,6 +173,7 @@ fn test_position_json_single_values_do_not_auto_show_inputs() {
     assert!(json.get("zenith").is_some());
     assert!(json.get("latitude").is_none());
     assert!(json.get("longitude").is_none());
+    assert!(json.get("deltaT").is_none());
 }
 
 #[test]
@@ -218,7 +192,7 @@ fn test_sunrise_show_inputs_rules() {
             "--twilight",
         ],
     ] {
-        let headers = csv_headers(&args, None);
+        let headers = csv_headers(&args);
         assert_eq!(&headers[..5], minimal.as_slice());
         assert!(!headers.contains(&"latitude".to_string()));
     }
@@ -235,7 +209,7 @@ fn test_sunrise_show_inputs_rules() {
             "--twilight",
         ],
     ] {
-        let headers = csv_headers(&args, None);
+        let headers = csv_headers(&args);
         assert!(headers.contains(&"latitude".to_string()));
         assert!(headers.contains(&"longitude".to_string()));
         assert!(headers.contains(&"dateTime".to_string()));

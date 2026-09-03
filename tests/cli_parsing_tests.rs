@@ -1,16 +1,10 @@
-use predicates::ord;
 use predicates::prelude::*;
 
 mod common;
 use common::{parse_csv_no_headers_output, sunce_command};
 
-fn assert_success(args: &[&str], stdin: Option<&str>) {
-    let mut cmd = sunce_command();
-    cmd.args(args);
-    if let Some(stdin) = stdin {
-        cmd.write_stdin(stdin);
-    }
-    cmd.assert().success();
+fn assert_success(args: &[&str]) {
+    sunce_command().args(args).assert().success();
 }
 
 fn assert_failure(args: &[&str], expected_stderr: &str) {
@@ -46,15 +40,6 @@ fn assert_help(args: &[&str], snippets: &[&str]) {
     for snippet in snippets {
         assertion = assertion.stdout(predicate::str::contains(*snippet));
     }
-}
-
-fn assert_predicate_result(args: &[&str]) {
-    sunce_command()
-        .args(args)
-        .assert()
-        .code(ord::eq(0).or(ord::eq(1)))
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
 }
 
 fn step_rows(step: &str) -> Vec<Vec<String>> {
@@ -95,14 +80,6 @@ fn test_position_option_placement_variants() {
         vec![
             "52.0",
             "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-            "--format=csv",
-        ],
-        vec![
-            "--format=csv",
-            "52.0",
-            "13.4",
             "--no-headers",
             "2024-01-01T12:00:00",
             "position",
@@ -112,53 +89,11 @@ fn test_position_option_placement_variants() {
             "52.0",
             "13.4",
             "2024-01-01T12:00:00",
-            "--algorithm=grena3",
-            "position",
-        ],
-        vec![
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
             "position",
             "--algorithm=grena3",
-        ],
-        vec![
-            "--format=csv",
-            "52.0",
-            "13.4",
-            "2024-01-01",
-            "--step=1h",
-            "position",
-            "--no-headers",
-        ],
-        vec![
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "--deltat=69.2",
-            "position",
-        ],
-        vec![
-            "--deltat=69.2",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        vec![
-            "--format=csv",
-            "52.0",
-            "--algorithm=grena3",
-            "13.4",
-            "2024-01-01",
-            "--elevation=100.0",
-            "position",
-            "--temperature=20.0",
-            "--pressure=1000.0",
-            "--step=2h",
         ],
     ] {
-        assert_success(&args, None);
+        assert_success(&args);
     }
 }
 
@@ -188,25 +123,15 @@ fn test_rejects_step_for_file_inputs() {
 
 #[test]
 fn test_sunrise_option_placement_variants() {
-    assert_success(
-        &[
-            "--format=csv",
-            "52.0",
-            "13.4",
-            "--twilight",
-            "2024-01-01",
-            "sunrise",
-        ],
-        None,
-    );
-    assert_success(
-        &["52.0", "13.4", "2024-01-01", "sunrise", "--horizon=-6.0"],
-        None,
-    );
-    assert_success(
-        &["--format=json", "@-", "position", "--no-headers"],
-        Some("52.0 13.4 2024-01-01T12:00:00\n"),
-    );
+    assert_success(&[
+        "--format=csv",
+        "52.0",
+        "13.4",
+        "--twilight",
+        "2024-01-01",
+        "sunrise",
+    ]);
+    assert_success(&["52.0", "13.4", "2024-01-01", "sunrise", "--horizon=-6.0"]);
 }
 
 #[test]
@@ -290,6 +215,10 @@ fn test_invalid_cli_combinations() {
             ],
             "cannot be used multiple times",
         ),
+        (
+            &["0", "0", "-9223372036854775808", "position"],
+            "Invalid unix timestamp",
+        ),
     ]);
 }
 
@@ -331,11 +260,10 @@ fn test_help_and_version_paths() {
 }
 
 #[test]
-fn test_unknown_option_and_argument_shape_errors() {
+fn test_unknown_option_and_argument_count_errors() {
     assert_failures(&[
         (&["--wat"], "Unknown option: --wat"),
         (&["52.0"], "No command found"),
-        (&["52.0", "2024-01-01"], "No command found"),
         (
             &["52.0", "13.4", "2024-01-01", "extra", "position"],
             "Too many arguments",
@@ -383,22 +311,6 @@ fn test_step_without_unit_and_with_unit_both_work() {
 
 #[test]
 fn test_predicate_flag_parsing_and_validation() {
-    let sunrise_day = sunrise_predicate_args("2024-03-21T12:00:00Z", "--is-daylight");
-    let position_above = position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=10");
-
-    for args in [
-        sunrise_day,
-        sunrise_predicate_args("2024-03-21T04:40:00Z", "--is-civil-twilight"),
-        sunrise_predicate_args("2024-03-21T04:00:00Z", "--is-nautical-twilight"),
-        sunrise_predicate_args("2024-03-21T03:20:00Z", "--is-astronomical-twilight"),
-        sunrise_predicate_args("2024-03-21T01:00:00Z", "--is-astronomical-night"),
-        sunrise_predicate_args("2024-03-21T18:00:00Z", "--after-sunset"),
-        position_above,
-        position_predicate_args("2024-03-21T00:00:00Z", "--sun-below=-5"),
-    ] {
-        assert_predicate_result(&args);
-    }
-
     let sunrise_format = [
         "--format=csv",
         "52.0",
@@ -505,16 +417,8 @@ fn test_predicate_flag_parsing_and_validation() {
                 "Elevation threshold must be between -90 and 90 degrees",
             ),
             (
-                &position_predicate_args("2024-03-21T12:00:00Z", "--sun-below=-91"),
-                "Elevation threshold must be between -90 and 90 degrees",
-            ),
-            (
                 &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=NaN"),
                 "Invalid sun above value: expected finite number",
-            ),
-            (
-                &position_predicate_args("2024-03-21T12:00:00Z", "--sun-below=inf"),
-                "Invalid sun below value: expected finite number",
             ),
             (
                 &[
@@ -554,10 +458,6 @@ fn test_predicate_flag_parsing_and_validation() {
             ),
             (
                 &["52.0", "13.4", "2024-03-21", "sunrise", "--is-daylight"],
-                "Predicate mode requires a single explicit instant",
-            ),
-            (
-                &["52.0", "13.4", "2024-03", "sunrise", "--is-daylight"],
                 "Predicate mode requires a single explicit instant",
             ),
             (

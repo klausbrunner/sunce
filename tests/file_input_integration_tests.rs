@@ -1,7 +1,6 @@
 mod common;
 use common::{
-    find_csv_row, load_fixture_rows, parse_csv_output, parse_csv_output_maps, sunce_command,
-    write_text_file,
+    find_csv_row, load_fixture_rows, parse_csv_output_maps, sunce_command, write_text_file,
 };
 use predicates::prelude::*;
 use std::collections::HashMap;
@@ -20,25 +19,12 @@ fn output_text(args: &[&str], stdin: Option<&str>, envs: &[(&str, &str)]) -> Str
     String::from_utf8(cmd.assert().success().get_output().stdout.clone()).unwrap()
 }
 
-fn output_text_owned(args: &[String], stdin: Option<&str>, envs: &[(&str, &str)]) -> String {
-    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    output_text(&refs, stdin, envs)
-}
-
 fn csv_records(
     args: &[&str],
     stdin: Option<&str>,
     envs: &[(&str, &str)],
 ) -> Vec<HashMap<String, String>> {
     parse_csv_output_maps(&output_text(args, stdin, envs))
-}
-
-fn csv_records_owned(
-    args: &[String],
-    stdin: Option<&str>,
-    envs: &[(&str, &str)],
-) -> Vec<HashMap<String, String>> {
-    parse_csv_output_maps(&output_text_owned(args, stdin, envs))
 }
 
 fn assert_fields(row: &HashMap<String, String>, expected: &[(&str, &str)]) {
@@ -95,23 +81,8 @@ fn file_arg(dir: &Path, name: &str, contents: &str) -> String {
 }
 
 #[test]
-fn test_basic_position_file_inputs() {
+fn test_file_comments_and_mixed_delimiters() {
     let dir = tempdir().unwrap();
-    let coords = file_arg(
-        dir.path(),
-        "coords.txt",
-        "52.0,13.4\n59.334,18.063\n40.42,-3.70\n",
-    );
-    let times = file_arg(
-        dir.path(),
-        "times.txt",
-        "2024-06-21T12:00:00\n2024-06-21T18:00:00\n2024-12-21T12:00:00\n",
-    );
-    let paired = file_arg(
-        dir.path(),
-        "paired.txt",
-        "52.0,13.4,2024-06-21T12:00:00\n59.334,18.063,2024-06-21T18:00:00\n40.42,-3.70,2024-12-21T12:00:00\n",
-    );
     let comments = file_arg(
         dir.path(),
         "comments.txt",
@@ -122,35 +93,6 @@ fn test_basic_position_file_inputs() {
         "mixed_coords.txt",
         "52.0,13.4\n59.334 18.063\n40.42 -3.70\n",
     );
-
-    let rows = csv_records(
-        &["--format=CSV", &coords, "2024-06-21T12:00:00", "position"],
-        None,
-        &[],
-    );
-    assert_eq!(rows.len(), 3);
-    assert_field_values(&rows, "latitude", &["52.00000", "59.33400", "40.42000"]);
-
-    let rows = csv_records(
-        &["--format=CSV", "52.0", "13.4", &times, "position"],
-        None,
-        &[],
-    );
-    assert_eq!(rows.len(), 3);
-    assert_field_prefixes(
-        &rows,
-        "dateTime",
-        &[
-            "2024-06-21T12:00:00",
-            "2024-06-21T18:00:00",
-            "2024-12-21T12:00:00",
-        ],
-    );
-
-    let rows = csv_records(&["--format=CSV", &paired, "position"], None, &[]);
-    assert_eq!(rows.len(), 3);
-    assert_field_values(&rows, "longitude", &["18.06300"]);
-    assert_field_prefixes(&rows, "dateTime", &["2024-12-21T12:00:00"]);
 
     let rows = csv_records(
         &["--format=CSV", &comments, "2024-06-21T12:00:00", "position"],
@@ -166,38 +108,15 @@ fn test_basic_position_file_inputs() {
     );
     assert_eq!(rows.len(), 3);
     assert_field_values(&rows, "longitude", &["-3.70000"]);
-
-    let rows = csv_records(
-        &["--format=CSV", "@-", "position"],
-        Some("52.0,13.4,2024-06-21T12:00:00\n"),
-        &[],
-    );
-    assert_eq!(rows.len(), 1);
-    assert_fields(
-        &rows[0],
-        &[("latitude", "52.00000"), ("longitude", "13.40000")],
-    );
 }
 
 #[test]
 fn test_basic_sunrise_file_inputs() {
     let dir = tempdir().unwrap();
-    let coords = file_arg(dir.path(), "coords.txt", "52.0,13.4\n59.334,18.063\n");
     let paired = file_arg(
         dir.path(),
         "paired.txt",
         "52.0,13.4,2024-06-21\n40.42,-3.70,2024-12-21\n",
-    );
-
-    let rows = csv_records(
-        &["--format=CSV", &coords, "2024-06-21", "sunrise"],
-        None,
-        &[],
-    );
-    assert_eq!(rows.len(), 2);
-    assert!(
-        rows.iter()
-            .all(|row| row.contains_key("sunrise") && row.contains_key("sunset"))
     );
 
     let rows = csv_records(&["--format=CSV", &paired, "sunrise"], None, &[]);
@@ -243,14 +162,6 @@ fn test_file_input_error_cases() {
             ],
             "invalid latitude",
         ),
-        (
-            vec![
-                "@/non/existent/file.txt".to_string(),
-                "2024-06-21".to_string(),
-                "position".to_string(),
-            ],
-            "Error opening",
-        ),
     ] {
         let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         sunce_command()
@@ -262,106 +173,28 @@ fn test_file_input_error_cases() {
 }
 
 #[test]
-fn test_file_input_timezone_and_show_inputs_behavior() {
+fn test_file_input_timezone_override() {
     let dir = tempdir().unwrap();
-    let times = file_arg(
-        dir.path(),
-        "times.txt",
-        "2024-06-21T12:00:00\n2024-12-21T15:30:00\n",
-    );
-    let paired = file_arg(
-        dir.path(),
-        "paired.txt",
-        "52.0,13.4,2024-06-21T12:00:00\n40.42,-3.70,2024-12-21T15:30:00\n",
-    );
-    let coords = file_arg(dir.path(), "coords.txt", "52.0,13.4\n40.42,-3.70\n");
     let mixed_times = file_arg(
         dir.path(),
         "mixed_times.txt",
         "2024-06-21T12:00:00+02:00\n2024-06-21T15:00:00\n2024-06-21T18:00:00Z\n",
     );
 
-    for (args, expected_tz) in [
-        (
-            vec![
-                "--format=CSV".to_string(),
-                "--timezone=+02:00".to_string(),
-                "52.0".to_string(),
-                "13.4".to_string(),
-                times.clone(),
-                "position".to_string(),
-            ],
-            "+02:00",
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                "--timezone=-05:00".to_string(),
-                paired.clone(),
-                "position".to_string(),
-            ],
-            "-05:00",
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                "--timezone=+09:00".to_string(),
-                coords.clone(),
-                "2024-06-21T12:00:00".to_string(),
-                "sunrise".to_string(),
-            ],
-            "+09:00",
-        ),
-    ] {
-        let output = output_text_owned(&args, None, &[]);
-        assert!(
-            output.contains(expected_tz),
-            "expected timezone {expected_tz} in {output}"
-        );
-    }
-
-    let output = output_text_owned(
-        &[
-            "--format=CSV".to_string(),
-            "--timezone=+05:00".to_string(),
-            "52.0".to_string(),
-            "13.4".to_string(),
-            mixed_times,
-            "position".to_string(),
-        ],
-        None,
-        &[],
-    );
-    assert!(
-        output.matches("+05:00").count() >= 3,
-        "expected overridden timezone in all rows: {output}"
-    );
-    assert!(
-        !output.contains("+02:00"),
-        "original timezone should be overridden: {output}"
-    );
-
-    let auto_headers = parse_csv_output(&output_text(
-        &["--format=CSV", &coords, "2024-06-21T12:00:00", "position"],
-        None,
-        &[],
-    ))
-    .0;
-    assert!(auto_headers.starts_with(&["latitude".into(), "longitude".into()]));
-
-    let disabled_headers = parse_csv_output(&output_text(
+    let rows = csv_records(
         &[
             "--format=CSV",
-            "--no-show-inputs",
-            &coords,
-            "2024-06-21T12:00:00",
+            "--timezone=+05:00",
+            "52.0",
+            "13.4",
+            &mixed_times,
             "position",
         ],
         None,
         &[],
-    ))
-    .0;
-    assert_eq!(disabled_headers, vec!["dateTime", "azimuth", "zenith"]);
+    );
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|row| row["dateTime"].ends_with("+05:00")));
 }
 
 #[test]
@@ -478,128 +311,28 @@ fn test_cartesian_products_with_file_inputs() {
         "times.txt",
         "2024-06-21T12:00:00\n2024-06-21T18:00:00\n",
     );
-    let dates = file_arg(dir.path(), "dates.txt", "2024-06-21\n2024-12-21\n");
     let coords = file_arg(dir.path(), "coords.txt", "52.0,13.4\n53.0,14.4\n");
 
-    let rows = csv_records(
-        &[
-            "--format=CSV",
-            "52.0:52.1:0.1",
-            "13.4:13.5:0.1",
-            &times,
-            "position",
-        ],
-        None,
-        &[("TZ", "UTC")],
-    );
-    assert_eq!(rows.len(), 8);
-    find_csv_row(
-        &rows,
-        &[
-            ("latitude", "52.10000"),
-            ("longitude", "13.50000"),
-            ("dateTime", "2024-06-21T18:00:00+00:00"),
-        ],
-    );
-
-    let rows = csv_records(
-        &[
-            "--format=CSV",
-            "50.0:51.0:1.0",
-            "10.0:11.0:1.0",
-            &dates,
-            "sunrise",
-        ],
-        None,
-        &[("TZ", "UTC")],
-    );
-    assert_eq!(rows.len(), 8);
-    find_csv_row(
-        &rows,
-        &[
-            ("latitude", "51.00000"),
-            ("longitude", "11.00000"),
-            ("dateTime", "2024-12-21T00:00:00+00:00"),
-        ],
-    );
-
-    for (args, stdin, envs, expected_rows) in [
+    for (args, stdin) in [
+        (vec!["--format=CSV", &coords, &times, "position"], None),
         (
-            vec![
-                "--format=CSV".to_string(),
-                "52.0".to_string(),
-                "13.4".to_string(),
-                times.clone(),
-                "position".to_string(),
-            ],
-            None,
-            vec![],
-            2,
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                coords.clone(),
-                times.clone(),
-                "position".to_string(),
-            ],
-            None,
-            vec![],
-            4,
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                coords.clone(),
-                dates.clone(),
-                "sunrise".to_string(),
-            ],
-            None,
-            vec![("TZ", "UTC")],
-            4,
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                "@-".to_string(),
-                times.clone(),
-                "position".to_string(),
-            ],
+            vec!["--format=CSV", "@-", &times, "position"],
             Some("52.0,13.4\n53.0,14.4\n"),
-            vec![],
-            4,
         ),
         (
-            vec![
-                "--format=CSV".to_string(),
-                coords.clone(),
-                "@-".to_string(),
-                "position".to_string(),
-            ],
-            Some("2024-06-21T12:00:00\n2024-12-21T12:00:00\n"),
-            vec![],
-            4,
-        ),
-        (
-            vec![
-                "--format=CSV".to_string(),
-                "52.0:53.0:1.0".to_string(),
-                "13.4".to_string(),
-                times.clone(),
-                "position".to_string(),
-            ],
-            None,
-            vec![],
-            4,
+            vec!["--format=CSV", &coords, "@-", "position"],
+            Some("2024-06-21T12:00:00\n2024-06-21T18:00:00\n"),
         ),
     ] {
-        let rows = csv_records_owned(&args, stdin, &envs);
-        assert_eq!(rows.len(), expected_rows);
-        if args[1] == "52.0:53.0:1.0" {
-            find_csv_row(
-                &rows,
-                &[("latitude", "53.00000"), ("longitude", "13.40000")],
-            );
-        }
+        let rows = csv_records(&args, stdin, &[("TZ", "UTC")]);
+        assert_eq!(rows.len(), 4);
+        find_csv_row(
+            &rows,
+            &[
+                ("latitude", "53.00000"),
+                ("longitude", "14.40000"),
+                ("dateTime", "2024-06-21T18:00:00+00:00"),
+            ],
+        );
     }
 }

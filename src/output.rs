@@ -8,6 +8,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::Serializer;
 use serde::ser::SerializeMap;
 use solar_positioning::SunriseResult;
+use std::fmt::Write as _;
 
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
 const DATETIME_CACHE_CAPACITY: usize = 2048;
@@ -72,10 +73,17 @@ fn format_f64_fixed_into(out: &mut String, value: f64, decimals: u32) {
         _ => (10_f64.powi(decimals as i32), 10_i64.pow(decimals)),
     };
 
-    let scaled = (value * factor).round() as i64;
-    let abs = scaled.abs();
-    let int_part = (abs / denom) as u64;
-    let frac_part = (abs % denom) as u64;
+    let scaled = value * factor;
+    if scaled.abs() >= i64::MAX as f64 {
+        write!(out, "{value:.decimals$}", decimals = decimals as usize)
+            .expect("writing to a string cannot fail");
+        return;
+    }
+
+    let scaled = scaled.round() as i64;
+    let abs = scaled.unsigned_abs();
+    let int_part = abs / denom as u64;
+    let frac_part = abs % denom as u64;
 
     if decimals == 0 {
         if scaled < 0 {
@@ -215,7 +223,6 @@ impl SunriseKind {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct PositionRow {
     pub lat: f64,
     pub lon: f64,
@@ -387,7 +394,6 @@ fn write_position_json_string<W: std::io::Write + ?Sized>(
     writer.write_all(b"\"").map_err(|e| e.to_string())
 }
 
-#[derive(Clone)]
 pub(crate) struct SunriseRow {
     pub lat: f64,
     pub lon: f64,
@@ -528,14 +534,6 @@ impl SunriseRow {
     }
 }
 
-pub(crate) fn position_angle_label(elevation_angle: bool) -> &'static str {
-    if elevation_angle {
-        "elevation-angle"
-    } else {
-        "zenith"
-    }
-}
-
 #[derive(Copy, Clone)]
 pub(crate) struct PositionLayout {
     pub show_inputs: bool,
@@ -557,7 +555,11 @@ impl PositionLayout {
     }
 
     pub(crate) fn angle_label(self) -> &'static str {
-        position_angle_label(self.elevation_angle)
+        if self.elevation_angle {
+            "elevation-angle"
+        } else {
+            "zenith"
+        }
     }
 
     pub(crate) fn csv_headers(self) -> Vec<&'static str> {
@@ -630,7 +632,7 @@ impl SunriseLayout {
 trait OutputRowExt: Sized {
     type Layout: Copy;
 
-    fn normalize(result: &CalculationResult) -> Option<Self>;
+    fn normalize(result: &CalculationResult) -> Self;
     fn headers(layout: Self::Layout) -> Vec<&'static str>;
     fn csv_values(
         &self,
@@ -647,13 +649,12 @@ trait OutputRowExt: Sized {
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String>;
-    fn unexpected_output_error() -> OutputError;
 }
 
 impl OutputRowExt for PositionRow {
     type Layout = PositionLayout;
 
-    fn normalize(result: &CalculationResult) -> Option<Self> {
+    fn normalize(result: &CalculationResult) -> Self {
         normalize_position_result(result)
     }
 
@@ -681,16 +682,12 @@ impl OutputRowExt for PositionRow {
     ) -> Result<(), String> {
         self.write_json_line(params, layout, writer, datetime_cache)
     }
-
-    fn unexpected_output_error() -> OutputError {
-        OutputError::from("Unexpected calculation result for position output")
-    }
 }
 
 impl OutputRowExt for SunriseRow {
     type Layout = SunriseLayout;
 
-    fn normalize(result: &CalculationResult) -> Option<Self> {
+    fn normalize(result: &CalculationResult) -> Self {
         normalize_sunrise_result(result)
     }
 
@@ -718,13 +715,9 @@ impl OutputRowExt for SunriseRow {
     ) -> Result<(), String> {
         self.write_json_line(params, layout, writer, datetime_cache)
     }
-
-    fn unexpected_output_error() -> OutputError {
-        OutputError::from("Unexpected calculation result for sunrise output")
-    }
 }
 
-pub(crate) fn normalize_position_result(result: &CalculationResult) -> Option<PositionRow> {
+pub(crate) fn normalize_position_result(result: &CalculationResult) -> PositionRow {
     if let CalculationResult::Position {
         lat,
         lon,
@@ -733,20 +726,20 @@ pub(crate) fn normalize_position_result(result: &CalculationResult) -> Option<Po
         deltat,
     } = result
     {
-        Some(PositionRow {
+        PositionRow {
             lat: *lat,
             lon: *lon,
             datetime: *datetime,
             deltat: *deltat,
             azimuth: position.azimuth(),
             zenith: position.zenith_angle(),
-        })
+        }
     } else {
-        None
+        unreachable!("position command produced a sunrise result")
     }
 }
 
-pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<SunriseRow> {
+pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> SunriseRow {
     match result {
         CalculationResult::Sunrise {
             lat,
@@ -756,7 +749,7 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
             deltat,
         } => {
             let (sunrise, transit, sunset) = extract_sunrise_times(result);
-            Some(SunriseRow {
+            SunriseRow {
                 lat: *lat,
                 lon: *lon,
                 date_time: *date,
@@ -771,7 +764,7 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
                 nautical_end: None,
                 astro_start: None,
                 astro_end: None,
-            })
+            }
         }
         CalculationResult::SunriseWithTwilight {
             lat,
@@ -788,7 +781,7 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
             let (nautical_start, _, nautical_end) = extract_sunrise_times(nautical);
             let (astro_start, _, astro_end) = extract_sunrise_times(astronomical);
 
-            Some(SunriseRow {
+            SunriseRow {
                 lat: *lat,
                 lon: *lon,
                 date_time: *date,
@@ -803,20 +796,10 @@ pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> Option<Sun
                 nautical_end: nautical_end.copied(),
                 astro_start: astro_start.copied(),
                 astro_end: astro_end.copied(),
-            })
+            }
         }
-        _ => None,
+        _ => unreachable!("sunrise command produced a position result"),
     }
-}
-
-#[cfg(feature = "parquet")]
-pub fn write_parquet_output<W: std::io::Write + Send>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    command: Command,
-    params: &Parameters,
-    writer: W,
-) -> std::io::Result<usize> {
-    crate::parquet::write_parquet(results, command, params, writer)
 }
 
 fn write_csv_line<W: std::io::Write, I, S>(writer: &mut W, fields: I) -> Result<(), String>
@@ -917,8 +900,8 @@ pub fn dispatch_output(
         #[cfg(feature = "parquet")]
         OutputFormat::Parquet => {
             let stdout = std::io::stdout();
-            return write_parquet_output(results, command, params, stdout)
-                .map_err(|e| OutputError::from(e.to_string()));
+            return crate::parquet::write_parquet(results, command, params, stdout)
+                .map_err(OutputError::from);
         }
         _ => {}
     }
@@ -959,7 +942,7 @@ fn dispatch_buffered_output<W: std::io::Write>(
 fn row_from_result<R: OutputRowExt>(
     result: Result<CalculationResult, String>,
 ) -> Result<R, OutputError> {
-    R::normalize(&result.map_err(OutputError::from)?).ok_or_else(R::unexpected_output_error)
+    Ok(R::normalize(&result.map_err(OutputError::from)?))
 }
 
 fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
@@ -1191,6 +1174,11 @@ mod tests {
             set_cached_f64_fixed(&mut fields, 0, &mut decimal_cache, value as f64, 3);
         }
         assert!(decimal_cache.len() <= FIXED_DECIMAL_CACHE_CAPACITY);
+    }
+
+    #[test]
+    fn fixed_formatter_handles_large_finite_values() {
+        assert_eq!(format_f64_fixed(-1e20, 3), "-100000000000000000000.000");
     }
 
     fn split_csv_line(buf: Vec<u8>) -> Vec<String> {

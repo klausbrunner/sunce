@@ -22,10 +22,6 @@ include = [
     "LICENSE"
 ]
 
-[[bin]]
-name = "sunce"
-path = "src/main.rs"
-
 [dependencies]
 chrono = "0.4"
 chrono-tz = "0.10"
@@ -61,18 +57,12 @@ opt-level = "s"
 strip = true
 
 # Keep performance-critical crates optimized for speed
-[profile.release.package.sunce]
-opt-level = 3
 [profile.release.package.solar-positioning]
 opt-level = 3
 [profile.release.package.chrono]
 opt-level = 3
 [profile.release.package.chrono-tz]
 opt-level = 3
-
-[profile.dev]
-opt-level = 0
-debug = true
 
 # The profile that 'dist' will build with
 [profile.dist]

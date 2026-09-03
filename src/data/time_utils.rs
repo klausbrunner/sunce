@@ -32,7 +32,7 @@ fn parse_datetime_input(dt_str: &str) -> Result<ParsedDateTime, String> {
     }
 
     if let Ok(timestamp) = dt_str.parse::<i64>()
-        && timestamp.abs() >= 10000
+        && timestamp.unsigned_abs() >= 10000
     {
         return Ok(ParsedDateTime::UnixTimestamp(timestamp));
     }
@@ -118,15 +118,7 @@ impl TimezoneInfo {
 
     pub fn to_datetime_from_local(&self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
         match self {
-            TimezoneInfo::Fixed(offset) => match offset.from_local_datetime(dt) {
-                chrono::LocalResult::Single(dt) => Some(dt),
-                chrono::LocalResult::Ambiguous(dt1, _dt2) => Some(dt1),
-                chrono::LocalResult::None => {
-                    let seconds = offset.local_minus_utc() as i64;
-                    let utc_naive = *dt - Duration::seconds(seconds);
-                    Some(offset.from_utc_datetime(&utc_naive))
-                }
-            },
+            TimezoneInfo::Fixed(offset) => offset.from_local_datetime(dt).single(),
             TimezoneInfo::Named(tz) => match tz.from_local_datetime(dt) {
                 chrono::LocalResult::None => None,
                 chrono::LocalResult::Single(dt) => Some(dt.fixed_offset()),
@@ -219,10 +211,8 @@ pub fn is_partial_date(s: &str) -> bool {
 }
 
 pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
-    if spec.is_empty() {
-        return None;
-    }
-    parse_tz_offset(spec)
+    spec.parse::<FixedOffset>()
+        .ok()
         .map(TimezoneInfo::Fixed)
         .or_else(|| spec.parse::<Tz>().ok().map(TimezoneInfo::Named))
 }
@@ -237,22 +227,6 @@ pub fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
     parse_timezone_override(override_tz)
         .or_else(|| parse_timezone_env(env::var("TZ").ok()))
         .unwrap_or_else(|| SYSTEM_TIMEZONE.get_or_init(detect_system_timezone).clone())
-}
-
-pub fn parse_tz_offset(tz: &str) -> Option<FixedOffset> {
-    let (sign, rest) = match tz.as_bytes().first()? {
-        b'+' => (1, &tz[1..]),
-        b'-' => (-1, &tz[1..]),
-        _ => return None,
-    };
-
-    let (hours, minutes) = if let Some((h, m)) = rest.split_once(':') {
-        (h.parse::<i32>().ok()?, m.parse::<i32>().ok()?)
-    } else {
-        (rest.parse::<i32>().ok()?, 0)
-    };
-
-    FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))
 }
 
 fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {

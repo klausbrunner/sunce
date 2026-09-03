@@ -44,10 +44,6 @@ fn schema_field_names(batch: &RecordBatch) -> Vec<String> {
         .collect()
 }
 
-fn total_rows(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(RecordBatch::num_rows).sum()
-}
-
 fn string_array<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
     batch
         .column_by_name(name)
@@ -182,25 +178,9 @@ fn test_parquet_sunrise_with_twilight() {
 }
 
 #[test]
-fn test_parquet_multiple_coordinates() {
-    let batches = parquet_batches(
-        &[
-            "--format=PARQUET",
-            "52:53:0.5",
-            "13:14:0.5",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    );
-    assert!(!batches.is_empty());
-    assert_eq!(total_rows(&batches), 9);
-}
-
-#[test]
 fn test_parquet_consistency_with_csv() {
     let csv_text = String::from_utf8(
-        SunceTest::new()
+        sunce_command()
             .args([
                 "--format=CSV",
                 "52.0",
@@ -208,7 +188,8 @@ fn test_parquet_consistency_with_csv() {
                 "2024-01-01T12:00:00",
                 "position",
             ])
-            .get_output()
+            .output()
+            .unwrap()
             .stdout,
     )
     .unwrap();

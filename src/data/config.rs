@@ -284,6 +284,7 @@ mod tests {
         let named = "Europe/Berlin".parse::<TimezoneOverride>().unwrap();
         assert_eq!(named.as_str(), "Europe/Berlin");
         assert!("".parse::<TimezoneOverride>().is_err());
+        assert!("+00:99".parse::<TimezoneOverride>().is_err());
         assert!("Not/AZone".parse::<TimezoneOverride>().is_err());
     }
 

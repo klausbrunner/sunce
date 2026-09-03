@@ -21,7 +21,6 @@ pub enum SolarState {
     Night,
 }
 
-#[derive(Debug, Clone)]
 pub enum CalculationResult {
     Position {
         lat: f64,

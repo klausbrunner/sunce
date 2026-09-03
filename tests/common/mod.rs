@@ -10,11 +10,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Test helper for running sunce commands with less boilerplate
-pub struct SunceTest {
-    cmd: Command,
-}
-
 pub fn sunce_exe_path() -> PathBuf {
     let exe = assert_cmd::cargo::cargo_bin!("sunce");
     if exe.is_absolute() {
@@ -26,67 +21,6 @@ pub fn sunce_exe_path() -> PathBuf {
 
 pub fn sunce_command() -> Command {
     Command::new(sunce_exe_path())
-}
-
-impl SunceTest {
-    /// Create a new sunce command test
-    pub fn new() -> Self {
-        Self {
-            cmd: sunce_command(),
-        }
-    }
-
-    /// Add arguments to the command
-    pub fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
-    {
-        self.cmd.args(args);
-        self
-    }
-
-    /// Add a single argument to the command
-    pub fn arg<S: AsRef<std::ffi::OsStr>>(mut self, arg: S) -> Self {
-        self.cmd.arg(arg);
-        self
-    }
-
-    /// Assert the command succeeds
-    pub fn assert_success(mut self) -> assert_cmd::assert::Assert {
-        self.cmd.assert().success()
-    }
-
-    /// Assert the command fails
-    pub fn assert_failure(mut self) -> assert_cmd::assert::Assert {
-        self.cmd.assert().failure()
-    }
-
-    /// Get command output for inspection
-    pub fn get_output(mut self) -> std::process::Output {
-        self.cmd.output().unwrap()
-    }
-}
-
-/// Quick helper for position calculations
-pub fn position_test() -> SunceTest {
-    SunceTest::new().args(["52.0", "13.4", "2024-01-01T12:00:00", "position"])
-}
-
-/// Quick helper for position calculations with global options (put before positional args)
-pub fn position_test_with_format(format: &str) -> SunceTest {
-    SunceTest::new().args([
-        &format!("--format={}", format),
-        "52.0",
-        "13.4",
-        "2024-01-01T12:00:00",
-        "position",
-    ])
-}
-
-/// Quick helper for custom coordinates
-pub fn custom_position(lat: &str, lon: &str, datetime: &str) -> SunceTest {
-    SunceTest::new().args([lat, lon, datetime, "position"])
 }
 
 /// Parse command stdout as JSON.

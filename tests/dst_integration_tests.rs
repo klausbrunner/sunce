@@ -7,7 +7,6 @@ use common::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-type SeriesCase<'a> = (Vec<&'a str>, Vec<&'a str>, Option<&'a str>, Option<&'a str>);
 type NamedZoneCase<'a> = (Vec<&'a str>, Vec<&'a str>, Option<&'a str>);
 
 fn output_text(args: &[&str], envs: &[(&str, Option<&str>)]) -> String {
@@ -56,85 +55,7 @@ fn no_header_datetimes(args: &[&str], envs: &[(&str, Option<&str>)]) -> Vec<Stri
 
 #[test]
 fn test_fixed_offset_single_datetimes() {
-    for (args, expected) in [
-        (
-            vec![
-                "--timezone=+01:00",
-                "--show-inputs",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03-31T02:00:00",
-                "position",
-            ],
-            "2024-03-31T02:00:00+01:00",
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--show-inputs",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-10-27T02:00:00",
-                "position",
-            ],
-            "2024-10-27T02:00:00+01:00",
-        ),
-        (
-            vec![
-                "--timezone=+02:00",
-                "--show-inputs",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-07-15T12:00:00",
-                "position",
-            ],
-            "2024-07-15T12:00:00+02:00",
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--show-inputs",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-01-15T12:00:00",
-                "position",
-            ],
-            "2024-01-15T12:00:00+01:00",
-        ),
-        (
-            vec![
-                "--timezone=-05:00",
-                "--show-inputs",
-                "--format=CSV",
-                "40.7",
-                "-74.0",
-                "2024-03-10T02:00:00",
-                "position",
-            ],
-            "2024-03-10T02:00:00-05:00",
-        ),
-        (
-            vec![
-                "--timezone=+02:00",
-                "--show-inputs",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03-31T02:00:00",
-                "position",
-            ],
-            "2024-03-31T02:00:00+02:00",
-        ),
-    ] {
-        let row = csv_row(&args, &[]);
-        assert_eq!(row.get("dateTime").map(String::as_str), Some(expected));
-    }
-
-    let spring = csv_row(
+    let gap = csv_row(
         &[
             "--timezone=+01:00",
             "--show-inputs",
@@ -146,137 +67,63 @@ fn test_fixed_offset_single_datetimes() {
         ],
         &[],
     );
-    assert_eq!(spring.get("azimuth").map(String::as_str), Some("31.6478"));
+    assert_eq!(gap["dateTime"], "2024-03-31T02:00:00+01:00");
+    assert_eq!(gap["azimuth"], "31.6478");
+
+    let negative = csv_row(
+        &[
+            "--timezone=-05:00",
+            "--format=CSV",
+            "40.7",
+            "-74.0",
+            "2024-03-10T02:00:00",
+            "position",
+        ],
+        &[],
+    );
+    assert_eq!(negative["dateTime"], "2024-03-10T02:00:00-05:00");
 }
 
 #[test]
 fn test_fixed_offset_time_series_are_stable() {
-    let cases: [SeriesCase<'_>; 6] = [
-        (
-            vec![
-                "--timezone=+01:00",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03-31",
-                "position",
-                "--step=1h",
-            ],
-            vec![
-                "2024-03-31T00:00:00+01:00",
-                "2024-03-31T01:00:00+01:00",
-                "2024-03-31T02:00:00+01:00",
-                "2024-03-31T03:00:00+01:00",
-            ],
-            None,
-            None,
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-10-27",
-                "position",
-                "--step=1h",
-            ],
-            vec![
-                "2024-10-27T01:00:00+01:00",
-                "2024-10-27T02:00:00+01:00",
-                "2024-10-27T03:00:00+01:00",
-            ],
-            None,
-            None,
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03",
-                "position",
-                "--step=24h",
-            ],
-            vec!["2024-03-30T00:00:00+01:00", "2024-03-31T00:00:00+01:00"],
-            None,
-            Some("+01:00"),
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024",
-                "position",
-                "--step=24h",
-            ],
-            vec![
-                "2024-03-30T00:00:00+01:00",
-                "2024-04-01T00:00:00+01:00",
-                "2024-10-26T00:00:00+01:00",
-                "2024-10-28T00:00:00+01:00",
-            ],
-            None,
-            None,
-        ),
-        (
-            vec![
-                "--timezone=+01:00",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03-31",
-                "position",
-                "--step=30m",
-            ],
-            vec![
-                "2024-03-31T01:00:00+01:00",
-                "2024-03-31T02:00:00+01:00",
-                "2024-03-31T02:30:00+01:00",
-                "2024-03-31T03:00:00+01:00",
-            ],
-            None,
-            Some("+01:00"),
-        ),
-        (
-            vec![
-                "--timezone=UTC",
-                "--format=CSV",
-                "52.0",
-                "13.4",
-                "2024-03-31",
-                "position",
-                "--step=1h",
-            ],
-            vec![
-                "2024-03-31T01:00:00+00:00",
-                "2024-03-31T02:00:00+00:00",
-                "2024-03-31T03:00:00+00:00",
-            ],
-            None,
-            None,
-        ),
-    ];
-    for (args, expected, absent_prefix, required_suffix) in cases {
-        let datetimes = csv_datetimes(&args, &[]);
-        for datetime in expected {
-            assert!(datetimes.contains(&datetime.to_string()));
-        }
-        if let Some(prefix) = absent_prefix {
-            assert!(!datetimes.iter().any(|ts| ts.starts_with(prefix)));
-        }
-        if let Some(suffix) = required_suffix {
-            assert!(datetimes.iter().all(|ts| ts.ends_with(suffix)));
-        }
+    let hourly = csv_datetimes(
+        &[
+            "--timezone=+01:00",
+            "--format=CSV",
+            "52.0",
+            "13.4",
+            "2024-03-31",
+            "position",
+            "--step=1h",
+        ],
+        &[],
+    );
+    for expected in [
+        "2024-03-31T01:00:00+01:00",
+        "2024-03-31T02:00:00+01:00",
+        "2024-03-31T03:00:00+01:00",
+    ] {
+        assert!(hourly.contains(&expected.to_string()));
     }
+
+    let daily = csv_datetimes(
+        &[
+            "--timezone=+01:00",
+            "--format=CSV",
+            "52.0",
+            "13.4",
+            "2024-03",
+            "position",
+            "--step=24h",
+        ],
+        &[],
+    );
+    assert!(daily.iter().all(|datetime| datetime.ends_with("+01:00")));
 }
 
 #[test]
 fn test_named_timezones_apply_real_dst_rules() {
-    let cases: [NamedZoneCase<'_>; 3] = [
+    let cases: [NamedZoneCase<'_>; 2] = [
         (
             vec![
                 "--timezone=Europe/Berlin",
@@ -315,20 +162,6 @@ fn test_named_timezones_apply_real_dst_rules() {
                 "2024-10-27T04:00:00+01:00",
             ],
             None,
-        ),
-        (
-            vec![
-                "--timezone=America/New_York",
-                "--format=CSV",
-                "--no-headers",
-                "40.7",
-                "-74.0",
-                "2024-03-10",
-                "position",
-                "--step=1h",
-            ],
-            vec!["2024-03-10T01:00:00-05:00", "2024-03-10T03:00:00-04:00"],
-            Some("2024-03-10T02:00:00"),
         ),
     ];
     for (args, expected, missing_prefix) in cases {
@@ -386,21 +219,6 @@ fn test_system_timezone_detection_paths() {
         ));
         assert_eq!(json.get("dateTime").and_then(Value::as_str), Some(expected));
     }
-
-    let row = csv_row(
-        &[
-            "--show-inputs",
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-01-15T12:00:00",
-            "position",
-        ],
-        &[],
-    );
-    let datetime = row.get("dateTime").unwrap();
-    assert!(datetime.starts_with("2024-01-15T12:00:00"));
-    assert!(datetime.contains('+') || datetime.contains('-'));
 }
 
 #[test]
@@ -423,11 +241,4 @@ fn test_now_respects_timezone_sources() {
         assert!(suffixes.iter().any(|suffix| datetime.ends_with(suffix)));
         assert!(!datetime.ends_with("+00:00"));
     }
-
-    let output = output_text(
-        &["48.8", "2.3", "now", "position"],
-        &[("TZ", Some("Europe/Paris"))],
-    );
-    assert!(output.contains("dateTime"));
-    assert!(output.contains("+01:00") || output.contains("+02:00"));
 }

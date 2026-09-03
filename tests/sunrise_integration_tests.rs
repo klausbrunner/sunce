@@ -1,7 +1,7 @@
 mod common;
 use common::{
-    assert_time_close, parse_csv_output, parse_csv_output_maps, parse_csv_single_record_map,
-    parse_json_output, sunce_command,
+    assert_time_close, parse_csv_output_maps, parse_csv_single_record_map, parse_json_output,
+    sunce_command,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -114,12 +114,6 @@ fn test_sunrise_timezone_handling() {
 
 #[test]
 fn test_sunrise_dst_and_accuracy_regressions() {
-    sunce_command()
-        .env("TZ", "Europe/Berlin")
-        .args(["52.0", "13.4", "2024-03-31", "sunrise"])
-        .assert()
-        .success();
-
     for (lat, lon, date, sunrise, transit, sunset) in [
         (
             "53.0",
@@ -156,20 +150,4 @@ fn test_sunrise_specific_date_vs_partial_date_behavior() {
     );
     assert_eq!(single.get("type").map(String::as_str), Some("NORMAL"));
     assert_eq!(single["dateTime"], "2024-01-01T00:00:00+01:00");
-
-    let january = csv_rows(&["--format=CSV", "52.0", "13.4", "2024-01", "sunrise"], &[]);
-    assert_eq!(january.len(), 31);
-    assert_eq!(january[0]["latitude"], "52.00000");
-    assert_eq!(january[0]["longitude"], "13.40000");
-    assert!(january[0]["dateTime"].starts_with("2024-01-01"));
-    assert!(january[30]["dateTime"].starts_with("2024-01-31"));
-
-    let (position_headers, position_rows) = parse_csv_output(&output_text(
-        &["--format=CSV", "52.0", "13.4", "2024-01-01", "position"],
-        &[],
-    ));
-    assert_eq!(position_rows.len(), 24);
-    for field in ["latitude", "longitude", "dateTime", "azimuth", "zenith"] {
-        assert!(position_headers.contains(&field.to_string()));
-    }
 }

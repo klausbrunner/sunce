@@ -60,12 +60,10 @@ impl Iterator for CoordRangeIter {
             candidate
         };
 
-        if self.step == 0.0 || current == self.end {
+        if current == self.end {
             self.done = true;
-        } else if let Some(next_index) = self.index.checked_add(1) {
-            self.index = next_index;
         } else {
-            self.done = true;
+            self.index += 1;
         }
 
         Some(current)
@@ -243,12 +241,10 @@ fn coord_range_iter(start: f64, end: f64, step: f64) -> CoordRangeIter {
 }
 
 fn range_point_count(start: f64, end: f64, step: f64) -> usize {
-    if step == 0.0 || (end - start).abs() < f64::EPSILON {
+    if (end - start).abs() < f64::EPSILON {
         1
     } else {
-        let step_abs = step.abs();
-        let span = (end - start).abs().max(0.0);
-        (span / step_abs).floor() as usize + 1
+        ((end - start).abs() / step.abs()).floor() as usize + 1
     }
 }
 
@@ -500,11 +496,9 @@ fn read_times_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
 ) -> Result<TimeIter, String> {
-    let tz_override = override_tz.clone();
-
     let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
         let line = line_res?;
-        parse_datetime_string(&line.content, tz_override.as_ref().map(|tz| tz.as_str()))
+        parse_datetime_string(&line.content, override_tz.as_ref().map(|tz| tz.as_str()))
             .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))
     });
 
@@ -579,35 +573,22 @@ pub fn expand_cartesian_product(
     }
 
     if time_is_single {
-        let mut time_iter =
-            expand_time_source(time_source.clone(), step, override_tz.clone(), command)?;
+        let mut time_iter = expand_time_source(time_source, step, override_tz, command)?;
         let Some(first_time) = time_iter.next() else {
             return Ok(Box::new(std::iter::empty()));
         };
         let dt = first_time?;
-        let iter = expand_location_source(loc_source.clone())?
+        let iter = expand_location_source(loc_source)?
             .map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt)));
         return Ok(Box::new(iter));
-    }
-
-    if time_replayable {
-        if loc_replayable {
-            return expand_time_outer(loc_source, time_source, step, override_tz, command);
-        }
-        return expand_location_outer(loc_source, time_source, step, override_tz, command);
     }
 
     if loc_replayable {
         return expand_time_outer(loc_source, time_source, step, override_tz, command);
     }
 
-    if loc_is_single {
-        let (lat, lon) = expand_location_source(loc_source)?
-            .next()
-            .unwrap_or(Err("No location provided".to_string()))?;
-        let iter = expand_time_source(time_source, step, override_tz, command)?
-            .map(move |time_res| time_res.map(|dt| (lat, lon, dt)));
-        return Ok(Box::new(iter));
+    if time_replayable {
+        return expand_location_outer(loc_source, time_source, step, override_tz, command);
     }
 
     Err("Cannot combine non-replayable streams for both locations and times. Use files instead of stdin or provide bounded values.".to_string())
@@ -617,8 +598,6 @@ pub fn expand_paired_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
 ) -> Result<CoordTimeStream, String> {
-    let tz_override = override_tz.clone();
-
     let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
         let line = line_res?;
         let parts = parse_delimited_line(&line.content);
@@ -634,7 +613,7 @@ pub fn expand_paired_file(
         let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
 
         let dt_str = parts[2..].join(" ");
-        let dt = parse_datetime_string(dt_str.trim(), tz_override.as_ref().map(|tz| tz.as_str()))
+        let dt = parse_datetime_string(dt_str.trim(), override_tz.as_ref().map(|tz| tz.as_str()))
             .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
         Ok((lat, lon, dt))
     });

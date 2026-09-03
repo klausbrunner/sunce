@@ -8,7 +8,6 @@ use solar_positioning::{Horizon, SunriseResult};
 
 const MAX_WAIT_SEARCH_DAYS: u64 = 370;
 
-#[derive(Debug, Clone)]
 struct TwilightResults {
     sunrise_sunset: SunriseResult<DateTime<FixedOffset>>,
     civil: SunriseResult<DateTime<FixedOffset>>,
@@ -37,23 +36,12 @@ fn calculate_twilight_results(
             .map_err(|e| format!("Failed to calculate twilight: {}", e))
     });
 
+    let mut next = || results.next().expect("one result per horizon");
     Ok(TwilightResults {
-        sunrise_sunset: results
-            .next()
-            .transpose()?
-            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?,
-        civil: results
-            .next()
-            .transpose()?
-            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?,
-        nautical: results
-            .next()
-            .transpose()?
-            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?,
-        astronomical: results
-            .next()
-            .transpose()?
-            .ok_or_else(|| "Failed to calculate twilight: incomplete result set".to_string())?,
+        sunrise_sunset: next()?,
+        civil: next()?,
+        nautical: next()?,
+        astronomical: next()?,
     })
 }
 
@@ -87,28 +75,20 @@ fn classify_solar_state(results: &TwilightResults, dt: DateTime<FixedOffset>) ->
 fn local_datetime(
     date: NaiveDate,
     hour: u32,
-    minute: u32,
-    second: u32,
     params: &Parameters,
 ) -> Result<DateTime<FixedOffset>, String> {
     crate::data::parse_datetime_string(
-        &format!(
-            "{}T{:02}:{:02}:{:02}",
-            date.format("%F"),
-            hour,
-            minute,
-            second
-        ),
+        &format!("{}T{:02}:00:00", date.format("%F"), hour),
         params.timezone.as_ref().map(|tz| tz.as_str()),
     )
 }
 
 fn local_midnight(date: NaiveDate, params: &Parameters) -> Result<DateTime<FixedOffset>, String> {
-    local_datetime(date, 0, 0, 0, params)
+    local_datetime(date, 0, params)
 }
 
 fn local_noon(date: NaiveDate, params: &Parameters) -> Result<DateTime<FixedOffset>, String> {
-    local_datetime(date, 12, 0, 0, params)
+    local_datetime(date, 12, params)
 }
 
 fn next_matching_state_start(
@@ -153,16 +133,9 @@ pub fn next_state_transition(
     params: &Parameters,
 ) -> Result<DateTime<FixedOffset>, String> {
     for day_offset in 0..=MAX_WAIT_SEARCH_DAYS {
-        let date = now
-            .date_naive()
-            .checked_add_days(Days::new(day_offset))
-            .ok_or_else(|| "Failed to search future wait dates".to_string())?;
+        let date = now.date_naive() + Days::new(day_offset);
         let day_start = local_midnight(date, params)?;
-        let day_end = local_midnight(
-            date.checked_add_days(Days::new(1))
-                .ok_or_else(|| "Failed to search future wait dates".to_string())?,
-            params,
-        )?;
+        let day_end = local_midnight(date + Days::new(1), params)?;
         let anchor = local_noon(date, params)?;
         let results = calculate_twilight_results(lat, lon, anchor, resolve_deltat(anchor, params))?;
 
@@ -293,63 +266,21 @@ mod tests {
     }
 
     #[test]
-    fn solar_state_classification_prefers_brightest_matching_horizon() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let results = TwilightResults {
-            sunrise_sunset: SunriseResult::RegularDay {
-                sunrise: tz.with_ymd_and_hms(2024, 3, 21, 6, 0, 0).unwrap(),
-                transit: tz.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(),
-                sunset: tz.with_ymd_and_hms(2024, 3, 21, 18, 0, 0).unwrap(),
-            },
-            civil: SunriseResult::RegularDay {
-                sunrise: tz.with_ymd_and_hms(2024, 3, 21, 5, 30, 0).unwrap(),
-                transit: tz.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(),
-                sunset: tz.with_ymd_and_hms(2024, 3, 21, 18, 30, 0).unwrap(),
-            },
-            nautical: SunriseResult::RegularDay {
-                sunrise: tz.with_ymd_and_hms(2024, 3, 21, 5, 0, 0).unwrap(),
-                transit: tz.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(),
-                sunset: tz.with_ymd_and_hms(2024, 3, 21, 19, 0, 0).unwrap(),
-            },
-            astronomical: SunriseResult::RegularDay {
-                sunrise: tz.with_ymd_and_hms(2024, 3, 21, 4, 30, 0).unwrap(),
-                transit: tz.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(),
-                sunset: tz.with_ymd_and_hms(2024, 3, 21, 19, 30, 0).unwrap(),
-            },
+    fn next_state_transition_tracks_dst_offset_changes() {
+        let params = Parameters {
+            timezone: Some("Europe/Berlin".parse().unwrap()),
+            ..Parameters::default()
         };
-
-        assert_eq!(
-            classify_solar_state(
-                &results,
-                tz.with_ymd_and_hms(2024, 3, 21, 6, 15, 0).unwrap()
-            ),
-            SolarState::Daylight
-        );
-        assert_eq!(
-            classify_solar_state(
-                &results,
-                tz.with_ymd_and_hms(2024, 3, 21, 5, 45, 0).unwrap()
-            ),
-            SolarState::CivilTwilight
-        );
-        assert_eq!(
-            classify_solar_state(
-                &results,
-                tz.with_ymd_and_hms(2024, 3, 21, 5, 15, 0).unwrap()
-            ),
-            SolarState::NauticalTwilight
-        );
-        assert_eq!(
-            classify_solar_state(
-                &results,
-                tz.with_ymd_and_hms(2024, 3, 21, 4, 45, 0).unwrap()
-            ),
-            SolarState::AstronomicalTwilight
-        );
-        assert_eq!(
-            classify_solar_state(&results, tz.with_ymd_and_hms(2024, 3, 21, 4, 0, 0).unwrap()),
-            SolarState::Night
-        );
+        for (now, expected_offset) in [
+            ("2024-03-30T22:00:00+01:00", 7200),
+            ("2024-10-26T22:00:00+02:00", 3600),
+        ] {
+            let now = DateTime::parse_from_rfc3339(now).unwrap();
+            let transition =
+                next_state_transition(SolarState::Daylight, 52.0, 13.4, now, &params).unwrap();
+            assert_eq!(transition.date_naive(), now.date_naive() + Days::new(1));
+            assert_eq!(transition.offset().local_minus_utc(), expected_offset);
+        }
     }
 
     #[test]

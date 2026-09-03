@@ -328,7 +328,7 @@ fn write_position_parquet<W: Write + Send>(
     writer: W,
 ) -> io::Result<usize> {
     let layout = PositionLayout::from_params(params);
-    let schema = build_position_schema(layout);
+    let schema = build_schema(layout.csv_headers());
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -341,8 +341,7 @@ fn write_position_parquet<W: Write + Send>(
 
     for result in results {
         let result = result.map_err(io::Error::other)?;
-        let row = normalize_position_result(&result)
-            .ok_or_else(|| parquet_error("Unexpected calculation result for position"))?;
+        let row = normalize_position_result(&result);
         builders.append_row(&row, params, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
@@ -369,7 +368,7 @@ fn write_sunrise_parquet<W: Write + Send>(
     writer: W,
 ) -> io::Result<usize> {
     let layout = SunriseLayout::from_params(params);
-    let schema = build_sunrise_schema(layout);
+    let schema = build_schema(layout.csv_headers());
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
@@ -382,8 +381,7 @@ fn write_sunrise_parquet<W: Write + Send>(
 
     for result in results {
         let result = result.map_err(io::Error::other)?;
-        let row = normalize_sunrise_result(&result)
-            .ok_or_else(|| parquet_error("Unexpected calculation result for sunrise"))?;
+        let row = normalize_sunrise_result(&result);
         builders.append_row(&row, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
@@ -440,12 +438,4 @@ fn build_schema(columns: Vec<&'static str>) -> Arc<Schema> {
     Arc::new(Schema::new(
         columns.into_iter().map(parquet_field).collect::<Vec<_>>(),
     ))
-}
-
-fn build_position_schema(layout: PositionLayout) -> Arc<Schema> {
-    build_schema(layout.csv_headers())
-}
-
-fn build_sunrise_schema(layout: SunriseLayout) -> Arc<Schema> {
-    build_schema(layout.csv_headers())
 }

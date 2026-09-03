@@ -8,7 +8,6 @@ mod output;
 #[cfg(feature = "parquet")]
 mod parquet;
 mod parsed;
-mod planner;
 mod position;
 mod predicate;
 mod sunrise;
@@ -48,15 +47,33 @@ fn run_predicate(job: predicate::PredicateJob) -> i32 {
     }
 }
 
-fn run_stream(plan: planner::ComputePlan) -> i32 {
-    let start = plan.params.perf.then(std::time::Instant::now);
-    let planner::ComputePlan {
-        data_iter,
+fn run_stream(request: validate::StreamRequest) -> i32 {
+    let validate::StreamRequest {
         command,
+        source,
         params,
-        allow_time_cache,
-        flush_each_record,
-    } = plan;
+    } = request;
+    let watch_mode = source.is_watch_mode(params.step.is_some());
+    let allow_time_cache = !watch_mode;
+    let flush_each_record = source.uses_stdin() || watch_mode;
+    let data_iter = match source {
+        data::DataSource::Separate(locations, times) => data::expand_cartesian_product(
+            locations,
+            times,
+            params.step,
+            params.timezone.clone(),
+            command,
+        ),
+        data::DataSource::Paired(path) => data::expand_paired_file(path, params.timezone.clone()),
+    };
+    let data_iter = match data_iter {
+        Ok(iter) => iter,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            return 1;
+        }
+    };
+    let start = params.perf.then(std::time::Instant::now);
 
     let results = compute::calculate_stream(data_iter, command, params.clone(), allow_time_cache);
     let record_count = match output::dispatch_output(results, command, &params, flush_each_record) {
@@ -80,19 +97,9 @@ fn run_stream(plan: planner::ComputePlan) -> i32 {
 }
 
 fn execute(valid: validate::ValidCommand) -> i32 {
-    let error_code = if matches!(&valid, validate::ValidCommand::Predicate(_)) {
-        2
-    } else {
-        1
-    };
-
-    match planner::build_plan(valid) {
-        Ok(planner::RunPlan::Predicate(job)) => run_predicate(job),
-        Ok(planner::RunPlan::Stream(plan)) => run_stream(plan),
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            error_code
-        }
+    match valid {
+        validate::ValidCommand::Predicate(job) => run_predicate(job),
+        validate::ValidCommand::Stream(request) => run_stream(request),
     }
 }
 

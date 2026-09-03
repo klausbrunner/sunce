@@ -30,16 +30,25 @@ fn csv_row(args: &[&str], envs: &[(&str, &str)]) -> HashMap<String, String> {
 
 #[test]
 fn test_parquet_feature_availability() {
+    let output = sunce_command()
+        .args([
+            "--format=PARQUET",
+            "52.0",
+            "13.4",
+            "2024-01-01T12:00:00",
+            "position",
+        ])
+        .output()
+        .unwrap();
+
     #[cfg(feature = "parquet")]
     {
-        let output = position_test_with_format("PARQUET").get_output();
         assert!(output.status.success());
         assert!(!output.stdout.is_empty());
     }
 
     #[cfg(not(feature = "parquet"))]
     {
-        let output = position_test_with_format("PARQUET").get_output();
         assert!(!output.status.success());
         assert!(
             String::from_utf8_lossy(&output.stderr)
@@ -51,9 +60,11 @@ fn test_parquet_feature_availability() {
 #[test]
 fn test_position_command_variants() {
     for algorithm in ["SPA", "GRENA3"] {
-        position_test()
+        sunce_command()
+            .args(["52.0", "13.4", "2024-01-01T12:00:00", "position"])
             .arg(format!("--algorithm={algorithm}"))
-            .assert_success();
+            .assert()
+            .success();
     }
 
     let with_refraction = output_text(&["52.0", "13.4", "2024-01-01T12:00:00", "position"], &[]);
@@ -206,7 +217,10 @@ fn test_timezone_and_datetime_parsing() {
         "2024-01-01T12:00:00Z",
         "2024-01-01T12:00:00+01:00",
     ] {
-        custom_position("52.0", "13.4", input).assert_success();
+        sunce_command()
+            .args(["52.0", "13.4", input, "position"])
+            .assert()
+            .success();
     }
 
     let json = parse_json_output(&output_text(
@@ -241,7 +255,10 @@ fn test_combined_range_and_now_behavior() {
     );
     assert_eq!(rows.len(), 8);
 
-    custom_position("52.0", "13.4", "now").assert_success();
+    sunce_command()
+        .args(["52.0", "13.4", "now", "position"])
+        .assert()
+        .success();
 
     let rows = csv_rows(
         &[

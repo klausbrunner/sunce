@@ -1,21 +1,21 @@
-//! Parsed CLI shapes before semantic validation.
+//! Parsed CLI values before semantic validation.
 
 use crate::data::{Command, InputPath, LocationSource, Parameters, Predicate};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ParsedTimeSource {
     Value(String),
     File(InputPath),
     Now,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ParsedInput {
     Separate(LocationSource, ParsedTimeSource),
     Paired(InputPath),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct ParsedOptionUsage {
     pub format: bool,
     pub headers: bool,
@@ -32,7 +32,7 @@ pub struct ParsedOptionUsage {
     pub twilight: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ParsedCommand {
     pub command: Command,
     pub input: ParsedInput,
