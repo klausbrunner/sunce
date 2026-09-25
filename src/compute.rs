@@ -5,7 +5,7 @@ use crate::position::{
     SpaCache, TIME_CACHE_CAPACITY, calculate_position_with_refraction, refraction_correction,
     time_cache_get,
 };
-use crate::sunrise::calculate_sunrise as calculate_sunrise_impl;
+use crate::sunrise::calculate_sunrise;
 use chrono::{DateTime, FixedOffset};
 use solar_positioning::SolarPosition;
 use std::collections::VecDeque;
@@ -69,16 +69,13 @@ pub fn calculate_stream(
 
                 Box::new(data.map(move |item| {
                     item.and_then(|(lat, lon, dt)| {
-                        let (time_parts, deltat) = match time_cache_get(
+                        let (time_parts, deltat) = time_cache_get(
                             &mut time_cache,
                             &mut time_cache_order,
                             TIME_CACHE_CAPACITY,
                             dt,
                             &params,
-                        ) {
-                            Ok(value) => value,
-                            Err(err) => return Err(err),
-                        };
+                        )?;
 
                         let position = spa::spa_with_time_dependent_parts(
                             lat,
@@ -116,7 +113,7 @@ pub fn calculate_stream(
             }
         }
         Command::Sunrise => Box::new(data.map(move |item| {
-            item.and_then(|(lat, lon, dt)| calculate_sunrise_impl(lat, lon, dt, &params))
+            item.and_then(|(lat, lon, dt)| calculate_sunrise(lat, lon, dt, &params))
         })),
     }
 }

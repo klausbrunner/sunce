@@ -13,46 +13,121 @@ const PREDICATE_MULTIPLE_ERROR: &str = "Predicate options cannot be used multipl
 
 type CliResult<T> = Result<T, CliError>;
 
-pub fn parse_cli(args: Vec<String>) -> CliResult<ParsedCommand> {
-    if args.len() < 2 {
+pub struct Arguments<'a> {
+    positional: Vec<String>,
+    options: Vec<(&'a str, Option<&'a str>)>,
+}
+
+impl<'a> Arguments<'a> {
+    pub fn new(args: &'a [String]) -> Self {
+        let mut positional = Vec::new();
+        let mut options = Vec::new();
+        let mut args = args.iter().skip(1).peekable();
+        while let Some(arg) = args.next() {
+            if arg == "-h" {
+                options.push(("help", None));
+                continue;
+            }
+            let Some(option) = arg.strip_prefix("--") else {
+                positional.push(arg.clone());
+                continue;
+            };
+            let (name, mut value) = option
+                .split_once('=')
+                .map(|(name, value)| (name, Some(value)))
+                .unwrap_or((option, None));
+            // Optional --deltat values require '=' so a latitude is never consumed.
+            if value.is_none()
+                && matches!(
+                    name,
+                    "format"
+                        | "timezone"
+                        | "algorithm"
+                        | "step"
+                        | "elevation"
+                        | "temperature"
+                        | "pressure"
+                        | "horizon"
+                        | "sun-above"
+                        | "sun-below"
+                )
+                && args
+                    .peek()
+                    .is_some_and(|next| !next.starts_with("--") && *next != "-h")
+            {
+                value = args.next().map(String::as_str);
+            }
+            options.push((name, value));
+        }
+        Self {
+            positional,
+            options,
+        }
+    }
+
+    pub fn predicate_requested(&self) -> bool {
+        self.options.iter().any(|(name, _)| {
+            matches!(
+                *name,
+                "is-daylight"
+                    | "is-civil-twilight"
+                    | "is-nautical-twilight"
+                    | "is-astronomical-twilight"
+                    | "is-astronomical-night"
+                    | "after-sunset"
+                    | "sun-above"
+                    | "sun-below"
+            )
+        })
+    }
+}
+
+pub fn parse_cli(args: Arguments<'_>) -> CliResult<ParsedCommand> {
+    let Arguments {
+        positional,
+        options,
+    } = args;
+    if positional.is_empty() && options.is_empty() {
         return Err(CliError::Exit(
             "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|sunrise>".to_string(),
         ));
     }
 
+    if positional.first().is_some_and(|arg| arg == "help") {
+        if positional.len() > 2 {
+            return Err("Usage: sunce help [position|sunrise]".into());
+        }
+        let message = match positional.get(1) {
+            Some(command) => get_command_help(command)?,
+            None => get_help_text(),
+        };
+        return Err(CliError::Exit(message));
+    }
+    if options.contains(&("help", None)) {
+        let message = match positional
+            .iter()
+            .find(|arg| matches!(arg.as_str(), "position" | "sunrise"))
+        {
+            Some(command) => get_command_help(command)?,
+            None => get_help_text(),
+        };
+        return Err(CliError::Exit(message));
+    }
+
     let mut params = Parameters::default();
     let mut predicate = None;
-    let mut positional = Vec::new();
     let mut deltat_seen = false;
     let mut option_usage = ParsedOptionUsage::default();
 
-    for arg in args.into_iter().skip(1) {
-        if let Some(stripped) = arg.strip_prefix("--") {
-            let (name, value) = stripped
-                .split_once('=')
-                .map(|(n, v)| (n, Some(v)))
-                .unwrap_or((stripped, None));
-            apply_option(
-                name,
-                value,
-                &mut params,
-                &mut predicate,
-                &mut deltat_seen,
-                &mut option_usage,
-            )?;
-        } else {
-            positional.push(arg);
-        }
-    }
-
-    if let Some(first) = positional.first()
-        && first == "help"
-    {
-        let message = positional
-            .get(1)
-            .map(|command| get_command_help(command))
-            .unwrap_or_else(get_help_text);
-        return Err(CliError::Exit(message));
+    for (name, value) in options {
+        apply_option(
+            name,
+            value,
+            &mut params,
+            &mut predicate,
+            &mut deltat_seen,
+            &mut option_usage,
+        )?;
     }
 
     let (command, input) = parse_positional_args(&positional)?;
@@ -514,14 +589,16 @@ Options:
       --wait                     With `now`, wait until the predicate becomes true.
                                  Completion is usually within seconds, not
                                  guaranteed at the exact transition.
-  --help                Show this help message and exit.
+  -h, --help            Show help (command-specific when a command is given).
   --version             Print version information and exit.
 
 Commands:
   position              Calculate topocentric solar coordinates.
   sunrise               Calculate sunrise, transit, sunset, and optional twilight.
 
-Run 'sunce help <command>' for command-specific options.
+Options with required values accept both '--option=value' and '--option value'.
+An explicit --deltat value requires '='; bare --deltat requests an estimate.
+Run 'sunce help <command>' or 'sunce <command> --help' for command-specific options.
 "#,
         env!("CARGO_PKG_VERSION"),
         formats,
@@ -530,9 +607,9 @@ Run 'sunce help <command>' for command-specific options.
     )
 }
 
-fn get_command_help(command: &str) -> String {
+fn get_command_help(command: &str) -> CliResult<String> {
     let defaults = Parameters::default();
-    match command {
+    Ok(match command {
         "position" => format!(
             r#"Usage:
   sunce [OPTIONS] <latitude> <longitude> <dateTime> position
@@ -600,9 +677,12 @@ Examples:
   sunce 52.0 13.4 2024-06-21 sunrise --horizon=-6.0
 "#
         .to_string(),
-        _ => format!(
-            "Unknown command: {}\n\nRun 'sunce --help' for usage.",
-            command
-        ),
-    }
+        _ => {
+            return Err(format!(
+                "Unknown command: {}\n\nRun 'sunce --help' for usage.",
+                command
+            )
+            .into());
+        }
+    })
 }

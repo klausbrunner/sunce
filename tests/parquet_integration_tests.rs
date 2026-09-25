@@ -280,3 +280,20 @@ fn test_parquet_sunrise_twilight_null_handling() {
         );
     }
 }
+
+#[test]
+fn preserves_offsets_for_equal_instants() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("instants.csv");
+    write_text_file(
+        &path,
+        "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n",
+    );
+    let input = format!("@{}", path.display());
+    for command in ["position", "sunrise"] {
+        let batch = parquet_single_batch(&[&input, command, "--format=parquet"], &[]);
+        let dates = string_array(&batch, "dateTime");
+        assert_eq!(dates.value(0), "2024-01-01T12:00:00+00:00");
+        assert_eq!(dates.value(1), "2024-01-01T13:00:00+01:00");
+    }
+}

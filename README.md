@@ -112,6 +112,14 @@ Field names are intended to be stable across formats where the underlying data i
 
 Run `sunce --help` for a brief usage summary.
 
+Options with required values accept either `--format=csv` or `--format csv`
+(likewise for `--timezone`, `--step`, and other required values). An explicit
+delta-T value still requires `--deltat=<seconds>`; bare `--deltat` requests an
+estimate and never consumes the following coordinate.
+
+Use `-h` as a short form of `--help`. For command-specific help, run
+`sunce position --help`, `sunce sunrise --help`, or `sunce help <command>`.
+
 ## Automation and predicate mode
 
 For automation, `sunce` can evaluate one solar condition for one explicit location and one explicit instant and report the result via the process exit code:

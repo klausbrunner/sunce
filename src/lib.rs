@@ -104,8 +104,15 @@ fn execute(valid: validate::ValidCommand) -> i32 {
 }
 
 pub fn run(args: Vec<String>) -> i32 {
+    // Detect predicate intent before parsing so even errors preceding the flag
+    // cannot be mistaken for a false predicate by a calling script.
+    let args = cli::Arguments::new(&args);
+    let predicate_requested = args.predicate_requested();
     match cli::parse_cli(args).and_then(validate::validate) {
         Ok(valid) => execute(valid),
+        Err(crate::error::CliError::Message(message)) if predicate_requested => {
+            cli_error_exit_code(crate::error::predicate_error(message))
+        }
         Err(err) => cli_error_exit_code(err),
     }
 }

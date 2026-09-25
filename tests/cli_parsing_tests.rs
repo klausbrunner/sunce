@@ -256,7 +256,115 @@ fn test_help_and_version_paths() {
             "--wait",
         ],
     );
-    assert_help(&["help", "nonsense"], &["Unknown command: nonsense"]);
+    assert_failure_code(&["help", "nonsense"], 1, "Unknown command: nonsense");
+}
+
+#[test]
+fn test_contextual_help_and_short_alias() {
+    assert_help(&["-h"], &["Usage:", "Commands:"]);
+    for command in ["position", "sunrise"] {
+        let expected = sunce_command().args(["help", command]).output().unwrap();
+        for flag in ["-h", "--help"] {
+            for args in [
+                vec![command, flag],
+                vec![flag, command],
+                vec!["52", "13.4", "now", command, flag],
+            ] {
+                sunce_command()
+                    .args(args)
+                    .assert()
+                    .success()
+                    .stdout(expected.stdout.clone())
+                    .stderr("");
+            }
+        }
+    }
+    // An option value that happens to name a command isn't the help topic.
+    assert_help(&["--timezone", "position", "--help"], &["Commands:"]);
+    assert_failure(&["help", "position", "extra"], "Usage: sunce help");
+    assert_failure(&["--help=yes"], "does not take a value");
+}
+
+#[test]
+fn test_separated_option_values_match_equals_form() {
+    for command in [
+        "--format=json --timezone=-05:00 --algorithm=grena3 --elevation=-10 --temperature=-5 --pressure=1000 52 13.4 2024-01-01T12:00:00Z position",
+        "52 13.4 2024-01-01 position --step=6h --format=csv",
+        "52 13.4 2024-01-01 sunrise --horizon=-6 --format=json",
+        "52 13.4 2024-01-01T12:00:00Z position --sun-above=-10",
+        "52 13.4 2024-01-01T12:00:00Z position --sun-below=-10",
+    ] {
+        let expected = sunce_command()
+            .args(command.split_whitespace())
+            .output()
+            .unwrap();
+        assert!(matches!(expected.status.code(), Some(0 | 1)));
+        assert!(expected.stderr.is_empty());
+        let separated = command
+            .split_whitespace()
+            .flat_map(|arg| arg.splitn(2, '='));
+        sunce_command()
+            .args(separated)
+            .assert()
+            .code(expected.status.code().unwrap())
+            .stdout(expected.stdout)
+            .stderr("");
+    }
+    // Bare --deltat must not consume the following latitude as its value.
+    assert_success(&["--deltat", "52", "13.4", "2024-01-01T12:00:00Z", "position"]);
+    for args in [vec!["--format"], vec!["--format", "--no-headers"]] {
+        assert_failure_code(&args, 1, "Option --format requires a value");
+    }
+}
+
+#[test]
+fn test_predicate_errors_are_distinct_from_false_regardless_of_option_order() {
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["91", "13.4", "now", "sunrise"],
+            "Latitude must be between",
+        ),
+        (
+            &["52", "181", "now", "sunrise"],
+            "Longitude must be between",
+        ),
+        (
+            &["52", "13.4", "now", "sunrise", "--timezone", "bogus"],
+            "Invalid timezone",
+        ),
+        (
+            &["52", "13.4", "now", "sunrise", "--format"],
+            "requires a value",
+        ),
+        (&["52", "13.4", "now", "sunrise", "--wat"], "Unknown option"),
+        (
+            &["52", "13.4", "now", "position", "--twilight"],
+            "not valid for position",
+        ),
+        (&["52", "13.4", "now"], "No command found"),
+    ];
+    for (args, message) in cases {
+        for before in [true, false] {
+            let mut full_args = args.to_vec();
+            full_args.insert(if before { 0 } else { full_args.len() }, "--is-daylight");
+            assert_failure_code(&full_args, 2, message);
+        }
+    }
+    assert_failure_code(&["--is-daylight=yes"], 2, "does not take a value");
+    assert_failure_code(&["--sun-above", "--timezone=UTC"], 2, "requires a value");
+    // Predicate-looking option values must not change ordinary error codes.
+    assert_failure_code(&["--timezone=--is-daylight"], 1, "Invalid timezone");
+    for flag in ["--help", "--version"] {
+        assert_success(&["--is-daylight", flag]);
+    }
+    for (instant, code) in [("2024-03-21T12:00:00Z", 0), ("2024-03-21T00:00:00Z", 1)] {
+        sunce_command()
+            .args(["52", "13.4", instant, "sunrise", "--is-daylight"])
+            .assert()
+            .code(code)
+            .stdout("")
+            .stderr("");
+    }
 }
 
 #[test]

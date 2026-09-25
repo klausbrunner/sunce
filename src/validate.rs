@@ -26,14 +26,55 @@ enum ValidationMode {
 }
 
 pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
-    match parsed.command {
+    let ParsedCommand {
+        command,
+        input,
+        mut params,
+        predicate,
+        usage,
+    } = parsed;
+    let mode = match command {
         Command::Position => {
-            validate_position(parsed.input, parsed.params, parsed.predicate, parsed.usage)
+            validate_position_options(&usage)?;
+            ValidationMode::Position
         }
         Command::Sunrise => {
-            validate_sunrise(parsed.input, parsed.params, parsed.predicate, parsed.usage)
+            validate_sunrise_options(&usage)?;
+            ValidationMode::Sunrise
         }
+    };
+    let mode = if predicate.is_some() {
+        ValidationMode::Predicate
+    } else {
+        mode
+    };
+    let source = validate_input(input, &params, mode)?;
+
+    if let Some(predicate) = predicate {
+        match command {
+            Command::Position => {
+                validate_position_predicate_mode(&source, predicate, &params, &usage)?
+            }
+            Command::Sunrise => {
+                validate_sunrise_predicate_mode(&source, predicate, &params, &usage)?
+            }
+        }
+        return Ok(ValidCommand::Predicate(build_predicate_job(
+            source, params, predicate,
+        )));
     }
+
+    if params.wait {
+        return Err(predicate_error("Option --wait requires a predicate option"));
+    }
+    if params.output.show_inputs.is_none() {
+        params.output.show_inputs = Some(should_auto_show_inputs(&source));
+    }
+    Ok(ValidCommand::Stream(StreamRequest {
+        command,
+        source,
+        params,
+    }))
 }
 
 fn validate_input(
@@ -154,82 +195,6 @@ fn validate_predicate_common(
             TimeSource::Single(_) | TimeSource::Now,
         ) => Ok(()),
     }
-}
-
-fn validate_position(
-    input: ParsedInput,
-    mut params: Parameters,
-    predicate: Option<Predicate>,
-    usage: ParsedOptionUsage,
-) -> Result<ValidCommand, CliError> {
-    validate_position_options(&usage)?;
-    let source = validate_input(
-        input,
-        &params,
-        if predicate.is_some() {
-            ValidationMode::Predicate
-        } else {
-            ValidationMode::Position
-        },
-    )?;
-
-    if let Some(predicate) = predicate {
-        validate_position_predicate_mode(&source, predicate, &params, &usage)?;
-        return Ok(ValidCommand::Predicate(build_predicate_job(
-            source, params, predicate,
-        )));
-    }
-
-    if params.wait {
-        return Err(predicate_error("Option --wait requires a predicate option"));
-    }
-    if params.output.show_inputs.is_none() {
-        params.output.show_inputs = Some(should_auto_show_inputs(&source));
-    }
-
-    Ok(ValidCommand::Stream(StreamRequest {
-        command: Command::Position,
-        source,
-        params,
-    }))
-}
-
-fn validate_sunrise(
-    input: ParsedInput,
-    mut params: Parameters,
-    predicate: Option<Predicate>,
-    usage: ParsedOptionUsage,
-) -> Result<ValidCommand, CliError> {
-    validate_sunrise_options(&usage)?;
-    let source = validate_input(
-        input,
-        &params,
-        if predicate.is_some() {
-            ValidationMode::Predicate
-        } else {
-            ValidationMode::Sunrise
-        },
-    )?;
-
-    if let Some(predicate) = predicate {
-        validate_sunrise_predicate_mode(&source, predicate, &params, &usage)?;
-        return Ok(ValidCommand::Predicate(build_predicate_job(
-            source, params, predicate,
-        )));
-    }
-
-    if params.wait {
-        return Err(predicate_error("Option --wait requires a predicate option"));
-    }
-    if params.output.show_inputs.is_none() {
-        params.output.show_inputs = Some(should_auto_show_inputs(&source));
-    }
-
-    Ok(ValidCommand::Stream(StreamRequest {
-        command: Command::Sunrise,
-        source,
-        params,
-    }))
 }
 
 fn validate_position_predicate_mode(

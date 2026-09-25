@@ -11,10 +11,11 @@ use solar_positioning::SunriseResult;
 use std::fmt::Write as _;
 
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
-const DATETIME_CACHE_CAPACITY: usize = 2048;
+pub(crate) const DATETIME_CACHE_CAPACITY: usize = 2048;
 const FIXED_DECIMAL_CACHE_CAPACITY: usize = 256;
 
-type DateTimeCache = AHashMap<DateTime<FixedOffset>, String>;
+// DateTime equality ignores offsets; formatted timestamps must preserve them.
+pub(crate) type DateTimeCache = AHashMap<(DateTime<FixedOffset>, i32), String>;
 type FixedDecimalCache = AHashMap<(u64, u32), String>;
 
 pub(crate) fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
@@ -164,21 +165,22 @@ fn set_formatted_f64(out: &mut Vec<String>, idx: usize, value: f64, decimals: u3
     format_f64_fixed_into(ensure_field(out, idx), value, decimals);
 }
 
-fn cached_datetime<'a>(cache: &'a mut DateTimeCache, dt: &DateTime<FixedOffset>) -> &'a str {
-    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(dt) {
+pub(crate) fn cached_datetime<'a>(
+    cache: &'a mut DateTimeCache,
+    dt: &DateTime<FixedOffset>,
+) -> &'a str {
+    let key = (*dt, dt.offset().local_minus_utc());
+    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(&key) {
         cache.clear();
     }
-    cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
+    cache.entry(key).or_insert_with(|| format_rfc3339(dt))
 }
 
 fn cached_optional_datetime<'a>(
     cache: &'a mut DateTimeCache,
     dt: Option<&DateTime<FixedOffset>>,
 ) -> Option<&'a str> {
-    match dt {
-        Some(dt) => Some(cached_datetime(cache, dt)),
-        None => None,
-    }
+    dt.map(|dt| cached_datetime(cache, dt))
 }
 
 fn write_json_f64<W: std::io::Write + ?Sized>(writer: &mut W, value: f64) -> Result<(), String> {
@@ -206,7 +208,7 @@ pub(crate) enum SunriseKind {
 }
 
 impl SunriseKind {
-    fn from_result(result: &SunriseResult<impl std::any::Any>) -> Self {
+    fn from_result<T>(result: &SunriseResult<T>) -> Self {
         match result {
             SunriseResult::RegularDay { .. } => Self::Normal,
             SunriseResult::AllDay { .. } => Self::AllDay,
@@ -240,8 +242,20 @@ impl PositionRow {
             self.zenith
         }
     }
+}
 
-    fn fill_csv_values(
+impl OutputRow for PositionRow {
+    type Layout = PositionLayout;
+
+    fn normalize(result: &CalculationResult) -> Self {
+        normalize_position_result(result)
+    }
+
+    fn headers(layout: Self::Layout) -> Vec<&'static str> {
+        layout.csv_headers()
+    }
+
+    fn csv_values(
         &self,
         params: &Parameters,
         layout: PositionLayout,
@@ -299,7 +313,7 @@ impl PositionRow {
         out.truncate(idx);
     }
 
-    fn write_json_line(
+    fn write_json(
         &self,
         params: &Parameters,
         layout: PositionLayout,
@@ -411,8 +425,18 @@ pub(crate) struct SunriseRow {
     pub astro_end: Option<DateTime<FixedOffset>>,
 }
 
-impl SunriseRow {
-    fn fill_csv_values(
+impl OutputRow for SunriseRow {
+    type Layout = SunriseLayout;
+
+    fn normalize(result: &CalculationResult) -> Self {
+        normalize_sunrise_result(result)
+    }
+
+    fn headers(layout: Self::Layout) -> Vec<&'static str> {
+        layout.csv_headers()
+    }
+
+    fn csv_values(
         &self,
         _params: &Parameters,
         layout: SunriseLayout,
@@ -462,7 +486,7 @@ impl SunriseRow {
         out.truncate(idx);
     }
 
-    fn write_json_line(
+    fn write_json(
         &self,
         _params: &Parameters,
         layout: SunriseLayout,
@@ -629,7 +653,7 @@ impl SunriseLayout {
     }
 }
 
-trait OutputRowExt: Sized {
+trait OutputRow: Sized {
     type Layout: Copy;
 
     fn normalize(result: &CalculationResult) -> Self;
@@ -649,72 +673,6 @@ trait OutputRowExt: Sized {
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String>;
-}
-
-impl OutputRowExt for PositionRow {
-    type Layout = PositionLayout;
-
-    fn normalize(result: &CalculationResult) -> Self {
-        normalize_position_result(result)
-    }
-
-    fn headers(layout: Self::Layout) -> Vec<&'static str> {
-        layout.csv_headers()
-    }
-
-    fn csv_values(
-        &self,
-        params: &Parameters,
-        layout: Self::Layout,
-        datetime_cache: &mut DateTimeCache,
-        fixed_decimal_cache: &mut FixedDecimalCache,
-        out: &mut Vec<String>,
-    ) {
-        self.fill_csv_values(params, layout, datetime_cache, fixed_decimal_cache, out);
-    }
-
-    fn write_json(
-        &self,
-        params: &Parameters,
-        layout: Self::Layout,
-        writer: &mut dyn std::io::Write,
-        datetime_cache: &mut DateTimeCache,
-    ) -> Result<(), String> {
-        self.write_json_line(params, layout, writer, datetime_cache)
-    }
-}
-
-impl OutputRowExt for SunriseRow {
-    type Layout = SunriseLayout;
-
-    fn normalize(result: &CalculationResult) -> Self {
-        normalize_sunrise_result(result)
-    }
-
-    fn headers(layout: Self::Layout) -> Vec<&'static str> {
-        layout.csv_headers()
-    }
-
-    fn csv_values(
-        &self,
-        params: &Parameters,
-        layout: Self::Layout,
-        datetime_cache: &mut DateTimeCache,
-        fixed_decimal_cache: &mut FixedDecimalCache,
-        out: &mut Vec<String>,
-    ) {
-        self.fill_csv_values(params, layout, datetime_cache, fixed_decimal_cache, out);
-    }
-
-    fn write_json(
-        &self,
-        params: &Parameters,
-        layout: Self::Layout,
-        writer: &mut dyn std::io::Write,
-        datetime_cache: &mut DateTimeCache,
-    ) -> Result<(), String> {
-        self.write_json_line(params, layout, writer, datetime_cache)
-    }
 }
 
 pub(crate) fn normalize_position_result(result: &CalculationResult) -> PositionRow {
@@ -939,7 +897,7 @@ fn dispatch_buffered_output<W: std::io::Write>(
     Ok(count)
 }
 
-fn row_from_result<R: OutputRowExt>(
+fn row_from_result<R: OutputRow>(
     result: Result<CalculationResult, String>,
 ) -> Result<R, OutputError> {
     Ok(R::normalize(&result.map_err(OutputError::from)?))
@@ -958,7 +916,7 @@ fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
         .collect()
 }
 
-fn write_rows<W: std::io::Write, R: OutputRowExt>(
+fn write_rows<W: std::io::Write, R: OutputRow>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     layout: R::Layout,
@@ -967,65 +925,15 @@ fn write_rows<W: std::io::Write, R: OutputRowExt>(
 ) -> Result<usize, OutputError> {
     let headers = R::headers(layout);
     let mut count = 0;
-    let mut header_written = false;
     let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
     let mut fixed_decimal_cache = FixedDecimalCache::with_capacity(FIXED_DECIMAL_CACHE_CAPACITY);
     let mut row_values = Vec::new();
-
-    if params.output.format == OutputFormat::Text {
-        let mut iter = results;
-        let Some(first) = iter.next() else {
-            return Ok(0);
-        };
-
-        let first_row = row_from_result::<R>(first)?;
-        first_row.csv_values(
-            params,
-            layout,
-            &mut datetime_cache,
-            &mut fixed_decimal_cache,
-            &mut row_values,
-        );
-
-        let widths = header_widths(&headers, &row_values);
-
-        if params.output.headers {
-            write_pretty_header(writer, &headers, &widths)?;
-        }
-        write_pretty_row(writer, &headers, &widths, &row_values)?;
-        count += 1;
-        if flush_each {
-            writer.flush().map_err(OutputError::from)?;
-        }
-
-        for result in iter {
-            let row = row_from_result::<R>(result)?;
-            row.csv_values(
-                params,
-                layout,
-                &mut datetime_cache,
-                &mut fixed_decimal_cache,
-                &mut row_values,
-            );
-            write_pretty_row(writer, &headers, &widths, &row_values)?;
-            count += 1;
-            if flush_each {
-                writer.flush().map_err(OutputError::from)?;
-            }
-        }
-
-        return Ok(count);
-    }
+    let mut widths = Vec::new();
 
     for result in results {
         let row = row_from_result::<R>(result)?;
-
         match params.output.format {
-            OutputFormat::Csv => {
-                if params.output.headers && !header_written {
-                    write_csv_line(writer, headers.iter()).map_err(OutputError::from)?;
-                    header_written = true;
-                }
+            OutputFormat::Text | OutputFormat::Csv => {
                 row.csv_values(
                     params,
                     layout,
@@ -1033,19 +941,28 @@ fn write_rows<W: std::io::Write, R: OutputRowExt>(
                     &mut fixed_decimal_cache,
                     &mut row_values,
                 );
-                write_csv_line(writer, row_values.iter()).map_err(OutputError::from)?;
+                if params.output.format == OutputFormat::Text {
+                    if count == 0 {
+                        widths = header_widths(&headers, &row_values);
+                        if params.output.headers {
+                            write_pretty_header(writer, &headers, &widths)?;
+                        }
+                    }
+                    write_pretty_row(writer, &headers, &widths, &row_values)?;
+                } else {
+                    if count == 0 && params.output.headers {
+                        write_csv_line(writer, headers.iter())?;
+                    }
+                    write_csv_line(writer, row_values.iter())?;
+                }
             }
-            OutputFormat::Json => row
-                .write_json(params, layout, writer, &mut datetime_cache)
-                .map_err(OutputError::from)?,
-            OutputFormat::Text => unreachable!("handled above"),
+            OutputFormat::Json => row.write_json(params, layout, writer, &mut datetime_cache)?,
             #[cfg(feature = "parquet")]
             OutputFormat::Parquet => return Err(OutputError::from("Unsupported format")),
         }
-
         count += 1;
         if flush_each {
-            writer.flush().map_err(OutputError::from)?;
+            writer.flush()?;
         }
     }
 

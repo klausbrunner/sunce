@@ -25,9 +25,9 @@ include = [
 [dependencies]
 chrono = "0.4"
 chrono-tz = "0.10"
-solar-positioning = "0.5"
-arrow = { version = "59", default-features = false, optional = true }
-parquet = { version = "59", features = ["arrow", "snap"], default-features = false, optional = true }
+solar-positioning = "0.6"
+arrow = { version = "60", default-features = false, optional = true }
+parquet = { version = "60", features = ["arrow", "snap"], default-features = false, optional = true }
 iana-time-zone = "0.1"
 serde = "1"
 serde_json = "1"

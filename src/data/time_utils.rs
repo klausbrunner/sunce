@@ -119,11 +119,10 @@ impl TimezoneInfo {
     pub fn to_datetime_from_local(&self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
         match self {
             TimezoneInfo::Fixed(offset) => offset.from_local_datetime(dt).single(),
-            TimezoneInfo::Named(tz) => match tz.from_local_datetime(dt) {
-                chrono::LocalResult::None => None,
-                chrono::LocalResult::Single(dt) => Some(dt.fixed_offset()),
-                chrono::LocalResult::Ambiguous(dt1, _dt2) => Some(dt1.fixed_offset()),
-            },
+            TimezoneInfo::Named(tz) => tz
+                .from_local_datetime(dt)
+                .earliest()
+                .map(|dt| dt.fixed_offset()),
         }
     }
 }
@@ -154,7 +153,7 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
 
     if let Ok(raw_seconds) = s.parse::<i64>() {
         let seconds = ensure_positive(raw_seconds)?;
-        return Ok(Duration::seconds(seconds));
+        return Duration::try_seconds(seconds).ok_or_else(|| format!("Step is too large: '{}'", s));
     }
 
     if s.len() < 2 {
@@ -164,7 +163,7 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
         ));
     }
 
-    let (num_str, unit) = s.split_at(s.len() - 1);
+    let (num_str, unit) = s.split_at(s.char_indices().next_back().unwrap().0);
     let value = num_str.parse::<i64>().map_err(|_| {
         format!(
             "Invalid step value in '{}'. Use an integer before the unit (e.g., 15m)",
@@ -174,10 +173,10 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
     let positive = ensure_positive(value)?;
 
     let duration = match unit {
-        "s" => Duration::seconds(positive),
-        "m" => Duration::minutes(positive),
-        "h" => Duration::hours(positive),
-        "d" => Duration::days(positive),
+        "s" => Duration::try_seconds(positive),
+        "m" => Duration::try_minutes(positive),
+        "h" => Duration::try_hours(positive),
+        "d" => Duration::try_days(positive),
         _ => {
             return Err(format!(
                 "Invalid step unit in '{}'. Supported units: s, m, h, d",
@@ -186,7 +185,7 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
         }
     };
 
-    Ok(duration)
+    duration.ok_or_else(|| format!("Step is too large: '{}'", s))
 }
 
 pub fn is_date_without_time(s: &str) -> bool {
@@ -234,8 +233,5 @@ fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {
 }
 
 fn parse_timezone_env(value: Option<String>) -> Option<TimezoneInfo> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .and_then(parse_timezone_spec)
+    parse_timezone_override(value.as_deref())
 }

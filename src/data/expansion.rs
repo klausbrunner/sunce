@@ -136,15 +136,11 @@ impl Iterator for TimeStepIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.next?;
-        let candidate = self
-            .tz
-            .to_datetime_from_utc(&(current.naive_utc() + self.step));
-
-        self.next = if candidate <= self.end {
-            Some(candidate)
-        } else {
-            None
-        };
+        self.next = current
+            .naive_utc()
+            .checked_add_signed(self.step)
+            .filter(|candidate| *candidate <= self.end.naive_utc())
+            .map(|candidate| self.tz.to_datetime_from_utc(&candidate));
 
         Some(current)
     }

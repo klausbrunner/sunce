@@ -304,7 +304,8 @@ fn test_delta_t_values() {
         &[],
     );
     let estimated = estimated["deltaT"].parse::<f64>().unwrap();
-    assert!((70.0..=72.0).contains(&estimated));
+    // January 2024 estimate from solar-positioning's 2026 polynomial adaptation.
+    assert!((estimated - 69.127).abs() < 0.001);
 }
 
 #[test]

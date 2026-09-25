@@ -133,3 +133,33 @@ fn test_unicode_in_error_messages() {
         .assert()
         .failure();
 }
+
+#[test]
+fn invalid_steps_report_errors_without_panicking() {
+    for step in ["1é", "é", "9223372036854775807", "9223372036854775807h"] {
+        sunce_command()
+            .args(["52", "13.4", "2024-01-01", "position", "--step", step])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("panicked").not());
+    }
+}
+
+#[test]
+fn step_beyond_date_range_emits_only_start() {
+    assert_eq!(
+        no_header_line_count(
+            &[
+                "52",
+                "13.4",
+                "2024-01-01",
+                "position",
+                "--step=9223372036854775s",
+                "--format=csv",
+                "--no-headers"
+            ],
+            Duration::from_secs(5),
+        ),
+        1
+    );
+}

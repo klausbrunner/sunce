@@ -3,10 +3,9 @@
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
 use crate::output::{
-    PositionLayout, SunriseLayout, format_rfc3339, normalize_position_result,
-    normalize_sunrise_result,
+    DATETIME_CACHE_CAPACITY, DateTimeCache, PositionLayout, SunriseLayout, cached_datetime,
+    normalize_position_result, normalize_sunrise_result,
 };
-use ahash::AHashMap;
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -17,19 +16,6 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
-const DATETIME_CACHE_CAPACITY: usize = 2048;
-type DateTimeCache = AHashMap<chrono::DateTime<chrono::FixedOffset>, String>;
-
-fn cached_datetime<'a>(
-    cache: &'a mut DateTimeCache,
-    dt: &chrono::DateTime<chrono::FixedOffset>,
-) -> &'a str {
-    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(dt) {
-        cache.clear();
-    }
-    cache.entry(*dt).or_insert_with(|| format_rfc3339(dt))
-}
-
 fn append_time(
     builder: &mut StringBuilder,
     time: &chrono::DateTime<chrono::FixedOffset>,

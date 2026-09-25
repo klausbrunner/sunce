@@ -336,3 +336,29 @@ fn test_cartesian_products_with_file_inputs() {
         );
     }
 }
+
+#[test]
+fn preserves_offsets_for_equal_instants() {
+    let input = "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n";
+    let expected = ["2024-01-01T12:00:00+00:00", "2024-01-01T13:00:00+01:00"];
+    for command in ["position", "sunrise"] {
+        let rows = csv_records(&["@-", command, "--format=csv"], Some(input), &[]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["dateTime"].as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let json = output_text(&["@-", command, "--format=json"], Some(input), &[]);
+        let rows: Vec<serde_json::Value> = json
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["dateTime"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
