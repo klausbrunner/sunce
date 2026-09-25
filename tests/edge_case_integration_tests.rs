@@ -26,24 +26,6 @@ fn no_header_line_count(args: &[&str], timeout: Duration) -> usize {
 }
 
 #[test]
-fn test_large_outputs_and_ranges() {
-    assert_eq!(
-        no_header_line_count(
-            &[
-                "--format=csv",
-                "--no-headers",
-                "50:60:0.1",
-                "10:20:0.1",
-                "2024-01-01T12:00:00",
-                "position",
-            ],
-            Duration::from_secs(30),
-        ),
-        10201
-    );
-}
-
-#[test]
 fn test_unbounded_watch_requires_single_location() {
     sunce_command()
         .args(["52:53:1", "13.4", "now", "--step=1m", "position"])

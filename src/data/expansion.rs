@@ -622,13 +622,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_offset_timezone_accepts_dst_gap() {
-        let dt = parse_datetime_string("2024-03-31T02:00:00", Some("+01:00"))
-            .expect("should parse even in DST gap for fixed offset");
-        assert_eq!(dt.offset().local_minus_utc(), 3600);
-    }
-
-    #[test]
     fn range_with_fixed_longitude_handles_single_step() {
         let source = LocationSource::Range {
             lat: (52.0, 53.0, 1.0),

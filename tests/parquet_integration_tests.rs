@@ -63,25 +63,6 @@ fn float_array<'a>(batch: &'a RecordBatch, name: &str) -> &'a Float64Array {
 }
 
 #[test]
-fn test_parquet_position_basic() {
-    let batch = parquet_single_batch(
-        &[
-            "--format=PARQUET",
-            "52.0",
-            "13.4",
-            "2024-01-01T12:00:00",
-            "position",
-        ],
-        &[],
-    );
-    assert_eq!(
-        schema_field_names(&batch),
-        vec!["dateTime", "azimuth", "zenith"]
-    );
-    assert_eq!(batch.num_rows(), 1);
-}
-
-#[test]
 fn test_parquet_position_with_inputs() {
     let batch = parquet_single_batch(
         &[
@@ -208,7 +189,7 @@ fn test_parquet_consistency_with_csv() {
         ],
         &[],
     );
-    assert_eq!(batch.num_columns(), 3);
+    assert_eq!(schema_field_names(&batch), csv_headers);
     assert_eq!(batch.num_rows(), 1);
     assert_eq!(
         string_array(&batch, "dateTime").value(0),

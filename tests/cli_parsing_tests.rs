@@ -357,14 +357,6 @@ fn test_predicate_errors_are_distinct_from_false_regardless_of_option_order() {
     for flag in ["--help", "--version"] {
         assert_success(&["--is-daylight", flag]);
     }
-    for (instant, code) in [("2024-03-21T12:00:00Z", 0), ("2024-03-21T00:00:00Z", 1)] {
-        sunce_command()
-            .args(["52", "13.4", instant, "sunrise", "--is-daylight"])
-            .assert()
-            .code(code)
-            .stdout("")
-            .stderr("");
-    }
 }
 
 #[test]

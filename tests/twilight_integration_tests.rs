@@ -98,20 +98,3 @@ fn test_twilight_csv_and_json_outputs() {
     assert!(json.get("astronomical_start").is_some_and(Value::is_null));
     assert!(json.get("astronomical_end").is_some_and(Value::is_null));
 }
-
-#[test]
-fn test_without_twilight_omits_twilight_columns() {
-    let no_twilight_headers = parse_csv_output(&output_text(&[
-        "--format=csv",
-        "--timezone=UTC",
-        "52.0",
-        "13.4",
-        "2024-06-21",
-        "sunrise",
-    ]))
-    .0;
-    assert_eq!(
-        no_twilight_headers,
-        fields(&["dateTime", "type", "sunrise", "transit", "sunset"])
-    );
-}

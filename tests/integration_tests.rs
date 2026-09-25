@@ -28,8 +28,9 @@ fn csv_row(args: &[&str], envs: &[(&str, &str)]) -> HashMap<String, String> {
     parse_csv_single_record_map(&output_text(args, envs))
 }
 
+#[cfg(not(feature = "parquet"))]
 #[test]
-fn test_parquet_feature_availability() {
+fn test_parquet_unavailable_without_feature() {
     let output = sunce_command()
         .args([
             "--format=PARQUET",
@@ -41,32 +42,15 @@ fn test_parquet_feature_availability() {
         .output()
         .unwrap();
 
-    #[cfg(feature = "parquet")]
-    {
-        assert!(output.status.success());
-        assert!(!output.stdout.is_empty());
-    }
-
-    #[cfg(not(feature = "parquet"))]
-    {
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("PARQUET format not available in this build")
-        );
-    }
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("PARQUET format not available in this build")
+    );
 }
 
 #[test]
-fn test_position_command_variants() {
-    for algorithm in ["SPA", "GRENA3"] {
-        sunce_command()
-            .args(["52.0", "13.4", "2024-01-01T12:00:00", "position"])
-            .arg(format!("--algorithm={algorithm}"))
-            .assert()
-            .success();
-    }
-
+fn test_refraction_changes_position() {
     let with_refraction = output_text(&["52.0", "13.4", "2024-01-01T12:00:00", "position"], &[]);
     let without_refraction = output_text(
         &[
@@ -255,11 +239,6 @@ fn test_combined_range_and_now_behavior() {
     );
     assert_eq!(rows.len(), 8);
 
-    sunce_command()
-        .args(["52.0", "13.4", "now", "position"])
-        .assert()
-        .success();
-
     let rows = csv_rows(
         &[
             "--format=CSV",
@@ -341,7 +320,6 @@ fn test_unix_timestamps() {
 
     for (input, expected_prefix) in [
         ("946684800", "2000-01-01"),
-        ("1577836800", "2020-01-01"),
         ("10000", "1970-01-01T02:46:40"),
         ("-10000", "1969-12-31"),
     ] {

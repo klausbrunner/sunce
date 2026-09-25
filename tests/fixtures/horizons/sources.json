@@ -1,0 +1,606 @@
+{
+  "endpoint": "https://ssd.jpl.nasa.gov/api/horizons_file.api",
+  "retrieved_utc": "2026-09-25T07:39:42.688333+00:00",
+  "seed": 20240925,
+  "sample_count": 3770,
+  "sources": [
+    {
+      "latitude": -80,
+      "longitude": -120,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-120,-80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "a76c6afff7e5e7fd300bf37a2478cc4b06e24322b723708578f34d592a09ae1d",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -80,
+      "longitude": -90,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-90,-80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "4db048ce9dc17396fe7bec6992cd5a2f7b980549c269893167388438114f2178",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -80,
+      "longitude": 0,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'0,-80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "428e9ed7a49e36f2c3c3800eb393246c69ed14e9b4fe1229540974a50f86d793",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -80,
+      "longitude": 60,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'60,-80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "2155e32bd10ac6258f9de2cf74e083f0adf566574973200576909ec95952a3c8",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -80,
+      "longitude": 180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'180,-80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "f8af2495ae492b9759ec529b258fb99044992eed780ac49c22e86589daf48515",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -60,
+      "longitude": -150,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-150,-60,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "081044f9962bd8ce31b8ae836b98f29c321475f05ff2c2bf6b4d7a58aef479b5",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": -40,
+      "longitude": 0,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'0,-40,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "aabb428e4ea1b9188cf85c2daf4e7e7b5e6821c4b82183770f223ec7a75516c0",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 0,
+      "longitude": -180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-180,0,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "6e0b96a5b9373f03fc9793a9fb39c8a0c3379d22082f9b3c7de221d4cd51b563",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 0,
+      "longitude": -120,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-120,0,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "37a7af37d4ca3fa547b3eb1d0bef83bd6885a1e8bde3e1da8aaf5b13b22edd5b",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 0,
+      "longitude": 0,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'0,0,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "cb497e9da1f33e9ffa872d53e531fda3f333261df4410b14bbd083b11ce0504a",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 0,
+      "longitude": 180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'180,0,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "5b14e2ab15175d579033a395069d3016e36e32f226dcf7480c940a33303562c4",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 20,
+      "longitude": 0,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'0,20,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "cc30574c939c53f3064e32a98cf6fd5bbccbbac77fb99afbd61062c3e77f962d",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 40,
+      "longitude": -180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-180,40,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "7aa612bc256270a113f65bff6250038f53d78954edeb1b296e8b88a688ccf19b",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 40,
+      "longitude": 30,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'30,40,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "2020da21c3e466c133240a9b60c67c3269e81183ffe23ea1ede17eb11c52a1ee",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 60,
+      "longitude": -180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-180,60,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "7a7980be436d39dc6238c11ba9afdd6543061f1d87aff12fe2aed21d2a230789",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 60,
+      "longitude": -30,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-30,60,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "4bd5b7477902df1a2602bdfcd1890b9635c9ebb407176334b5c93df473a8a1de",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 60,
+      "longitude": 30,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'30,60,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "57e8305fcc59eb1459d51cabb6d87e97979d0019cd0973dcbf7fadb45ae45267",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": -180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-180,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "9a6f5d5c7d39de78f17b558e90ba3055c1576d8ae13c2ad13c52319622663635",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": -30,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'-30,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "source": "NASA/JPL Horizons API",
+        "version": "1.0"
+      },
+      "response_sha256": "fe9c5e74b2736565647d4f9469b474fd277caf71eb0c3abff65c2da9ebfe47a6",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": 0,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'0,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "4e676d473fa3787a4814855ccc95e45976202018977c8578a6ea519a125a470d",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": 120,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'120,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "bc178db467f9e043a6a2e5e3e6fa8ddf0859c48f32b5c5e9cb6159fb38277ca7",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": 150,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'150,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "76aff0efbd5e853259f9f791a9f14f404f2e198c83f5b3e5ae87725a95b8a582",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    },
+    {
+      "latitude": 80,
+      "longitude": 180,
+      "request": {
+        "COMMAND": "'10'",
+        "EPHEM_TYPE": "'OBSERVER'",
+        "CENTER": "'coord@399'",
+        "COORD_TYPE": "'GEODETIC'",
+        "SITE_COORD": "'180,80,0'",
+        "TLIST_TYPE": "'CAL'",
+        "TIME_TYPE": "'UT'",
+        "QUANTITIES": "'4'",
+        "APPARENT": "'AIRLESS'",
+        "CSV_FORMAT": "'YES'",
+        "TIME_DIGITS": "'SECONDS'",
+        "EXTRA_PREC": "'YES'",
+        "OBJ_DATA": "'NO'",
+        "ELEV_CUT": "'-90'"
+      },
+      "signature": {
+        "version": "1.0",
+        "source": "NASA/JPL Horizons API"
+      },
+      "response_sha256": "83d49fcaf2443941e36e5d21a7f06c508e8bb3c308223e94f58fe7a1a472fefa",
+      "header": "Target body name: Sun (10)                        {source: DE441}\nCenter body name: Earth (399)                     {source: DE441}\nEOP file        : eop.260924.p261221\nEOP coverage    : DATA-BASED 1962-JAN-20 TO 2026-SEP-24. PREDICTS-> 2026-DEC-20"
+    }
+  ]
+}

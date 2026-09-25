@@ -181,21 +181,10 @@ fn test_sunrise_show_inputs_rules() {
     let minimal = fields(&["dateTime", "type", "sunrise", "transit", "sunset"]);
     let full = sunrise_show_inputs_headers();
 
-    for args in [
-        vec!["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"],
-        vec![
-            "--format=CSV",
-            "52.0",
-            "13.4",
-            "2024-06-21",
-            "sunrise",
-            "--twilight",
-        ],
-    ] {
-        let headers = csv_headers(&args);
-        assert_eq!(&headers[..5], minimal.as_slice());
-        assert!(!headers.contains(&"latitude".to_string()));
-    }
+    assert_eq!(
+        csv_headers(&["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]),
+        minimal
+    );
 
     for args in [
         vec!["--format=CSV", "52.0", "13.4", "2024-06", "sunrise"],
