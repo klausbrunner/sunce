@@ -3,11 +3,11 @@
 use crate::compute::CalculationResult;
 use crate::data::{Command, OutputFormat, Parameters};
 use crate::error::OutputError;
+pub(crate) use crate::events::EventRow;
 use ahash::AHashMap;
 use chrono::{DateTime, FixedOffset};
 use serde::Serializer;
 use serde::ser::SerializeMap;
-use solar_positioning::SunriseResult;
 use std::fmt::Write as _;
 
 const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
@@ -185,44 +185,6 @@ fn cached_optional_datetime<'a>(
 
 fn write_json_f64<W: std::io::Write + ?Sized>(writer: &mut W, value: f64) -> Result<(), String> {
     serde_json::to_writer(writer, &value).map_err(|e| e.to_string())
-}
-
-fn extract_sunrise_times<T>(result: &SunriseResult<T>) -> (Option<&T>, &T, Option<&T>) {
-    match result {
-        SunriseResult::RegularDay {
-            sunrise,
-            transit,
-            sunset,
-        } => (Some(sunrise), transit, Some(sunset)),
-        SunriseResult::AllDay { transit } | SunriseResult::AllNight { transit } => {
-            (None, transit, None)
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum SunriseKind {
-    Normal,
-    AllDay,
-    AllNight,
-}
-
-impl SunriseKind {
-    fn from_result<T>(result: &SunriseResult<T>) -> Self {
-        match result {
-            SunriseResult::RegularDay { .. } => Self::Normal,
-            SunriseResult::AllDay { .. } => Self::AllDay,
-            SunriseResult::AllNight { .. } => Self::AllNight,
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "NORMAL",
-            Self::AllDay => "ALL_DAY",
-            Self::AllNight => "ALL_NIGHT",
-        }
-    }
 }
 
 pub(crate) struct PositionRow {
@@ -408,28 +370,11 @@ fn write_position_json_string<W: std::io::Write + ?Sized>(
     writer.write_all(b"\"").map_err(|e| e.to_string())
 }
 
-pub(crate) struct SunriseRow {
-    pub lat: f64,
-    pub lon: f64,
-    pub date_time: DateTime<FixedOffset>,
-    pub deltat: f64,
-    pub kind: SunriseKind,
-    pub sunrise: Option<DateTime<FixedOffset>>,
-    pub transit: DateTime<FixedOffset>,
-    pub sunset: Option<DateTime<FixedOffset>>,
-    pub civil_start: Option<DateTime<FixedOffset>>,
-    pub civil_end: Option<DateTime<FixedOffset>>,
-    pub nautical_start: Option<DateTime<FixedOffset>>,
-    pub nautical_end: Option<DateTime<FixedOffset>>,
-    pub astro_start: Option<DateTime<FixedOffset>>,
-    pub astro_end: Option<DateTime<FixedOffset>>,
-}
-
-impl OutputRow for SunriseRow {
-    type Layout = SunriseLayout;
+impl OutputRow for EventRow {
+    type Layout = EventLayout;
 
     fn normalize(result: &CalculationResult) -> Self {
-        normalize_sunrise_result(result)
+        normalize_event_result(result)
     }
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
@@ -439,120 +384,62 @@ impl OutputRow for SunriseRow {
     fn csv_values(
         &self,
         _params: &Parameters,
-        layout: SunriseLayout,
+        layout: EventLayout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
         out: &mut Vec<String>,
     ) {
         let mut idx = 0;
-
         if layout.show_inputs {
             set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lat, 5);
             idx += 1;
             set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lon, 5);
             idx += 1;
-            set_cached_datetime(out, idx, datetime_cache, &self.date_time);
-            idx += 1;
+        }
+        write!(ensure_field(out, idx), "{}", self.date).expect("writing to a string cannot fail");
+        idx += 1;
+        if layout.show_inputs {
             set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.deltat, 3);
             idx += 1;
-        } else {
-            set_cached_datetime(out, idx, datetime_cache, &self.date_time);
-            idx += 1;
         }
-
-        set_field(out, idx, self.kind.label());
-        idx += 1;
-        set_cached_optional_datetime(out, idx, datetime_cache, self.sunrise.as_ref());
-        idx += 1;
-        set_cached_datetime(out, idx, datetime_cache, &self.transit);
-        idx += 1;
-        set_cached_optional_datetime(out, idx, datetime_cache, self.sunset.as_ref());
-        idx += 1;
-
-        if layout.include_twilight {
-            set_cached_optional_datetime(out, idx, datetime_cache, self.civil_start.as_ref());
-            idx += 1;
-            set_cached_optional_datetime(out, idx, datetime_cache, self.civil_end.as_ref());
-            idx += 1;
-            set_cached_optional_datetime(out, idx, datetime_cache, self.nautical_start.as_ref());
-            idx += 1;
-            set_cached_optional_datetime(out, idx, datetime_cache, self.nautical_end.as_ref());
-            idx += 1;
-            set_cached_optional_datetime(out, idx, datetime_cache, self.astro_start.as_ref());
-            idx += 1;
-            set_cached_optional_datetime(out, idx, datetime_cache, self.astro_end.as_ref());
-            idx += 1;
-        }
-        out.truncate(idx);
+        set_field(out, idx, self.day_state.label());
+        set_field(out, idx + 1, self.event.unwrap_or(""));
+        set_cached_optional_datetime(out, idx + 2, datetime_cache, self.time.as_ref());
+        out.truncate(idx + 3);
     }
 
     fn write_json(
         &self,
         _params: &Parameters,
-        layout: SunriseLayout,
+        layout: EventLayout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String> {
-        let field_count =
-            (if layout.show_inputs { 8 } else { 5 }) + usize::from(layout.include_twilight) * 6;
-
         let mut serializer = serde_json::Serializer::new(&mut *writer);
         let mut map = serializer
-            .serialize_map(Some(field_count))
+            .serialize_map(Some(if layout.show_inputs { 7 } else { 4 }))
             .map_err(|e| e.to_string())?;
-
         if layout.show_inputs {
             map.serialize_entry("latitude", &self.lat)
                 .map_err(|e| e.to_string())?;
             map.serialize_entry("longitude", &self.lon)
                 .map_err(|e| e.to_string())?;
-            let date_time = cached_datetime(datetime_cache, &self.date_time);
-            map.serialize_entry("dateTime", &date_time)
-                .map_err(|e| e.to_string())?;
+        }
+        map.serialize_entry("date", &self.date.to_string())
+            .map_err(|e| e.to_string())?;
+        if layout.show_inputs {
             map.serialize_entry("deltaT", &self.deltat)
                 .map_err(|e| e.to_string())?;
-        } else {
-            let date_time = cached_datetime(datetime_cache, &self.date_time);
-            map.serialize_entry("dateTime", &date_time)
-                .map_err(|e| e.to_string())?;
         }
-
-        map.serialize_entry("type", &self.kind.label())
+        map.serialize_entry("day_state", self.day_state.label())
             .map_err(|e| e.to_string())?;
-        let sunrise = cached_optional_datetime(datetime_cache, self.sunrise.as_ref());
-        map.serialize_entry("sunrise", &sunrise)
+        map.serialize_entry("event", &self.event)
             .map_err(|e| e.to_string())?;
-        let transit = cached_datetime(datetime_cache, &self.transit);
-        map.serialize_entry("transit", &transit)
-            .map_err(|e| e.to_string())?;
-        let sunset = cached_optional_datetime(datetime_cache, self.sunset.as_ref());
-        map.serialize_entry("sunset", &sunset)
-            .map_err(|e| e.to_string())?;
-
-        if layout.include_twilight {
-            let civil_start = cached_optional_datetime(datetime_cache, self.civil_start.as_ref());
-            map.serialize_entry("civil_start", &civil_start)
-                .map_err(|e| e.to_string())?;
-            let civil_end = cached_optional_datetime(datetime_cache, self.civil_end.as_ref());
-            map.serialize_entry("civil_end", &civil_end)
-                .map_err(|e| e.to_string())?;
-            let nautical_start =
-                cached_optional_datetime(datetime_cache, self.nautical_start.as_ref());
-            map.serialize_entry("nautical_start", &nautical_start)
-                .map_err(|e| e.to_string())?;
-            let nautical_end = cached_optional_datetime(datetime_cache, self.nautical_end.as_ref());
-            map.serialize_entry("nautical_end", &nautical_end)
-                .map_err(|e| e.to_string())?;
-            let astronomical_start =
-                cached_optional_datetime(datetime_cache, self.astro_start.as_ref());
-            map.serialize_entry("astronomical_start", &astronomical_start)
-                .map_err(|e| e.to_string())?;
-            let astronomical_end =
-                cached_optional_datetime(datetime_cache, self.astro_end.as_ref());
-            map.serialize_entry("astronomical_end", &astronomical_end)
-                .map_err(|e| e.to_string())?;
-        }
-
+        map.serialize_entry(
+            "time",
+            &cached_optional_datetime(datetime_cache, self.time.as_ref()),
+        )
+        .map_err(|e| e.to_string())?;
         map.end().map_err(|e| e.to_string())?;
         writeln!(writer).map_err(|e| e.to_string())
     }
@@ -610,45 +497,24 @@ impl PositionLayout {
 }
 
 #[derive(Copy, Clone)]
-pub(crate) struct SunriseLayout {
+pub(crate) struct EventLayout {
     pub show_inputs: bool,
-    pub include_twilight: bool,
 }
 
-impl SunriseLayout {
+impl EventLayout {
     pub(crate) fn from_params(params: &Parameters) -> Self {
         Self {
             show_inputs: params.output.should_show_inputs(),
-            include_twilight: params.calculation.twilight,
         }
     }
 
     pub(crate) fn csv_headers(self) -> Vec<&'static str> {
-        let mut headers = Vec::with_capacity(if self.show_inputs {
-            if self.include_twilight { 14 } else { 8 }
-        } else if self.include_twilight {
-            11
+        let mut headers = if self.show_inputs {
+            vec!["latitude", "longitude", "date", "deltaT"]
         } else {
-            5
-        });
-
-        if self.show_inputs {
-            headers.extend(["latitude", "longitude", "dateTime", "deltaT"]);
-        } else {
-            headers.push("dateTime");
-        }
-
-        headers.extend(["type", "sunrise", "transit", "sunset"]);
-        if self.include_twilight {
-            headers.extend([
-                "civil_start",
-                "civil_end",
-                "nautical_start",
-                "nautical_end",
-                "astronomical_start",
-                "astronomical_end",
-            ]);
-        }
+            vec!["date"]
+        };
+        headers.extend(["day_state", "event", "time"]);
         headers
     }
 }
@@ -693,70 +559,14 @@ pub(crate) fn normalize_position_result(result: &CalculationResult) -> PositionR
             zenith: position.zenith_angle(),
         }
     } else {
-        unreachable!("position command produced a sunrise result")
+        unreachable!("position command produced an event result")
     }
 }
 
-pub(crate) fn normalize_sunrise_result(result: &CalculationResult) -> SunriseRow {
+pub(crate) fn normalize_event_result(result: &CalculationResult) -> EventRow {
     match result {
-        CalculationResult::Sunrise {
-            lat,
-            lon,
-            date,
-            result,
-            deltat,
-        } => {
-            let (sunrise, transit, sunset) = extract_sunrise_times(result);
-            SunriseRow {
-                lat: *lat,
-                lon: *lon,
-                date_time: *date,
-                deltat: *deltat,
-                kind: SunriseKind::from_result(result),
-                sunrise: sunrise.copied(),
-                transit: *transit,
-                sunset: sunset.copied(),
-                civil_start: None,
-                civil_end: None,
-                nautical_start: None,
-                nautical_end: None,
-                astro_start: None,
-                astro_end: None,
-            }
-        }
-        CalculationResult::SunriseWithTwilight {
-            lat,
-            lon,
-            date,
-            sunrise_sunset,
-            civil,
-            nautical,
-            astronomical,
-            deltat,
-        } => {
-            let (sunrise, transit, sunset) = extract_sunrise_times(sunrise_sunset);
-            let (civil_start, _, civil_end) = extract_sunrise_times(civil);
-            let (nautical_start, _, nautical_end) = extract_sunrise_times(nautical);
-            let (astro_start, _, astro_end) = extract_sunrise_times(astronomical);
-
-            SunriseRow {
-                lat: *lat,
-                lon: *lon,
-                date_time: *date,
-                deltat: *deltat,
-                kind: SunriseKind::from_result(sunrise_sunset),
-                sunrise: sunrise.copied(),
-                transit: *transit,
-                sunset: sunset.copied(),
-                civil_start: civil_start.copied(),
-                civil_end: civil_end.copied(),
-                nautical_start: nautical_start.copied(),
-                nautical_end: nautical_end.copied(),
-                astro_start: astro_start.copied(),
-                astro_end: astro_end.copied(),
-            }
-        }
-        _ => unreachable!("sunrise command produced a position result"),
+        CalculationResult::Event(row) => *row,
+        _ => unreachable!("events command produced a position result"),
     }
 }
 
@@ -798,11 +608,11 @@ fn suggested_column_width(name: &str) -> usize {
         "latitude" | "longitude" => 10,
         "elevation" => 9,
         "pressure" | "temperature" | "deltaT" => 10,
-        "dateTime" => 25,
+        "dateTime" | "time" => 25,
+        "date" => 10,
+        "day_state" => 10,
+        "event" => 18,
         "azimuth" | "zenith" | "elevation-angle" => 10,
-        "type" => 8,
-        "sunrise" | "transit" | "sunset" | "civil_start" | "civil_end" | "nautical_start"
-        | "nautical_end" | "astronomical_start" | "astronomical_end" => 25,
         _ => name.len(),
     }
 }
@@ -885,10 +695,10 @@ fn dispatch_buffered_output<W: std::io::Write>(
             &mut writer,
             flush_each_record,
         ),
-        Command::Sunrise => write_rows::<_, SunriseRow>(
+        Command::Events => write_rows::<_, EventRow>(
             results,
             params,
-            SunriseLayout::from_params(params),
+            EventLayout::from_params(params),
             &mut writer,
             flush_each_record,
         ),
@@ -1158,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn sunrise_text_and_csv_field_order_match() {
+    fn events_text_and_csv_field_order_match() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 0, 0, 0).unwrap();
         let params = Parameters {
@@ -1172,21 +982,14 @@ mod tests {
             },
             ..Parameters::default()
         };
-        let row = SunriseRow {
+        let row = EventRow {
             lat: 52.0,
             lon: 13.4,
-            date_time: dt,
+            date: dt.date_naive(),
             deltat: 69.123,
-            kind: SunriseKind::Normal,
-            sunrise: Some(dt + chrono::Duration::hours(4)),
-            transit: dt + chrono::Duration::hours(12),
-            sunset: Some(dt + chrono::Duration::hours(20)),
-            civil_start: Some(dt + chrono::Duration::hours(3)),
-            civil_end: Some(dt + chrono::Duration::hours(21)),
-            nautical_start: Some(dt + chrono::Duration::hours(2)),
-            nautical_end: Some(dt + chrono::Duration::hours(22)),
-            astro_start: Some(dt + chrono::Duration::hours(1)),
-            astro_end: Some(dt + chrono::Duration::hours(23)),
+            day_state: crate::events::DayState::Crossing,
+            event: Some("sunrise"),
+            time: Some(dt + chrono::Duration::hours(4)),
         };
 
         let mut values = Vec::new();
@@ -1194,27 +997,20 @@ mod tests {
         let mut decimal_cache = FixedDecimalCache::new();
         row.csv_values(
             &params,
-            SunriseLayout::from_params(&params),
+            EventLayout::from_params(&params),
             &mut datetime_cache,
             &mut decimal_cache,
             &mut values,
         );
 
         let expected = vec![
-            "52.00000".to_string(),
-            "13.40000".to_string(),
-            "2024-06-21T00:00:00+00:00".to_string(),
-            "69.123".to_string(),
-            "NORMAL".to_string(),
-            "2024-06-21T04:00:00+00:00".to_string(),
-            "2024-06-21T12:00:00+00:00".to_string(),
-            "2024-06-21T20:00:00+00:00".to_string(),
-            "2024-06-21T03:00:00+00:00".to_string(),
-            "2024-06-21T21:00:00+00:00".to_string(),
-            "2024-06-21T02:00:00+00:00".to_string(),
-            "2024-06-21T22:00:00+00:00".to_string(),
-            "2024-06-21T01:00:00+00:00".to_string(),
-            "2024-06-21T23:00:00+00:00".to_string(),
+            "52.00000",
+            "13.40000",
+            "2024-06-21",
+            "69.123",
+            "CROSSING",
+            "sunrise",
+            "2024-06-21T04:00:00+00:00",
         ];
         assert_eq!(values, expected);
 

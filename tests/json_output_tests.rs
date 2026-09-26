@@ -1,5 +1,5 @@
 mod common;
-use common::{parse_csv_output, parse_json_output, sunce_command};
+use common::{parse_csv_output, parse_json_lines, parse_json_output, sunce_command};
 
 fn output_text(args: &[&str]) -> String {
     let output = sunce_command().args(args).output().unwrap();
@@ -8,7 +8,7 @@ fn output_text(args: &[&str]) -> String {
 }
 
 fn json_keys(args: &[&str]) -> Vec<String> {
-    let mut keys = parse_json_output(&output_text(args))
+    let mut keys = parse_json_lines(&output_text(args))[0]
         .as_object()
         .unwrap()
         .keys()
@@ -48,25 +48,27 @@ fn json_position_show_inputs_includes_site_elevation_and_angle() {
 }
 
 #[test]
-fn json_sunrise_without_twilight_has_expected_fields() {
-    let json = parse_json_output(&output_text(&[
+fn json_events_without_twilight_has_expected_fields() {
+    let rows = parse_json_lines(&output_text(&[
         "--format=json",
+        "--timezone=UTC",
         "52.0",
         "13.4",
         "2024-06-21",
-        "sunrise",
+        "events",
     ]));
-
-    let keys = json.as_object().unwrap();
-    assert!(keys.contains_key("dateTime"));
-    assert!(keys.contains_key("type"));
-    assert!(keys.contains_key("sunrise"));
-    assert!(keys.contains_key("transit"));
-    assert!(keys.contains_key("sunset"));
-    assert!(!keys.contains_key("latitude"));
-    assert!(!keys.contains_key("longitude"));
-    assert!(!keys.contains_key("deltaT"));
-    assert!(!keys.contains_key("civil_start"));
+    assert_eq!(rows.len(), 3);
+    for row in rows {
+        let mut keys = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, ["date", "day_state", "event", "time"]);
+        assert!(row["event"].is_string() && row["time"].is_string());
+    }
 }
 
 #[test]
@@ -96,14 +98,14 @@ fn position_csv_headers_and_json_keys_match() {
 }
 
 #[test]
-fn sunrise_csv_headers_and_json_keys_match() {
+fn events_csv_headers_and_json_keys_match() {
     let csv = csv_headers(&[
         "--format=csv",
         "--show-inputs",
         "52.0",
         "13.4",
         "2024-06-21",
-        "sunrise",
+        "events",
         "--twilight",
     ]);
     let json = json_keys(&[
@@ -112,7 +114,7 @@ fn sunrise_csv_headers_and_json_keys_match() {
         "52.0",
         "13.4",
         "2024-06-21",
-        "sunrise",
+        "events",
         "--twilight",
     ]);
 

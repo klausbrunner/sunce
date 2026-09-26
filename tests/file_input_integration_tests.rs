@@ -111,7 +111,7 @@ fn test_file_comments_and_mixed_delimiters() {
 }
 
 #[test]
-fn test_basic_sunrise_file_inputs() {
+fn test_basic_events_file_inputs() {
     let dir = tempdir().unwrap();
     let paired = file_arg(
         dir.path(),
@@ -119,9 +119,9 @@ fn test_basic_sunrise_file_inputs() {
         "52.0,13.4,2024-06-21\n40.42,-3.70,2024-12-21\n",
     );
 
-    let rows = csv_records(&["--format=CSV", &paired, "sunrise"], None, &[]);
-    assert_eq!(rows.len(), 2);
-    assert_field_prefixes(&rows, "dateTime", &["2024-06-21", "2024-12-21"]);
+    let rows = csv_records(&["--format=CSV", &paired, "events"], None, &[]);
+    assert_eq!(rows.len(), 6);
+    assert_field_prefixes(&rows, "date", &["2024-06-21", "2024-12-21"]);
 }
 
 #[test]
@@ -279,31 +279,6 @@ fn test_position_file_input_oracles_from_fixtures() {
 }
 
 #[test]
-fn test_sunrise_file_input_oracles_from_fixtures() {
-    let dir = tempdir().unwrap();
-    let coords = file_arg(dir.path(), "coords.txt", "52.0,13.4\n40.42,-3.70\n");
-    let berlin = fixture_row("sunrise_oracles.csv", "berlin_solstice");
-    let madrid = fixture_row("sunrise_oracles.csv", "madrid_solstice");
-    let rows = csv_records(
-        &["--format=CSV", &coords, "2024-06-21", "sunrise"],
-        None,
-        &[("TZ", "UTC")],
-    );
-
-    for oracle in [&berlin, &madrid] {
-        assert_oracle_fields(
-            &rows,
-            &[
-                ("latitude", oracle["latitude"].as_str()),
-                ("longitude", oracle["longitude"].as_str()),
-            ],
-            oracle,
-            &["sunrise", "sunset"],
-        );
-    }
-}
-
-#[test]
 fn test_cartesian_products_with_file_inputs() {
     let dir = tempdir().unwrap();
     let times = file_arg(
@@ -341,24 +316,23 @@ fn test_cartesian_products_with_file_inputs() {
 fn preserves_offsets_for_equal_instants() {
     let input = "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n";
     let expected = ["2024-01-01T12:00:00+00:00", "2024-01-01T13:00:00+01:00"];
-    for command in ["position", "sunrise"] {
-        let rows = csv_records(&["@-", command, "--format=csv"], Some(input), &[]);
-        assert_eq!(
-            rows.iter()
-                .map(|row| row["dateTime"].as_str())
-                .collect::<Vec<_>>(),
-            expected
-        );
-        let json = output_text(&["@-", command, "--format=json"], Some(input), &[]);
-        let rows: Vec<serde_json::Value> = json
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(
-            rows.iter()
-                .map(|row| row["dateTime"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            expected
-        );
-    }
+    let command = "position";
+    let rows = csv_records(&["@-", command, "--format=csv"], Some(input), &[]);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["dateTime"].as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let json = output_text(&["@-", command, "--format=json"], Some(input), &[]);
+    let rows: Vec<serde_json::Value> = json
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["dateTime"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
 }

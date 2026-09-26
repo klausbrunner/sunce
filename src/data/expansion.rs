@@ -1,7 +1,7 @@
 //! Input expansion for ranges, files, and cartesian products.
 
 use super::time_utils::{
-    TimezoneInfo, convert_datetime_to_timezone, get_timezone_info, parse_datetime_string,
+    InputTime, TimezoneInfo, convert_datetime_to_timezone, get_timezone_info, parse_input_time,
 };
 use super::types::{
     CoordTimeResult, CoordTimeStream, InputPath, LocationSource, LocationStream, TimeSource,
@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
-type TimeIter = Box<dyn Iterator<Item = Result<DateTime<FixedOffset>, String>>>;
+type TimeIter = Box<dyn Iterator<Item = Result<InputTime, String>>>;
 
 struct CoordRangeIter {
     start: f64,
@@ -87,7 +87,7 @@ impl CalendarDayIter {
 }
 
 impl Iterator for CalendarDayIter {
-    type Item = Result<DateTime<FixedOffset>, String>;
+    type Item = Result<InputTime, String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let date = self.next?;
@@ -103,6 +103,10 @@ impl Iterator for CalendarDayIter {
         Some(
             self.tz
                 .to_datetime_from_local(&midnight)
+                .map(|datetime| InputTime {
+                    datetime,
+                    zone: self.tz,
+                })
                 .ok_or_else(|| format!("Midnight does not exist in timezone for {date}")),
         )
     }
@@ -323,7 +327,7 @@ pub fn expand_time_source(
         TimeSource::Single(dt) => Ok(Box::new(std::iter::once(Ok(dt)))),
         TimeSource::Range(partial_date) => {
             let step = step_override.unwrap_or_else(|| {
-                if command == Command::Sunrise || partial_date.len() == 4 {
+                if command == Command::Events || partial_date.len() == 4 {
                     Step(chrono::Duration::days(1))
                 } else {
                     Step(chrono::Duration::hours(1))
@@ -340,19 +344,22 @@ pub fn expand_time_source(
                     .to_std()
                     .expect("positive step must convert to std::time::Duration");
                 let mut first = true;
-                let tz_clone = tz_info.clone();
+                let tz_clone = tz_info;
                 let iter = std::iter::from_fn(move || {
                     if !std::mem::take(&mut first) {
                         std::thread::sleep(sleep_duration);
                     }
-                    Some(Ok(convert_datetime_to_timezone(Utc::now(), &tz_clone)))
+                    Some(Ok(InputTime {
+                        datetime: convert_datetime_to_timezone(Utc::now(), &tz_clone),
+                        zone: tz_clone,
+                    }))
                 });
                 Ok(Box::new(iter))
             } else {
-                Ok(Box::new(std::iter::once(Ok(convert_datetime_to_timezone(
-                    Utc::now(),
-                    &tz_info,
-                )))))
+                Ok(Box::new(std::iter::once(Ok(InputTime {
+                    datetime: convert_datetime_to_timezone(Utc::now(), &tz_info),
+                    zone: tz_info,
+                }))))
             }
         }
     }
@@ -472,7 +479,7 @@ fn expand_partial_date(
     let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
     let bounds = naive_bounds_from_partial(&date_str)?;
 
-    if command == Command::Sunrise {
+    if command == Command::Events {
         return Ok(Box::new(CalendarDayIter::new(
             bounds.start.date(),
             bounds.end.date(),
@@ -483,7 +490,12 @@ fn expand_partial_date(
     let start_dt = to_local_datetime(&tz_info, bounds.start, "Start", &date_str)?;
     let end_dt = to_local_datetime(&tz_info, bounds.end, "End", &date_str)?;
 
-    let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(Ok);
+    let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(move |datetime| {
+        Ok(InputTime {
+            datetime,
+            zone: tz_info,
+        })
+    });
 
     Ok(Box::new(iter))
 }
@@ -494,7 +506,7 @@ fn read_times_file(
 ) -> Result<TimeIter, String> {
     let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
         let line = line_res?;
-        parse_datetime_string(&line.content, override_tz.as_ref().map(|tz| tz.as_str()))
+        parse_input_time(&line.content, override_tz.as_ref().map(|tz| tz.as_str()))
             .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))
     });
 
@@ -609,7 +621,7 @@ pub fn expand_paired_file(
         let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
 
         let dt_str = parts[2..].join(" ");
-        let dt = parse_datetime_string(dt_str.trim(), override_tz.as_ref().map(|tz| tz.as_str()))
+        let dt = parse_input_time(dt_str.trim(), override_tz.as_ref().map(|tz| tz.as_str()))
             .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
         Ok((lat, lon, dt))
     });
@@ -674,12 +686,12 @@ mod tests {
     }
 
     #[test]
-    fn sunrise_ranges_stay_at_local_midnight_across_dst() {
+    fn events_ranges_stay_at_local_midnight_across_dst() {
         let times = expand_time_source(
             TimeSource::Range("2026-03".to_string()),
             None,
             Some("Europe/Berlin".parse().expect("valid timezone")),
-            Command::Sunrise,
+            Command::Events,
         )
         .expect("expand month")
         .collect::<Result<Vec<_>, _>>()
@@ -687,7 +699,7 @@ mod tests {
 
         for date in ["2026-03-29", "2026-03-30", "2026-03-31"] {
             assert!(times.iter().any(|dt| {
-                dt.format("%Y-%m-%dT%H:%M:%S").to_string() == format!("{date}T00:00:00")
+                dt.datetime.format("%Y-%m-%dT%H:%M:%S").to_string() == format!("{date}T00:00:00")
             }));
         }
     }

@@ -27,16 +27,15 @@ fn position_show_inputs_headers() -> Vec<String> {
     ])
 }
 
-fn sunrise_show_inputs_headers() -> Vec<String> {
+fn events_show_inputs_headers() -> Vec<String> {
     fields(&[
         "latitude",
         "longitude",
-        "dateTime",
+        "date",
         "deltaT",
-        "type",
-        "sunrise",
-        "transit",
-        "sunset",
+        "day_state",
+        "event",
+        "time",
     ])
 }
 
@@ -177,31 +176,31 @@ fn test_position_json_single_values_do_not_auto_show_inputs() {
 }
 
 #[test]
-fn test_sunrise_show_inputs_rules() {
-    let minimal = fields(&["dateTime", "type", "sunrise", "transit", "sunset"]);
-    let full = sunrise_show_inputs_headers();
+fn test_events_show_inputs_rules() {
+    let minimal = fields(&["date", "day_state", "event", "time"]);
+    let full = events_show_inputs_headers();
 
     assert_eq!(
-        csv_headers(&["--format=CSV", "52.0", "13.4", "2024-06-21", "sunrise"]),
+        csv_headers(&["--format=CSV", "52.0", "13.4", "2024-06-21", "events"]),
         minimal
     );
 
     for args in [
-        vec!["--format=CSV", "52.0", "13.4", "2024-06", "sunrise"],
-        vec!["--format=CSV", "52:53:1", "13.4", "2024-06-21", "sunrise"],
+        vec!["--format=CSV", "52.0", "13.4", "2024-06", "events"],
+        vec!["--format=CSV", "52:53:1", "13.4", "2024-06-21", "events"],
         vec![
             "--format=CSV",
             "52:53:1",
             "13.4",
             "2024-06-21",
-            "sunrise",
+            "events",
             "--twilight",
         ],
     ] {
         let headers = csv_headers(&args);
         assert!(headers.contains(&"latitude".to_string()));
         assert!(headers.contains(&"longitude".to_string()));
-        assert!(headers.contains(&"dateTime".to_string()));
+        assert!(headers.contains(&"date".to_string()));
         assert!(headers.contains(&"deltaT".to_string()));
         if !args.contains(&"--twilight") {
             assert_eq!(headers, full);

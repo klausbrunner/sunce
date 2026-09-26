@@ -64,17 +64,17 @@ fn resolve_datetime(
     parsed: ParsedDateTime,
     override_tz: Option<&str>,
     original: &str,
-) -> Result<DateTime<FixedOffset>, String> {
-    let tz_info = get_timezone_info(override_tz);
-    match parsed {
-        ParsedDateTime::Now => Ok(convert_datetime_to_timezone(Utc::now(), &tz_info)),
-        ParsedDateTime::Fixed(dt) => {
-            if override_tz.is_some() {
-                Ok(convert_datetime_to_timezone(dt, &tz_info))
-            } else {
-                Ok(dt)
-            }
+) -> Result<InputTime, String> {
+    let tz_info = match &parsed {
+        ParsedDateTime::Fixed(dt) if override_tz.is_none() => TimezoneInfo::Fixed(*dt.offset()),
+        ParsedDateTime::UnixTimestamp(_) if override_tz.is_none() => {
+            TimezoneInfo::Fixed(FixedOffset::east_opt(0).unwrap())
         }
+        _ => get_timezone_info(override_tz),
+    };
+    let datetime = match parsed {
+        ParsedDateTime::Now => Ok(convert_datetime_to_timezone(Utc::now(), &tz_info)),
+        ParsedDateTime::Fixed(dt) => Ok(convert_datetime_to_timezone(dt, &tz_info)),
         ParsedDateTime::Naive(naive_dt) => tz_info
             .to_datetime_from_local(&naive_dt)
             .ok_or_else(|| timezone_gap_error(original)),
@@ -90,33 +90,39 @@ fn resolve_datetime(
             let utc_dt = DateTime::<Utc>::from_timestamp(ts, 0)
                 .ok_or_else(|| format!("Invalid unix timestamp: {}", ts))?;
 
-            if override_tz.is_some() {
-                Ok(convert_datetime_to_timezone(utc_dt, &tz_info))
-            } else {
-                Ok(utc_dt.fixed_offset())
-            }
+            Ok(convert_datetime_to_timezone(utc_dt, &tz_info))
         }
-    }
+    }?;
+    Ok(InputTime {
+        datetime,
+        zone: tz_info,
+    })
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy)]
+pub struct InputTime {
+    pub datetime: DateTime<FixedOffset>,
+    pub zone: TimezoneInfo,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum TimezoneInfo {
     Fixed(FixedOffset),
     Named(Tz),
 }
 
 impl TimezoneInfo {
-    pub fn to_datetime_from_utc(&self, dt: &NaiveDateTime) -> DateTime<FixedOffset> {
+    pub fn to_datetime_from_utc(self, dt: &NaiveDateTime) -> DateTime<FixedOffset> {
         match self {
             TimezoneInfo::Fixed(offset) => offset.from_utc_datetime(dt),
             TimezoneInfo::Named(tz) => {
                 let dt_utc = Utc.from_utc_datetime(dt);
-                dt_utc.with_timezone(tz).fixed_offset()
+                dt_utc.with_timezone(&tz).fixed_offset()
             }
         }
     }
 
-    pub fn to_datetime_from_local(&self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
+    pub fn to_datetime_from_local(self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
         match self {
             TimezoneInfo::Fixed(offset) => offset.from_local_datetime(dt).single(),
             TimezoneInfo::Named(tz) => tz
@@ -138,8 +144,11 @@ pub fn parse_datetime_string(
     dt_str: &str,
     override_tz: Option<&str>,
 ) -> Result<DateTime<FixedOffset>, String> {
-    let parsed = parse_datetime_input(dt_str)?;
-    resolve_datetime(parsed, override_tz, dt_str)
+    parse_input_time(dt_str, override_tz).map(|input| input.datetime)
+}
+
+pub fn parse_input_time(dt_str: &str, override_tz: Option<&str>) -> Result<InputTime, String> {
+    resolve_datetime(parse_datetime_input(dt_str)?, override_tz, dt_str)
 }
 
 pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
@@ -225,7 +234,7 @@ fn detect_system_timezone() -> TimezoneInfo {
 pub fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
     parse_timezone_override(override_tz)
         .or_else(|| parse_timezone_env(env::var("TZ").ok()))
-        .unwrap_or_else(|| SYSTEM_TIMEZONE.get_or_init(detect_system_timezone).clone())
+        .unwrap_or_else(|| *SYSTEM_TIMEZONE.get_or_init(detect_system_timezone))
 }
 
 fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {

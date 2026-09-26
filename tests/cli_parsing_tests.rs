@@ -59,8 +59,8 @@ fn step_rows(step: &str) -> Vec<Vec<String>> {
     parse_csv_no_headers_output(&String::from_utf8(output.stdout).unwrap())
 }
 
-fn sunrise_predicate_args(datetime: &'static str, predicate: &'static str) -> [&'static str; 5] {
-    ["52.0", "13.4", datetime, "sunrise", predicate]
+fn events_predicate_args(datetime: &'static str, predicate: &'static str) -> [&'static str; 5] {
+    ["52.0", "13.4", datetime, "events", predicate]
 }
 
 fn position_predicate_args(datetime: &'static str, predicate: &'static str) -> [&'static str; 5] {
@@ -122,16 +122,16 @@ fn test_rejects_step_for_file_inputs() {
 }
 
 #[test]
-fn test_sunrise_option_placement_variants() {
+fn test_events_option_placement_variants() {
     assert_success(&[
         "--format=csv",
         "52.0",
         "13.4",
         "--twilight",
         "2024-01-01",
-        "sunrise",
+        "events",
     ]);
-    assert_success(&["52.0", "13.4", "2024-01-01", "sunrise", "--horizon=-6.0"]);
+    assert_success(&["52.0", "13.4", "2024-01-01", "events", "--horizon=-6.0"]);
 }
 
 #[test]
@@ -156,15 +156,15 @@ fn test_invalid_cli_combinations() {
             "--twilight not valid for position",
         ),
         (
-            &["52.0", "13.4", "2024-01-01", "--step=1h", "sunrise"],
-            "--step not valid for sunrise",
+            &["52.0", "13.4", "2024-01-01", "--step=1h", "events"],
+            "--step not valid for events",
         ),
         (
             &[
                 "52.0",
                 "13.4",
                 "2024-01-01",
-                "sunrise",
+                "events",
                 "--twilight",
                 "--horizon=-6.0",
             ],
@@ -173,16 +173,6 @@ fn test_invalid_cli_combinations() {
         (
             &["52.0", "13.4", "2024-01-01", "position", "--horizon=-6.0"],
             "--horizon not valid for position",
-        ),
-        (
-            &[
-                "52.0",
-                "13.4",
-                "2024-01-01",
-                "sunrise",
-                "--algorithm=grena3",
-            ],
-            "--algorithm not valid for sunrise",
         ),
         (
             &[
@@ -247,7 +237,7 @@ fn test_help_and_version_paths() {
         ],
     );
     assert_help(
-        &["help", "sunrise"],
+        &["help", "events"],
         &[
             "Calculates sunrise, transit, sunset",
             "--is-daylight",
@@ -262,7 +252,7 @@ fn test_help_and_version_paths() {
 #[test]
 fn test_contextual_help_and_short_alias() {
     assert_help(&["-h"], &["Usage:", "Commands:"]);
-    for command in ["position", "sunrise"] {
+    for command in ["position", "events"] {
         let expected = sunce_command().args(["help", command]).output().unwrap();
         for flag in ["-h", "--help"] {
             for args in [
@@ -288,9 +278,9 @@ fn test_contextual_help_and_short_alias() {
 #[test]
 fn test_separated_option_values_match_equals_form() {
     for command in [
-        "--format=json --timezone=-05:00 --algorithm=grena3 --elevation=-10 --temperature=-5 --pressure=1000 52 13.4 2024-01-01T12:00:00Z position",
+        "--format=json --timezone=-05:00 --algorithm=spa --elevation=-10 --temperature=-5 --pressure=1000 52 13.4 2024-01-01T12:00:00Z position",
         "52 13.4 2024-01-01 position --step=6h --format=csv",
-        "52 13.4 2024-01-01 sunrise --horizon=-6 --format=json",
+        "52 13.4 2024-01-01 events --horizon=-6 --algorithm=grena3 --format=json",
         "52 13.4 2024-01-01T12:00:00Z position --sun-above=-10",
         "52 13.4 2024-01-01T12:00:00Z position --sun-below=-10",
     ] {
@@ -320,23 +310,17 @@ fn test_separated_option_values_match_equals_form() {
 #[test]
 fn test_predicate_errors_are_distinct_from_false_regardless_of_option_order() {
     let cases: &[(&[&str], &str)] = &[
+        (&["91", "13.4", "now", "events"], "Latitude must be between"),
+        (&["52", "181", "now", "events"], "Longitude must be between"),
         (
-            &["91", "13.4", "now", "sunrise"],
-            "Latitude must be between",
-        ),
-        (
-            &["52", "181", "now", "sunrise"],
-            "Longitude must be between",
-        ),
-        (
-            &["52", "13.4", "now", "sunrise", "--timezone", "bogus"],
+            &["52", "13.4", "now", "events", "--timezone", "bogus"],
             "Invalid timezone",
         ),
         (
-            &["52", "13.4", "now", "sunrise", "--format"],
+            &["52", "13.4", "now", "events", "--format"],
             "requires a value",
         ),
-        (&["52", "13.4", "now", "sunrise", "--wat"], "Unknown option"),
+        (&["52", "13.4", "now", "events", "--wat"], "Unknown option"),
         (
             &["52", "13.4", "now", "position", "--twilight"],
             "not valid for position",
@@ -411,12 +395,12 @@ fn test_step_without_unit_and_with_unit_both_work() {
 
 #[test]
 fn test_predicate_flag_parsing_and_validation() {
-    let sunrise_format = [
+    let events_format = [
         "--format=csv",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
-        "sunrise",
+        "events",
         "--is-daylight",
     ];
     let position_headers = [
@@ -427,20 +411,20 @@ fn test_predicate_flag_parsing_and_validation() {
         "position",
         "--sun-above=10",
     ];
-    let sunrise_show_inputs = [
+    let events_show_inputs = [
         "--show-inputs",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
-        "sunrise",
+        "events",
         "--is-daylight",
     ];
-    let sunrise_perf = [
+    let events_perf = [
         "--perf",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
-        "sunrise",
+        "events",
         "--is-daylight",
     ];
 
@@ -452,7 +436,7 @@ fn test_predicate_flag_parsing_and_validation() {
                     "52.0",
                     "13.4",
                     "2024-03-21T12:00:00Z",
-                    "sunrise",
+                    "events",
                     "--is-daylight",
                     "--is-astronomical-night",
                 ],
@@ -460,14 +444,14 @@ fn test_predicate_flag_parsing_and_validation() {
             ),
             (
                 &position_predicate_args("2024-03-21T12:00:00Z", "--is-daylight"),
-                "Sunrise predicates require the sunrise command",
+                "Event predicates require the events command",
             ),
             (
-                &sunrise_predicate_args("2024-03-21T12:00:00Z", "--sun-above=10"),
+                &events_predicate_args("2024-03-21T12:00:00Z", "--sun-above=10"),
                 "Sun angle predicates require the position command",
             ),
             (
-                &sunrise_format,
+                &events_format,
                 "Option --format not valid in predicate mode",
             ),
             (
@@ -475,16 +459,16 @@ fn test_predicate_flag_parsing_and_validation() {
                 "Option --headers/--no-headers not valid in predicate mode",
             ),
             (
-                &sunrise_show_inputs,
+                &events_show_inputs,
                 "Option --show-inputs/--no-show-inputs not valid in predicate mode",
             ),
-            (&sunrise_perf, "Option --perf not valid in predicate mode"),
+            (&events_perf, "Option --perf not valid in predicate mode"),
             (
                 &[
                     "52.0",
                     "13.4",
                     "2024-03-21T12:00:00Z",
-                    "sunrise",
+                    "events",
                     "--twilight",
                     "--is-daylight",
                 ],
@@ -495,7 +479,7 @@ fn test_predicate_flag_parsing_and_validation() {
                     "52.0",
                     "13.4",
                     "2024-03-21T12:00:00Z",
-                    "sunrise",
+                    "events",
                     "--horizon=-6",
                     "--is-daylight",
                 ],
@@ -532,7 +516,7 @@ fn test_predicate_flag_parsing_and_validation() {
                 "Option --step not valid in predicate mode",
             ),
             (
-                &["52.0", "13.4", "now", "sunrise", "--wait"],
+                &["52.0", "13.4", "now", "events", "--wait"],
                 "Option --wait requires a predicate option",
             ),
             (
@@ -540,7 +524,7 @@ fn test_predicate_flag_parsing_and_validation() {
                     "52.0",
                     "13.4",
                     "2024-03-21T12:00:00Z",
-                    "sunrise",
+                    "events",
                     "--is-daylight",
                     "--wait",
                 ],
@@ -557,7 +541,7 @@ fn test_predicate_flag_parsing_and_validation() {
                 "Predicate mode requires a single latitude/longitude pair",
             ),
             (
-                &["52.0", "13.4", "2024-03-21", "sunrise", "--is-daylight"],
+                &["52.0", "13.4", "2024-03-21", "events", "--is-daylight"],
                 "Predicate mode requires a single explicit instant",
             ),
             (
@@ -574,7 +558,7 @@ fn test_predicate_flag_parsing_and_validation() {
                 "Predicate mode does not support datetime file input",
             ),
             (
-                &["@data.txt", "sunrise", "--is-daylight"],
+                &["@data.txt", "events", "--is-daylight"],
                 "Predicate mode requires explicit latitude, longitude, and datetime arguments",
             ),
         ],

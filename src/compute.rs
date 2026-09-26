@@ -1,13 +1,13 @@
 //! Stream orchestration and shared calculation result types.
 
-use crate::data::{CalculationAlgorithm, Command, CoordTimeStream, Parameters};
+use crate::data::{Command, CoordTimeStream, Parameters};
+use crate::events::{EventRow, calculate_events};
 use crate::position::{
-    SpaCache, TIME_CACHE_CAPACITY, calculate_position_with_refraction, refraction_correction,
+    TIME_CACHE_CAPACITY, TimeCache, calculate_position_with_refraction, refraction_correction,
     time_cache_get,
 };
-use crate::sunrise::calculate_sunrise;
 use chrono::{DateTime, FixedOffset};
-use solar_positioning::SolarPosition;
+use solar_positioning::{Location, SolarPosition};
 use std::collections::VecDeque;
 
 type CalculationStream = Box<dyn Iterator<Item = Result<CalculationResult, String>>>;
@@ -29,23 +29,7 @@ pub enum CalculationResult {
         position: SolarPosition,
         deltat: f64,
     },
-    Sunrise {
-        lat: f64,
-        lon: f64,
-        date: DateTime<FixedOffset>,
-        result: solar_positioning::SunriseResult<DateTime<FixedOffset>>,
-        deltat: f64,
-    },
-    SunriseWithTwilight {
-        lat: f64,
-        lon: f64,
-        date: DateTime<FixedOffset>,
-        sunrise_sunset: solar_positioning::SunriseResult<DateTime<FixedOffset>>,
-        civil: solar_positioning::SunriseResult<DateTime<FixedOffset>>,
-        nautical: solar_positioning::SunriseResult<DateTime<FixedOffset>>,
-        astronomical: solar_positioning::SunriseResult<DateTime<FixedOffset>>,
-        deltat: f64,
-    },
+    Event(EventRow),
 }
 
 pub fn calculate_stream(
@@ -61,14 +45,13 @@ pub fn calculate_stream(
                 Err(err) => return Box::new(std::iter::once(Err(err))),
             };
 
-            if params.calculation.algorithm == CalculationAlgorithm::Spa && allow_time_cache {
-                use solar_positioning::spa;
-
-                let mut time_cache: SpaCache = SpaCache::default();
-                let mut time_cache_order: VecDeque<DateTime<FixedOffset>> = VecDeque::new();
+            if allow_time_cache {
+                let mut time_cache: TimeCache = TimeCache::default();
+                let mut time_cache_order = VecDeque::new();
 
                 Box::new(data.map(move |item| {
-                    item.and_then(|(lat, lon, dt)| {
+                    item.and_then(|(lat, lon, input)| {
+                        let dt = input.datetime;
                         let (time_parts, deltat) = time_cache_get(
                             &mut time_cache,
                             &mut time_cache_order,
@@ -77,14 +60,16 @@ pub fn calculate_stream(
                             &params,
                         )?;
 
-                        let position = spa::spa_with_time_dependent_parts(
-                            lat,
-                            lon,
-                            params.environment.elevation,
-                            refraction,
-                            time_parts.as_ref(),
-                        )
-                        .map_err(|e| format!("Failed to calculate solar position: {}", e))?;
+                        let position = time_parts
+                            .at(
+                                Location {
+                                    latitude: lat,
+                                    longitude: lon,
+                                },
+                                params.environment.elevation,
+                                refraction,
+                            )
+                            .map_err(|e| format!("Failed to calculate solar position: {}", e))?;
 
                         Ok(CalculationResult::Position {
                             lat,
@@ -97,7 +82,8 @@ pub fn calculate_stream(
                 }))
             } else {
                 Box::new(data.map(move |item| {
-                    item.and_then(|(lat, lon, dt)| {
+                    item.and_then(|(lat, lon, input)| {
+                        let dt = input.datetime;
                         let calculation =
                             calculate_position_with_refraction(lat, lon, dt, &params, refraction)?;
 
@@ -112,8 +98,14 @@ pub fn calculate_stream(
                 }))
             }
         }
-        Command::Sunrise => Box::new(data.map(move |item| {
-            item.and_then(|(lat, lon, dt)| calculate_sunrise(lat, lon, dt, &params))
+        Command::Events => Box::new(data.flat_map(move |item| {
+            match item.and_then(|(lat, lon, dt)| calculate_events(lat, lon, dt, &params)) {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|row| Ok(CalculationResult::Event(row)))
+                    .collect(),
+                Err(err) => vec![Err(err)],
+            }
         })),
     }
 }

@@ -5,6 +5,8 @@ members = ["cargo:."]
 [dist]
 # CI backends to support
 ci = "github"
+# Use current stable Rust even when the runner image has an older toolchain.
+github-build-setup = "../build-setup.yml"
 # The installers to generate for each app
 installers = ["shell", "powershell", "homebrew"]
 # Publish jobs to run in CI

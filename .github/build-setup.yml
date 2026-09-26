@@ -1,0 +1,2 @@
+- name: Update Rust
+  run: rustup update stable --no-self-update
