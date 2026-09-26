@@ -1,6 +1,6 @@
 # sunce
 
-`sunce` is a command-line tool for solar position and solar event calculations. It computes topocentric solar coordinates (`position`) and daily solar events such as sunrise, sunset, transit, and twilight (`sunrise`). It is designed for scripting and bulk processing: coordinate and time ranges (also combined), file input, streaming, predicate checks, and machine-friendly output (CSV, JSON Lines, Parquet). The tool is fully self-contained and does not call any external services.
+`sunce` is a command-line tool for solar position and solar event calculations. It computes topocentric solar coordinates (`position`) and daily solar events such as sunrise, sunset, transit, and twilight (`events`). It is designed for scripting and bulk processing: coordinate and time ranges (also combined), file input, streaming, predicate checks, and machine-friendly output (CSV, JSON Lines, Parquet). The tool is fully self-contained and does not call any external services.
 
 Built on the [solar-positioning](https://crates.io/crates/solar-positioning) library of high-accuracy solar position algorithms.
 
@@ -31,7 +31,7 @@ AMD64/x86-64 release binaries target the v3 baseline.
 
 ```bash
 # Getting today's sunrise and sunset in Madrid (UTC)
-sunce 40.42 -3.70 now --timezone=UTC sunrise
+sunce 40.42 -3.70 now --timezone=UTC events
 
 # Sun position in Stockholm on 2026-01-15 at 12:30 CET
 sunce 59.334 18.063 2026-01-15T12:30:00+01:00 position
@@ -44,7 +44,7 @@ sunce 59.334 18.063 2026-01-15T12:30:00+01:00 position
 sunce 52.522 13.413 2026-03-28T12:00:00+01:00 position
 
 # One day's solar events
-sunce 52.522 13.413 2026-03-28 sunrise
+sunce 52.522 13.413 2026-03-28 events
 
 # Time series: positions in Berlin every 10 minutes, CSV output, with delta-T estimate
 sunce --format=csv --deltat --timezone=Europe/Berlin 52.522 13.413 2023-03-26 position --step=10m
@@ -53,7 +53,7 @@ sunce --format=csv --deltat --timezone=Europe/Berlin 52.522 13.413 2023-03-26 po
 sunce --format=csv 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
 
 # Sunrise, sunset, and twilight times for Tokyo throughout March 2027, JSON output
-sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 sunrise --twilight
+sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 events --twilight
 
 # High-performance data processing: large datasets with Parquet output (Snappy compressed)
 sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
@@ -62,7 +62,7 @@ sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.
 ## Input semantics
 
 - `position` with a date-only input like `2026-03-28` expands to a time series for that day. Year-month and year inputs expand further.
-- `sunrise` treats a date-like input as a day or day series and returns event times for those days.
+- `events` treats a date-like input as a day or day series and returns event times for those days.
 - `now` means the current instant. With `position --step`, it becomes a live stream and requires one explicit latitude/longitude pair.
 - `--timezone` overrides timezone interpretation for parsing and output.
 
@@ -99,7 +99,19 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 - `json` – JSON Lines (one JSON object per line), good for `jq` and similar tools.
 - `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics.
 
-Field names are intended to be stable across formats where the underlying data is the same. For example, `dateTime`, `azimuth`, `zenith`, `sunrise`, and `civil_start` mean the same thing in CSV, JSON, and Parquet.
+Field names and values are consistent across formats. Position output contains one row per location and timestamp.
+
+Event output contains one row per event, ordered by time within each location and local date. Its columns are:
+
+```text
+date, day_state, event, time
+```
+
+`--twilight` adds `civil_dawn`, `civil_dusk`, `nautical_dawn`, `nautical_dusk`, `astronomical_dawn` and `astronomical_dusk` events. Custom horizons use `rise` and `set`. Missing events are omitted; multiple occurrences each get their own row. A date with no events still has one row with empty `event` and `time` fields (null in JSON and Parquet).
+
+`day_state` is `CROSSING` if any rise or set occurs. Otherwise it reports the initial state relative to the selected horizon: `ABOVE`, `BELOW` or `ON_HORIZON`. With `--twilight`, it describes the standard sunrise/sunset horizon. `--show-inputs` adds `latitude`, `longitude` and `deltaT` to every event row. `--perf` counts output rows.
+
+Events use sea-level solar-centre positions. Sunrise and sunset include the conventional refraction and solar-radius allowance; twilight and custom horizons use their stated geometric angles. Both SPA (default) and Grena3 are available through `--algorithm`. Grena3 position calculations require zero observer elevation.
 
 ## Key options
 
@@ -118,7 +130,7 @@ delta-T value still requires `--deltat=<seconds>`; bare `--deltat` requests an
 estimate and never consumes the following coordinate.
 
 Use `-h` as a short form of `--help`. For command-specific help, run
-`sunce position --help`, `sunce sunrise --help`, or `sunce help <command>`.
+`sunce position --help`, `sunce events --help`, or `sunce help <command>`.
 
 ## Automation and predicate mode
 
@@ -138,16 +150,16 @@ Examples:
 
 ```bash
 # Exit 0 during daylight, 1 otherwise
-sunce 52.522 13.413 now sunrise --is-daylight
+sunce 52.522 13.413 now events --is-daylight
 
 # Exit 0 when the sun is above 10 degrees elevation
 sunce 52.522 13.413 now position --sun-above=10
 
 # Exit 0 during civil twilight, 1 otherwise
-sunce --timezone=Europe/Berlin 52.522 13.413 2026-03-26T06:00:00 sunrise --is-civil-twilight
+sunce --timezone=Europe/Berlin 52.522 13.413 2026-03-26T06:00:00 events --is-civil-twilight
 
 # Exit 0 from sunset until sunrise
-sunce 52.522 13.413 now sunrise --after-sunset
+sunce 52.522 13.413 now events --after-sunset
 
 # Wait until the sun is above 5 degrees elevation
 sunce 52.522 13.413 now position --sun-above=5 --wait
@@ -156,14 +168,14 @@ sunce 52.522 13.413 now position --sun-above=5 --wait
 For shell scripts:
 
 ```bash
-if sunce 52.522 13.413 now sunrise --after-sunset; then
+if sunce 52.522 13.413 now events --after-sunset; then
   echo "Sun has set"
 fi
 ```
 
 ## Performance
 
-`sunce` is designed for high throughput with streaming output. Memory is bounded by input expansion (the smaller range dimension), the SPA time cache, and output buffering/batching; results are not collected in full.
+`sunce` is designed for high throughput with streaming output. Memory is bounded by input expansion (the smaller range dimension), the prepared-position cache, and output buffering/batching; results are not collected in full.
 
 Standard smoke test (release build):
 

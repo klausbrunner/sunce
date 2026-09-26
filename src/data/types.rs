@@ -1,6 +1,6 @@
 //! Core input and stream data types used across the program.
 
-use chrono::{DateTime, FixedOffset};
+use super::time_utils::InputTime;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,7 +21,7 @@ pub enum LocationSource {
 
 #[derive(Debug, Clone)]
 pub enum TimeSource {
-    Single(DateTime<FixedOffset>),
+    Single(InputTime),
     Range(String),
     File(InputPath),
     Now,
@@ -51,7 +51,7 @@ impl DataSource {
     }
 }
 
-pub type CoordTime = (f64, f64, DateTime<FixedOffset>);
+pub type CoordTime = (f64, f64, InputTime);
 pub type CoordTimeResult = Result<CoordTime, String>;
 pub type CoordTimeStream = Box<dyn Iterator<Item = CoordTimeResult>>;
 

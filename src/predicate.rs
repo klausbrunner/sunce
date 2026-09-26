@@ -2,8 +2,8 @@
 
 use crate::compute::SolarState;
 use crate::data::{Parameters, Predicate as CliPredicate};
+use crate::events::{is_after_sunset, next_state_transition, solar_state_at};
 use crate::position::solar_elevation_at;
-use crate::sunrise::{is_after_sunset, next_state_transition, solar_state_at};
 use chrono::{DateTime, FixedOffset};
 
 const ANGLE_WAIT_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);

@@ -184,7 +184,7 @@ impl Default for Parameters {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     Position,
-    Sunrise,
+    Events,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

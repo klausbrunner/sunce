@@ -93,72 +93,6 @@ fn test_parquet_position_with_inputs() {
 }
 
 #[test]
-fn test_parquet_sunrise_basic() {
-    let batch = parquet_single_batch(
-        &["--format=PARQUET", "52.0", "13.4", "2024-01-01", "sunrise"],
-        &[],
-    );
-    let schema = batch.schema();
-    assert_eq!(
-        schema_field_names(&batch),
-        vec!["dateTime", "type", "sunrise", "transit", "sunset"]
-    );
-    assert!(schema.field_with_name("sunrise").unwrap().is_nullable());
-    assert!(schema.field_with_name("sunset").unwrap().is_nullable());
-    assert!(!schema.field_with_name("transit").unwrap().is_nullable());
-    assert_eq!(batch.num_rows(), 1);
-}
-
-#[test]
-fn test_parquet_sunrise_with_twilight() {
-    let batch = parquet_single_batch(
-        &[
-            "--format=PARQUET",
-            "--show-inputs",
-            "52.0",
-            "13.4",
-            "2024-06-21",
-            "sunrise",
-            "--twilight",
-        ],
-        &[],
-    );
-    let schema = batch.schema();
-    assert_eq!(
-        schema_field_names(&batch),
-        vec![
-            "latitude",
-            "longitude",
-            "dateTime",
-            "deltaT",
-            "type",
-            "sunrise",
-            "transit",
-            "sunset",
-            "civil_start",
-            "civil_end",
-            "nautical_start",
-            "nautical_end",
-            "astronomical_start",
-            "astronomical_end",
-        ]
-    );
-    for field in [
-        "civil_start",
-        "civil_end",
-        "nautical_start",
-        "nautical_end",
-        "astronomical_start",
-        "astronomical_end",
-    ] {
-        assert!(
-            schema.field_with_name(field).unwrap().is_nullable(),
-            "{field} should be nullable"
-        );
-    }
-}
-
-#[test]
 fn test_parquet_consistency_with_csv() {
     let csv_text = String::from_utf8(
         sunce_command()
@@ -223,46 +157,6 @@ fn test_parquet_timezone_preservation() {
 }
 
 #[test]
-fn test_parquet_sunrise_null_handling() {
-    let batch = parquet_single_batch(
-        &["--format=PARQUET", "90.0", "0.0", "2024-06-21", "sunrise"],
-        &[],
-    );
-    assert_eq!(string_array(&batch, "type").value(0), "ALL_DAY");
-    assert!(string_array(&batch, "sunrise").is_null(0));
-    assert!(string_array(&batch, "sunset").is_null(0));
-    assert!(!string_array(&batch, "transit").is_null(0));
-}
-
-#[test]
-fn test_parquet_sunrise_twilight_null_handling() {
-    let batch = parquet_single_batch(
-        &[
-            "--format=PARQUET",
-            "90.0",
-            "0.0",
-            "2024-06-21",
-            "sunrise",
-            "--twilight",
-        ],
-        &[],
-    );
-    for field in [
-        "civil_start",
-        "civil_end",
-        "nautical_start",
-        "nautical_end",
-        "astronomical_start",
-        "astronomical_end",
-    ] {
-        assert!(
-            string_array(&batch, field).is_null(0),
-            "{field} should be null"
-        );
-    }
-}
-
-#[test]
 fn preserves_offsets_for_equal_instants() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("instants.csv");
@@ -271,10 +165,66 @@ fn preserves_offsets_for_equal_instants() {
         "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n",
     );
     let input = format!("@{}", path.display());
-    for command in ["position", "sunrise"] {
-        let batch = parquet_single_batch(&[&input, command, "--format=parquet"], &[]);
-        let dates = string_array(&batch, "dateTime");
-        assert_eq!(dates.value(0), "2024-01-01T12:00:00+00:00");
-        assert_eq!(dates.value(1), "2024-01-01T13:00:00+01:00");
+    let command = "position";
+    let batch = parquet_single_batch(&[&input, command, "--format=parquet"], &[]);
+    let dates = string_array(&batch, "dateTime");
+    assert_eq!(dates.value(0), "2024-01-01T12:00:00+00:00");
+    assert_eq!(dates.value(1), "2024-01-01T13:00:00+01:00");
+}
+
+#[test]
+fn event_schema_and_values_match_csv_including_empty_dates() {
+    for (lat, lon, date, twilight) in [
+        ("52", "13.4", "2024-06-21", false),
+        ("52", "13.4", "2024-06-21", true),
+        ("78.216667", "15.633333", "2020-04-16", false),
+        ("90", "179.9", "2020-06-10", false),
+    ] {
+        let mut args = vec![
+            "--timezone=UTC",
+            "--show-inputs",
+            "--deltat=69.184",
+            lat,
+            lon,
+            date,
+            "events",
+        ];
+        if twilight {
+            args.push("--twilight");
+        }
+        let output = sunce_command()
+            .args(&args)
+            .arg("--format=csv")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let (headers, rows) = parse_csv_output(std::str::from_utf8(&output).unwrap());
+        args.push("--format=parquet");
+        let batch = parquet_single_batch(&args, &[]);
+        assert_eq!(schema_field_names(&batch), headers);
+        assert_eq!(batch.num_rows(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            for (name, value) in headers.iter().zip(row) {
+                if ["latitude", "longitude", "deltaT"].contains(&name.as_str()) {
+                    assert!(
+                        (float_array(&batch, name).value(i) - value.parse::<f64>().unwrap()).abs()
+                            <= 0.0005
+                    );
+                } else {
+                    let column = string_array(&batch, name);
+                    assert_eq!(column.is_null(i), value.is_empty());
+                    if !value.is_empty() {
+                        assert_eq!(column.value(i), value);
+                    }
+                }
+            }
+        }
+        let schema = batch.schema();
+        for name in ["event", "time"] {
+            assert!(schema.field_with_name(name).unwrap().is_nullable());
+        }
+        assert!(!schema.field_with_name("date").unwrap().is_nullable());
     }
 }

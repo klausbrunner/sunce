@@ -70,7 +70,7 @@ fn test_extreme_and_negative_coordinates() {
         .assert()
         .success();
     sunce_command()
-        .args(["89.9", "0", "2024-06-21", "sunrise"])
+        .args(["89.9", "0", "2024-06-21", "events"])
         .assert()
         .success();
 }

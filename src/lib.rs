@@ -4,13 +4,13 @@ mod cli;
 mod compute;
 mod data;
 mod error;
+mod events;
 mod output;
 #[cfg(feature = "parquet")]
 mod parquet;
 mod parsed;
 mod position;
 mod predicate;
-mod sunrise;
 mod validate;
 
 fn cli_error_exit_code(err: crate::error::CliError) -> i32 {

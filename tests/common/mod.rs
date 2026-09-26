@@ -28,6 +28,10 @@ pub fn parse_json_output(stdout: &str) -> Value {
     serde_json::from_str(stdout).expect("invalid JSON output")
 }
 
+pub fn parse_json_lines(stdout: &str) -> Vec<Value> {
+    stdout.lines().map(parse_json_output).collect()
+}
+
 pub fn fields(names: &[&str]) -> Vec<String> {
     names.iter().map(|name| (*name).to_string()).collect()
 }

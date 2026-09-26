@@ -89,13 +89,13 @@ pub fn parse_cli(args: Arguments<'_>) -> CliResult<ParsedCommand> {
     } = args;
     if positional.is_empty() && options.is_empty() {
         return Err(CliError::Exit(
-            "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|sunrise>".to_string(),
+            "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|events>".to_string(),
         ));
     }
 
     if positional.first().is_some_and(|arg| arg == "help") {
         if positional.len() > 2 {
-            return Err("Usage: sunce help [position|sunrise]".into());
+            return Err("Usage: sunce help [position|events]".into());
         }
         let message = match positional.get(1) {
             Some(command) => get_command_help(command)?,
@@ -106,7 +106,7 @@ pub fn parse_cli(args: Arguments<'_>) -> CliResult<ParsedCommand> {
     if options.contains(&("help", None)) {
         let message = match positional
             .iter()
-            .find(|arg| matches!(arg.as_str(), "position" | "sunrise"))
+            .find(|arg| matches!(arg.as_str(), "position" | "events"))
         {
             Some(command) => get_command_help(command)?,
             None => get_help_text(),
@@ -396,7 +396,7 @@ fn parse_location_args(lat_str: &str, lon_str: &str) -> CliResult<LocationSource
 fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, ParsedInput)> {
     let command_index = positional_args
         .iter()
-        .position(|arg| arg == "position" || arg == "sunrise")
+        .position(|arg| arg == "position" || arg == "events")
         .ok_or("No command found".to_string())?;
     if command_index == 0 {
         return Err("Need at least command and one argument".into());
@@ -411,7 +411,7 @@ fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, Pars
 
     let command = match positional_args[command_index].as_str() {
         "position" => Command::Position,
-        "sunrise" => Command::Sunrise,
+        "events" => Command::Events,
         _ => unreachable!("filtered above"),
     };
     Ok((
@@ -511,13 +511,13 @@ fn get_help_text() -> String {
     let formats = OutputFormat::all().join(", ");
     format!(
         r#"sunce {}
-Calculates topocentric solar coordinates or sunrise/sunset times.
+Calculates topocentric solar coordinates or solar events.
 
 Usage:
-  sunce [OPTIONS] <latitude> <longitude> <dateTime> <position|sunrise>
-  sunce [OPTIONS] @data.txt <position|sunrise>
-  sunce [OPTIONS] @coords.txt @times.txt <position|sunrise>
-  sunce [OPTIONS] @coords.txt <dateTime> <position|sunrise>
+  sunce [OPTIONS] <latitude> <longitude> <dateTime> <position|events>
+  sunce [OPTIONS] @data.txt <position|events>
+  sunce [OPTIONS] @coords.txt @times.txt <position|events>
+  sunce [OPTIONS] @coords.txt <dateTime> <position|events>
 
 Examples:
   sunce 52.0 13.4 2024-01-01 position
@@ -546,7 +546,7 @@ Arguments:
                        2024-01-01T12:00:00  date and time
                        "2024-01-01 12:00"   date and time (space separator; quote it)
                        2024                 entire year (daily by default)
-                       2024-06              entire month (position: hourly, sunrise: daily)
+                       2024-06              entire month (position: hourly, events: daily)
                        now                  current time (position repeats with --step
                                               for a single lat/lon only)
                        1704067200           unix timestamp (seconds)
@@ -561,6 +561,7 @@ Arguments:
     - Stdin (@-) can be used for only one input parameter.
 
 Options:
+  --algorithm=<name>   Position model: spa (default) or grena3.
   --deltat[=<seconds>]  Delta T in seconds. Default: 0 when omitted. Use
                         --deltat=<seconds> for an explicit value, or
                         --deltat (no value) to estimate from the date
@@ -575,7 +576,7 @@ Options:
   --perf                Print performance statistics to stderr.
   Predicate mode (automation via exit status):
     Works only with one explicit lat/lon pair and one explicit instant.
-    Sunrise predicates:
+    Event predicates:
       --is-daylight              Exit 0 if the instant is daylight.
       --is-civil-twilight        Exit 0 if the instant is in civil twilight.
       --is-nautical-twilight     Exit 0 if the instant is in nautical twilight.
@@ -594,7 +595,7 @@ Options:
 
 Commands:
   position              Calculate topocentric solar coordinates.
-  sunrise               Calculate sunrise, transit, sunset, and optional twilight.
+  events                Calculate sunrise, transit, sunset, and optional twilight.
 
 Options with required values accept both '--option=value' and '--option value'.
 An explicit --deltat value requires '='; bare --deltat requests an estimate.
@@ -621,7 +622,7 @@ Calculates topocentric solar coordinates.
 
 Options:
   --algorithm=<alg>         Algorithm: spa, grena3. Default: {}
-  --elevation=<meters>      Elevation above sea level in meters. Default: {}
+  --elevation=<meters>      Elevation above sea level in meters (Grena3: zero). Default: {}
   --elevation-angle         Output elevation angle instead of zenith angle.
   --no-refraction           Disable refraction correction.
   --pressure=<hPa>          Air pressure in hPa (refraction). Default: {}
@@ -647,15 +648,18 @@ Examples:
             defaults.environment.pressure,
             defaults.environment.temperature
         ),
-        "sunrise" => r#"Usage:
-  sunce [OPTIONS] <latitude> <longitude> <dateTime> sunrise
-  sunce [OPTIONS] @data.txt sunrise
-  sunce [OPTIONS] @coords.txt @times.txt sunrise
-  sunce [OPTIONS] @coords.txt <dateTime> sunrise
+        "events" => r#"Usage:
+  sunce [OPTIONS] <latitude> <longitude> <dateTime> events
+  sunce [OPTIONS] @data.txt events
+  sunce [OPTIONS] @coords.txt @times.txt events
+  sunce [OPTIONS] @coords.txt <dateTime> events
 
 Calculates sunrise, transit, sunset and (optionally) twilight times.
+Outputs one row per event: date, day_state, event, time.
+Dates without events have empty event/time fields.
 
 Options:
+  --algorithm=<name>       Position model: spa (default) or grena3.
   --twilight                Include civil, nautical, and astronomical twilight times.
   --horizon=<degrees>       Custom horizon angle in degrees. Not valid with --twilight.
   --is-daylight             Predicate mode: exit 0 if the instant is daylight.
@@ -672,9 +676,9 @@ Options:
                             transition.
 
 Examples:
-  sunce 52.0 13.4 2024-06-21 sunrise
-  sunce 52.0 13.4 2024-06 sunrise --twilight
-  sunce 52.0 13.4 2024-06-21 sunrise --horizon=-6.0
+  sunce 52.0 13.4 2024-06-21 events
+  sunce 52.0 13.4 2024-06 events --twilight
+  sunce 52.0 13.4 2024-06-21 events --horizon=-6.0
 "#
         .to_string(),
         _ => {

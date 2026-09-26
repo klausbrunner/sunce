@@ -1,15 +1,18 @@
-//! Solar position calculations and SPA time-cache helpers.
+//! Solar position calculations and time-cache helpers.
 
 use crate::data::{CalculationAlgorithm, Parameters};
 use chrono::{DateTime, FixedOffset};
-use solar_positioning::RefractionCorrection;
-use solar_positioning::time::DeltaT;
+use solar_positioning::{
+    Location, PreparedPositions, RefractionCorrection, SolarPositions, delta_t,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 pub(crate) const TIME_CACHE_CAPACITY: usize = 2048;
-pub(crate) type SpaTimeParts = Arc<solar_positioning::spa::SpaTimeDependent>;
-pub(crate) type SpaCache = HashMap<DateTime<FixedOffset>, (SpaTimeParts, f64)>;
+pub(crate) type TimeParts = Arc<PreparedPositions>;
+// Delta-T estimates use the local date, which can differ for equal instants.
+pub(crate) type TimeCacheKey = (DateTime<FixedOffset>, i32);
+pub(crate) type TimeCache = HashMap<TimeCacheKey, (TimeParts, f64)>;
 
 pub(crate) struct PositionCalculation {
     pub position: solar_positioning::SolarPosition,
@@ -19,7 +22,7 @@ pub(crate) struct PositionCalculation {
 pub(crate) fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
     params
         .deltat
-        .unwrap_or_else(|| DeltaT::estimate_from_date_like(dt).unwrap_or(0.0))
+        .unwrap_or_else(|| delta_t::estimate_from_date_like(dt).unwrap_or(0.0))
 }
 
 pub(crate) fn refraction_correction(
@@ -70,32 +73,38 @@ pub(crate) fn calculate_position_with_refraction(
 ) -> Result<PositionCalculation, String> {
     let deltat = resolve_deltat(dt, params);
 
-    let position = if params.calculation.algorithm == CalculationAlgorithm::Grena3 {
-        solar_positioning::grena3::solar_position(dt, lat, lon, deltat, refraction)
-            .map_err(|e| format!("Failed to calculate solar position: {}", e))?
-    } else {
-        solar_positioning::spa::solar_position(
-            dt,
-            lat,
-            lon,
+    let position = calculator(params)
+        .at(
+            &dt,
+            Location {
+                latitude: lat,
+                longitude: lon,
+            },
             params.environment.elevation,
             deltat,
             refraction,
         )
-        .map_err(|e| format!("Failed to calculate solar position: {}", e))?
-    };
+        .map_err(|e| format!("Failed to calculate solar position: {e}"))?;
 
     Ok(PositionCalculation { position, deltat })
 }
 
+pub(crate) fn calculator(params: &Parameters) -> SolarPositions {
+    match params.calculation.algorithm {
+        CalculationAlgorithm::Spa => SolarPositions::new(),
+        CalculationAlgorithm::Grena3 => SolarPositions::grena3(),
+    }
+}
+
 pub(crate) fn time_cache_get(
-    cache: &mut SpaCache,
-    order: &mut VecDeque<DateTime<FixedOffset>>,
+    cache: &mut TimeCache,
+    order: &mut VecDeque<TimeCacheKey>,
     capacity: usize,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
-) -> Result<(SpaTimeParts, f64), String> {
-    if let Some(existing) = cache.get(&dt).cloned() {
+) -> Result<(TimeParts, f64), String> {
+    let key = (dt, dt.offset().local_minus_utc());
+    if let Some(existing) = cache.get(&key).cloned() {
         return Ok(existing);
     }
 
@@ -108,11 +117,12 @@ pub(crate) fn time_cache_get(
 
     let deltat = resolve_deltat(dt, params);
     let parts = Arc::new(
-        solar_positioning::spa::spa_time_dependent_parts(dt, deltat)
+        calculator(params)
+            .for_time(&dt, deltat)
             .map_err(|err| format!("Failed to calculate time-dependent parts: {}", err))?,
     );
-    cache.insert(dt, (Arc::clone(&parts), deltat));
-    order.push_back(dt);
+    cache.insert(key, (Arc::clone(&parts), deltat));
+    order.push_back(key);
     Ok((parts, deltat))
 }
 
@@ -122,8 +132,8 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn spa_time_cache_reuses_entries_without_growing_order() {
-        let mut cache: SpaCache = HashMap::new();
+    fn time_cache_reuses_entries_without_growing_order() {
+        let mut cache: TimeCache = HashMap::new();
         let mut order = VecDeque::new();
         let params = Parameters::default();
         let tz = FixedOffset::east_opt(0).unwrap();
@@ -137,8 +147,24 @@ mod tests {
     }
 
     #[test]
-    fn spa_time_cache_eviction_keeps_existing_when_not_full() {
-        let mut cache: SpaCache = HashMap::new();
+    fn time_cache_preserves_local_date_for_delta_t_estimates() {
+        let first = DateTime::parse_from_rfc3339("2024-02-01T00:30:00Z").unwrap();
+        let second = first.with_timezone(&FixedOffset::west_opt(3600).unwrap());
+        let params = Parameters {
+            deltat: None,
+            ..Parameters::default()
+        };
+        let mut cache = TimeCache::default();
+        let mut order = VecDeque::new();
+        let (_, a) = time_cache_get(&mut cache, &mut order, 2, first, &params).unwrap();
+        let (_, b) = time_cache_get(&mut cache, &mut order, 2, second, &params).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(b, resolve_deltat(second, &params));
+    }
+
+    #[test]
+    fn time_cache_eviction_keeps_existing_when_not_full() {
+        let mut cache: TimeCache = HashMap::new();
         let mut order = VecDeque::new();
         let params = Parameters::default();
         let tz = FixedOffset::east_opt(0).unwrap();
@@ -151,8 +177,8 @@ mod tests {
         time_cache_get(&mut cache, &mut order, 2, dt2, &params).unwrap();
         time_cache_get(&mut cache, &mut order, 2, dt3, &params).unwrap();
 
-        assert!(!cache.contains_key(&dt1));
-        assert!(cache.contains_key(&dt2));
-        assert!(cache.contains_key(&dt3));
+        assert!(!cache.contains_key(&(dt1, 0)));
+        assert!(cache.contains_key(&(dt2, 0)));
+        assert!(cache.contains_key(&(dt3, 0)));
     }
 }

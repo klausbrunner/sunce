@@ -3,8 +3,8 @@
 use crate::compute::CalculationResult;
 use crate::data::{Command, Parameters};
 use crate::output::{
-    DATETIME_CACHE_CAPACITY, DateTimeCache, PositionLayout, SunriseLayout, cached_datetime,
-    normalize_position_result, normalize_sunrise_result,
+    DATETIME_CACHE_CAPACITY, DateTimeCache, EventLayout, PositionLayout, cached_datetime,
+    normalize_event_result, normalize_position_result,
 };
 use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -118,25 +118,18 @@ impl PositionBatchBuilders {
     }
 }
 
-struct SunriseBatchBuilders {
+struct EventBatchBuilders {
     latitude: Option<Float64Builder>,
     longitude: Option<Float64Builder>,
-    date_time: StringBuilder,
+    date: StringBuilder,
     delta_t: Option<Float64Builder>,
-    kind: StringBuilder,
-    sunrise: StringBuilder,
-    transit: StringBuilder,
-    sunset: StringBuilder,
-    civil_start: Option<StringBuilder>,
-    civil_end: Option<StringBuilder>,
-    nautical_start: Option<StringBuilder>,
-    nautical_end: Option<StringBuilder>,
-    astronomical_start: Option<StringBuilder>,
-    astronomical_end: Option<StringBuilder>,
+    day_state: StringBuilder,
+    event: StringBuilder,
+    time: StringBuilder,
 }
 
-impl SunriseBatchBuilders {
-    fn new(layout: SunriseLayout) -> Self {
+impl EventBatchBuilders {
+    fn new(layout: EventLayout) -> Self {
         Self {
             latitude: layout
                 .show_inputs
@@ -144,39 +137,20 @@ impl SunriseBatchBuilders {
             longitude: layout
                 .show_inputs
                 .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
-            date_time: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 30),
+            date: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10),
             delta_t: layout
                 .show_inputs
                 .then(|| Float64Builder::with_capacity(BATCH_SIZE)),
-            kind: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10),
-            sunrise: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
-            transit: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
-            sunset: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
-            civil_start: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
-            civil_end: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
-            nautical_start: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
-            nautical_end: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
-            astronomical_start: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
-            astronomical_end: layout
-                .include_twilight
-                .then(|| StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25)),
+            day_state: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 10),
+            event: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 18),
+            time: StringBuilder::with_capacity(BATCH_SIZE, BATCH_SIZE * 25),
         }
     }
 
     fn append_row(
         &mut self,
-        row: &crate::output::SunriseRow,
-        layout: SunriseLayout,
+        row: &crate::output::EventRow,
+        layout: EventLayout,
         datetime_cache: &mut DateTimeCache,
     ) {
         if layout.show_inputs {
@@ -184,40 +158,13 @@ impl SunriseBatchBuilders {
             self.longitude.as_mut().unwrap().append_value(row.lon);
             self.delta_t.as_mut().unwrap().append_value(row.deltat);
         }
-
-        self.date_time
-            .append_value(cached_datetime(datetime_cache, &row.date_time));
-        self.kind.append_value(row.kind.label());
-        append_nullable_time(&mut self.sunrise, row.sunrise.as_ref(), datetime_cache);
-        append_time(&mut self.transit, &row.transit, datetime_cache);
-        append_nullable_time(&mut self.sunset, row.sunset.as_ref(), datetime_cache);
-
-        append_optional_time(
-            &mut self.civil_start,
-            row.civil_start.as_ref(),
-            datetime_cache,
-        );
-        append_optional_time(&mut self.civil_end, row.civil_end.as_ref(), datetime_cache);
-        append_optional_time(
-            &mut self.nautical_start,
-            row.nautical_start.as_ref(),
-            datetime_cache,
-        );
-        append_optional_time(
-            &mut self.nautical_end,
-            row.nautical_end.as_ref(),
-            datetime_cache,
-        );
-        append_optional_time(
-            &mut self.astronomical_start,
-            row.astro_start.as_ref(),
-            datetime_cache,
-        );
-        append_optional_time(
-            &mut self.astronomical_end,
-            row.astro_end.as_ref(),
-            datetime_cache,
-        );
+        self.date.append_value(row.date.to_string());
+        self.day_state.append_value(row.day_state.label());
+        self.event.append_option(row.event);
+        match row.time {
+            Some(time) => append_time(&mut self.time, &time, datetime_cache),
+            None => self.time.append_null(),
+        }
     }
 
     fn flush<W: Write + Send>(
@@ -228,43 +175,12 @@ impl SunriseBatchBuilders {
         let mut arrays = Vec::with_capacity(schema.fields().len());
         finish_optional_f64(&mut self.latitude, &mut arrays);
         finish_optional_f64(&mut self.longitude, &mut arrays);
-        finish_string(&mut self.date_time, BATCH_SIZE * 30, &mut arrays);
+        finish_string(&mut self.date, BATCH_SIZE * 10, &mut arrays);
         finish_optional_f64(&mut self.delta_t, &mut arrays);
-        finish_string(&mut self.kind, BATCH_SIZE * 10, &mut arrays);
-        finish_string(&mut self.sunrise, BATCH_SIZE * 25, &mut arrays);
-        finish_string(&mut self.transit, BATCH_SIZE * 25, &mut arrays);
-        finish_string(&mut self.sunset, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.civil_start, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.civil_end, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.nautical_start, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.nautical_end, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.astronomical_start, BATCH_SIZE * 25, &mut arrays);
-        finish_optional_string(&mut self.astronomical_end, BATCH_SIZE * 25, &mut arrays);
+        finish_string(&mut self.day_state, BATCH_SIZE * 10, &mut arrays);
+        finish_string(&mut self.event, BATCH_SIZE * 18, &mut arrays);
+        finish_string(&mut self.time, BATCH_SIZE * 25, &mut arrays);
         write_batch(writer, schema, arrays)
-    }
-}
-
-fn append_optional_time(
-    builder: &mut Option<StringBuilder>,
-    time: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    datetime_cache: &mut DateTimeCache,
-) {
-    if let Some(builder) = builder {
-        match time {
-            Some(time) => append_time(builder, time, datetime_cache),
-            None => builder.append_null(),
-        }
-    }
-}
-
-fn append_nullable_time(
-    builder: &mut StringBuilder,
-    time: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    datetime_cache: &mut DateTimeCache,
-) {
-    match time {
-        Some(time) => append_time(builder, time, datetime_cache),
-        None => builder.append_null(),
     }
 }
 
@@ -285,17 +201,6 @@ fn finish_string(builder: &mut StringBuilder, capacity: usize, arrays: &mut Vec<
     *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
 }
 
-fn finish_optional_string(
-    builder: &mut Option<StringBuilder>,
-    capacity: usize,
-    arrays: &mut Vec<ArrayRef>,
-) {
-    if let Some(builder) = builder {
-        arrays.push(Arc::new(builder.finish()) as ArrayRef);
-        *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
-    }
-}
-
 pub fn write_parquet<W: Write + Send>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     command: Command,
@@ -304,7 +209,7 @@ pub fn write_parquet<W: Write + Send>(
 ) -> io::Result<usize> {
     match command {
         Command::Position => write_position_parquet(results, params, writer),
-        Command::Sunrise => write_sunrise_parquet(results, params, writer),
+        Command::Events => write_events_parquet(results, params, writer),
     }
 }
 
@@ -348,26 +253,26 @@ fn write_position_parquet<W: Write + Send>(
     Ok(total_count)
 }
 
-fn write_sunrise_parquet<W: Write + Send>(
+fn write_events_parquet<W: Write + Send>(
     results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
     params: &Parameters,
     writer: W,
 ) -> io::Result<usize> {
-    let layout = SunriseLayout::from_params(params);
+    let layout = EventLayout::from_params(params);
     let schema = build_schema(layout.csv_headers());
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
     let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
-    let mut builders = SunriseBatchBuilders::new(layout);
+    let mut builders = EventBatchBuilders::new(layout);
     let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
     let mut batch_count = 0;
     let mut total_count = 0;
 
     for result in results {
         let result = result.map_err(io::Error::other)?;
-        let row = normalize_sunrise_result(&result);
+        let row = normalize_event_result(&result);
         builders.append_row(&row, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
@@ -406,17 +311,7 @@ fn parquet_field(name: &'static str) -> Field {
         | "azimuth" | "zenith" | "elevation-angle" => DataType::Float64,
         _ => DataType::Utf8,
     };
-    let nullable = matches!(
-        name,
-        "sunrise"
-            | "sunset"
-            | "civil_start"
-            | "civil_end"
-            | "nautical_start"
-            | "nautical_end"
-            | "astronomical_start"
-            | "astronomical_end"
-    );
+    let nullable = matches!(name, "event" | "time");
     Field::new(name, data_type, nullable)
 }
 

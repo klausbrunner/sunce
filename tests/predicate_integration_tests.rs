@@ -23,17 +23,17 @@ fn assert_run(args: &[&str], code: i32, stderr: Option<&str>) {
     }
 }
 
-fn sunrise_args(
+fn events_args(
     lat: &'static str,
     lon: &'static str,
     datetime: &'static str,
     predicate: &'static str,
 ) -> [&'static str; 6] {
-    ["--timezone=UTC", lat, lon, datetime, "sunrise", predicate]
+    ["--timezone=UTC", lat, lon, datetime, "events", predicate]
 }
 
-fn berlin_sunrise(datetime: &'static str, predicate: &'static str) -> [&'static str; 6] {
-    sunrise_args("52.0", "13.4", datetime, predicate)
+fn berlin_events(datetime: &'static str, predicate: &'static str) -> [&'static str; 6] {
+    events_args("52.0", "13.4", datetime, predicate)
 }
 
 fn position_args(
@@ -46,7 +46,7 @@ fn position_args(
 }
 
 fn assert_berlin_state(datetime: &'static str, predicate: &'static str, code: i32) {
-    assert_run(&berlin_sunrise(datetime, predicate), code, None);
+    assert_run(&berlin_events(datetime, predicate), code, None);
 }
 
 fn assert_position_threshold(datetime: &'static str, predicate: &'static str, code: i32) {
@@ -57,14 +57,14 @@ fn assert_position_threshold(datetime: &'static str, predicate: &'static str, co
     );
 }
 
-fn assert_sunrise_state(
+fn assert_events_state(
     lat: &'static str,
     lon: &'static str,
     datetime: &'static str,
     predicate: &'static str,
     code: i32,
 ) {
-    assert_run(&sunrise_args(lat, lon, datetime, predicate), code, None);
+    assert_run(&events_args(lat, lon, datetime, predicate), code, None);
 }
 
 #[test]
@@ -86,21 +86,52 @@ fn test_twilight_state_predicates_for_known_states() {
 }
 
 #[test]
-fn test_twilight_state_boundaries_are_half_open() {
-    for (datetime, predicate, code) in [
-        ("2024-03-21T05:05:54", "--is-daylight", 0),
-        ("2024-03-21T17:21:59", "--is-daylight", 1),
-        ("2024-03-21T04:32:14", "--is-civil-twilight", 0),
-        ("2024-03-21T05:05:54", "--is-civil-twilight", 1),
-        ("2024-03-21T03:52:20", "--is-nautical-twilight", 0),
-        ("2024-03-21T04:32:14", "--is-nautical-twilight", 1),
-        ("2024-03-21T03:10:39", "--is-astronomical-twilight", 0),
-        ("2024-03-21T03:52:20", "--is-astronomical-twilight", 1),
-        ("2024-03-21T03:10:39", "--is-astronomical-night", 1),
-        ("2024-03-21T17:21:59", "--after-sunset", 0),
-        ("2024-03-21T05:05:54", "--after-sunset", 1),
+fn predicates_change_across_calculated_events() {
+    use chrono::{Duration, NaiveDate, Utc};
+    use solar_positioning::{Horizon, Location, SolarEvents};
+    for (horizon, above, below) in [
+        (Horizon::SunriseSunset, "--is-daylight", "--after-sunset"),
+        (
+            Horizon::CivilTwilight,
+            "--is-civil-twilight",
+            "--is-nautical-twilight",
+        ),
+        (
+            Horizon::NauticalTwilight,
+            "--is-nautical-twilight",
+            "--is-astronomical-twilight",
+        ),
+        (
+            Horizon::AstronomicalTwilight,
+            "--is-astronomical-twilight",
+            "--is-astronomical-night",
+        ),
     ] {
-        assert_berlin_state(datetime, predicate, code);
+        let day = SolarEvents::new()
+            .for_date(
+                NaiveDate::from_ymd_opt(2024, 3, 21).unwrap(),
+                &Utc,
+                Location {
+                    latitude: 52.0,
+                    longitude: 13.4,
+                },
+                0.0,
+                horizon,
+            )
+            .unwrap();
+        for (time, before, after) in [(day.rises[0], below, above), (day.sets[0], above, below)] {
+            for (time, predicate) in [
+                (time - Duration::seconds(1), before),
+                (time + Duration::seconds(1), after),
+            ] {
+                let time = time.to_rfc3339();
+                assert_run(
+                    &["--timezone=UTC", "52", "13.4", &time, "events", predicate],
+                    0,
+                    None,
+                );
+            }
+        }
     }
 }
 
@@ -124,14 +155,14 @@ fn test_predicate_timezone_and_dst_behavior() {
             "52.0",
             "13.4",
             "2024-03-21T13:00:00",
-            "sunrise",
+            "events",
             "--is-daylight",
         ],
         vec![
             "52.0",
             "13.4",
             "2024-03-21T13:00:00+01:00",
-            "sunrise",
+            "events",
             "--is-daylight",
         ],
     ] {
@@ -187,6 +218,6 @@ fn test_predicate_polar_and_twilight_band_cases() {
             0,
         ),
     ] {
-        assert_sunrise_state(lat, lon, datetime, predicate, code);
+        assert_events_state(lat, lon, datetime, predicate, code);
     }
 }

@@ -937,9 +937,9 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "solar-positioning"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91d6872cbbd3f5ae24ef8e5f759b235a080d3592c8ddbc0c38c8985b19f6c34a"
+checksum = "33e67ad3108959c32cd9ab2515f7ced367e640c0454c6277f67c3dacc7d1d0a2"
 dependencies = [
  "chrono",
 ]

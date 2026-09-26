@@ -21,7 +21,7 @@ pub enum ValidCommand {
 #[derive(Debug, Clone, Copy)]
 enum ValidationMode {
     Position,
-    Sunrise,
+    Events,
     Predicate,
 }
 
@@ -38,9 +38,9 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
             validate_position_options(&usage)?;
             ValidationMode::Position
         }
-        Command::Sunrise => {
-            validate_sunrise_options(&usage)?;
-            ValidationMode::Sunrise
+        Command::Events => {
+            validate_events_options(&usage)?;
+            ValidationMode::Events
         }
     };
     let mode = if predicate.is_some() {
@@ -55,9 +55,7 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
             Command::Position => {
                 validate_position_predicate_mode(&source, predicate, &params, &usage)?
             }
-            Command::Sunrise => {
-                validate_sunrise_predicate_mode(&source, predicate, &params, &usage)?
-            }
+            Command::Events => validate_events_predicate_mode(&source, predicate, &params, &usage)?,
         }
         return Ok(ValidCommand::Predicate(build_predicate_job(
             source, params, predicate,
@@ -132,15 +130,18 @@ fn resolve_time_source(
                 );
             }
 
-            data::parse_datetime_string(&value, params.timezone.as_ref().map(|tz| tz.as_str()))
-                .map(TimeSource::Single)
-                .map_err(|err| {
-                    if matches!(mode, ValidationMode::Predicate) {
-                        predicate_error(err)
-                    } else {
-                        CliError::from(err)
-                    }
-                })
+            data::time_utils::parse_input_time(
+                &value,
+                params.timezone.as_ref().map(|tz| tz.as_str()),
+            )
+            .map(TimeSource::Single)
+            .map_err(|err| {
+                if matches!(mode, ValidationMode::Predicate) {
+                    predicate_error(err)
+                } else {
+                    CliError::from(err)
+                }
+            })
         }
     }
 }
@@ -219,12 +220,12 @@ fn validate_position_predicate_mode(
             Ok(())
         }
         _ => Err(predicate_error(
-            "Sunrise predicates require the sunrise command",
+            "Event predicates require the events command",
         )),
     }
 }
 
-fn validate_sunrise_predicate_mode(
+fn validate_events_predicate_mode(
     source: &DataSource,
     predicate: Predicate,
     params: &Parameters,
@@ -263,7 +264,7 @@ fn validate_position_options(usage: &ParsedOptionUsage) -> Result<(), CliError> 
     )
 }
 
-fn validate_sunrise_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
+fn validate_events_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
     if usage.horizon && usage.twilight {
         return Err("Option --horizon cannot be used with --twilight".into());
     }
@@ -275,9 +276,8 @@ fn validate_sunrise_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
             (usage.elevation, "--elevation"),
             (usage.temperature, "--temperature"),
             (usage.pressure, "--pressure"),
-            (usage.algorithm, "--algorithm"),
         ],
-        "sunrise",
+        "events",
     )
 }
 
@@ -322,7 +322,7 @@ fn build_predicate_job(
         lat,
         lon,
         time: match time {
-            TimeSource::Single(dt) => PredicateTime::Fixed(dt),
+            TimeSource::Single(dt) => PredicateTime::Fixed(dt.datetime),
             TimeSource::Now => PredicateTime::Now,
             TimeSource::Range(_) | TimeSource::File(_) => unreachable!("validated above"),
         },
