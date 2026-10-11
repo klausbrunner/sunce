@@ -26,7 +26,8 @@ include = [
 chrono = "0.4"
 chrono-tz = "0.10"
 solar-positioning = "0.7"
-arrow = { version = "60", default-features = false, optional = true }
+arrow-array = { version = "60", default-features = false, optional = true }
+arrow-schema = { version = "60", default-features = false, optional = true }
 parquet = { version = "60", features = ["arrow", "snap"], default-features = false, optional = true }
 iana-time-zone = "0.1"
 serde = "1"
@@ -35,7 +36,7 @@ ahash = "0.8"
 
 [features]
 default = ["parquet"]
-parquet = ["dep:arrow", "dep:parquet"]
+parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
 
 [dev-dependencies]
 assert_cmd = "2.2"

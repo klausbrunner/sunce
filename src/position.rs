@@ -6,13 +6,11 @@ use solar_positioning::{
     Location, PreparedPositions, RefractionCorrection, SolarPositions, delta_t,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 
 pub(crate) const TIME_CACHE_CAPACITY: usize = 2048;
-pub(crate) type TimeParts = Arc<PreparedPositions>;
 // Delta-T estimates use the local date, which can differ for equal instants.
 pub(crate) type TimeCacheKey = (DateTime<FixedOffset>, i32);
-pub(crate) type TimeCache = HashMap<TimeCacheKey, (TimeParts, f64)>;
+pub(crate) type TimeCache = HashMap<TimeCacheKey, (PreparedPositions, f64)>;
 
 pub(crate) struct PositionCalculation {
     pub position: solar_positioning::SolarPosition,
@@ -102,9 +100,9 @@ pub(crate) fn time_cache_get(
     capacity: usize,
     dt: DateTime<FixedOffset>,
     params: &Parameters,
-) -> Result<(TimeParts, f64), String> {
+) -> Result<(PreparedPositions, f64), String> {
     let key = (dt, dt.offset().local_minus_utc());
-    if let Some(existing) = cache.get(&key).cloned() {
+    if let Some(existing) = cache.get(&key).copied() {
         return Ok(existing);
     }
 
@@ -116,12 +114,10 @@ pub(crate) fn time_cache_get(
     }
 
     let deltat = resolve_deltat(dt, params);
-    let parts = Arc::new(
-        calculator(params)
-            .for_time(&dt, deltat)
-            .map_err(|err| format!("Failed to calculate time-dependent parts: {}", err))?,
-    );
-    cache.insert(key, (Arc::clone(&parts), deltat));
+    let parts = calculator(params)
+        .for_time(&dt, deltat)
+        .map_err(|err| format!("Failed to calculate time-dependent parts: {}", err))?;
+    cache.insert(key, (parts, deltat));
     order.push_back(key);
     Ok((parts, deltat))
 }
@@ -132,17 +128,17 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn time_cache_reuses_entries_without_growing_order() {
+    fn time_cache_hits_do_not_grow_entries_or_order() {
         let mut cache: TimeCache = HashMap::new();
         let mut order = VecDeque::new();
         let params = Parameters::default();
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
-        let first = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
-        let second = time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
+        time_cache_get(&mut cache, &mut order, 3, dt, &params).unwrap();
 
-        assert!(Arc::ptr_eq(&first.0, &second.0));
+        assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
     }
 

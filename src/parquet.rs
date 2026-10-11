@@ -6,9 +6,9 @@ use crate::output::{
     DATETIME_CACHE_CAPACITY, DateTimeCache, EventLayout, PositionLayout, cached_datetime,
     normalize_event_result, normalize_position_result,
 };
-use arrow::array::{ArrayRef, Float64Builder, StringBuilder};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow_array::builder::{Float64Builder, StringBuilder};
+use arrow_array::{ArrayRef, RecordBatch};
+use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;

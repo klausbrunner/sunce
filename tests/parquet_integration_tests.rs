@@ -1,9 +1,8 @@
 #![cfg(feature = "parquet")]
 
 mod common;
-use arrow::array::{Array, Float64Array, StringArray};
-use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
+use arrow_array::{Array, Float64Array, RecordBatch, StringArray};
+use arrow_schema::DataType;
 use bytes::Bytes;
 use common::*;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
