@@ -25,7 +25,7 @@ include = [
 [dependencies]
 chrono = "0.4"
 chrono-tz = "0.10"
-solar-positioning = "0.7"
+solar-positioning = "0.7.1"
 arrow-array = { version = "60", default-features = false, optional = true }
 arrow-schema = { version = "60", default-features = false, optional = true }
 parquet = { version = "60", features = ["arrow", "snap"], default-features = false, optional = true }

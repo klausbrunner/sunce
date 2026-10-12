@@ -20,7 +20,7 @@ pub(crate) struct PositionCalculation {
 pub(crate) fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
     params
         .deltat
-        .unwrap_or_else(|| delta_t::estimate_from_date_like(dt).unwrap_or(0.0))
+        .unwrap_or_else(|| delta_t::estimate_from_date_like(&dt).unwrap_or(0.0))
 }
 
 pub(crate) fn refraction_correction(

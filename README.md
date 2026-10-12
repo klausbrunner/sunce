@@ -55,7 +55,7 @@ sunce --format=csv 45.0:50.0:1.0 5.0:15.0:1.0 2026-06-21T12:00:00Z position
 # Sunrise, sunset, and twilight times for Tokyo throughout March 2027, JSON output
 sunce --format=json --timezone=Asia/Tokyo 35.68 139.69 2027-03 events --twilight
 
-# High-performance data processing: large datasets with Parquet output (Snappy compressed)
+# High-performance data processing: large datasets with Parquet output
 sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.parquet
 ```
 
@@ -144,7 +144,7 @@ For automation, `sunce` can evaluate one solar condition for one explicit locati
 
 This mode is intentionally strict: it only works with a single latitude/longitude pair and one explicit instant (`now`, full datetime, or unix timestamp). Ranges, date-only inputs, and file/stdin inputs are rejected.
 
-Add `--wait` to keep checking a predicate on `now` until it becomes true. `--wait` is only valid together with a predicate and `now`. Completion is usually within seconds, not guaranteed at the exact transition.
+Add `--wait` on `now` to sleep until a calculated transition, then recheck the predicate. Searches look up to one year ahead; no transition is an error. Angle waits use the same observation settings as position calculations. Completion is usually within seconds of the transition, not guaranteed at the exact transition.
 
 Use `--after-sunset` for the practical "has the sun set yet?" check. `--is-astronomical-night` is stricter and only becomes true after astronomical twilight ends.
 

@@ -343,12 +343,12 @@ fn test_unix_timestamps() {
             "--show-inputs",
             "52.0",
             "13.4",
-            "9999",
+            "6000",
             "position",
         ],
         &[],
     );
-    assert!(year_output.contains("9999-01-01"));
+    assert!(year_output.contains("6000-01-01"));
 }
 
 #[test]

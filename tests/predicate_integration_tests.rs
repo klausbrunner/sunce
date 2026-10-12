@@ -148,6 +148,36 @@ fn test_angle_predicates_for_known_thresholds() {
 }
 
 #[test]
+fn angle_wait_returns_for_true_predicates_and_rejects_unreachable_thresholds() {
+    for (predicate, code, error) in [
+        ("--sun-above=-90", 0, None),
+        ("--sun-below=90", 0, None),
+        (
+            "--sun-above=90",
+            2,
+            Some("Predicate will not become true within the next year"),
+        ),
+        (
+            "--sun-below=-90",
+            2,
+            Some("Predicate will not become true within the next year"),
+        ),
+    ] {
+        let output = sunce_command()
+            .args(["52.0", "13.4", "now", "position", predicate, "--wait"])
+            .timeout(std::time::Duration::from_secs(5))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(code), "{predicate}: {output:?}");
+        assert!(output.stdout.is_empty());
+        match error {
+            Some(error) => assert!(String::from_utf8_lossy(&output.stderr).contains(error)),
+            None => assert!(output.stderr.is_empty()),
+        }
+    }
+}
+
+#[test]
 fn test_predicate_timezone_and_dst_behavior() {
     for args in [
         vec![

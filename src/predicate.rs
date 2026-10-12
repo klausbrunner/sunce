@@ -3,13 +3,13 @@
 use crate::compute::SolarState;
 use crate::data::{Parameters, Predicate as CliPredicate};
 use crate::events::{is_after_sunset, next_state_transition, solar_state_at};
-use crate::position::solar_elevation_at;
+use crate::position::{calculator, refraction_correction, resolve_deltat, solar_elevation_at};
 use chrono::{DateTime, FixedOffset};
+use solar_positioning::{ElevationTarget, Location};
 
-const ANGLE_WAIT_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-const ANGLE_WAIT_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
 const STATE_WAIT_MARGIN: chrono::Duration = chrono::Duration::minutes(2);
 const STATE_NEAR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const MAX_WAIT_SLEEP: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub enum PredicateTime {
@@ -72,6 +72,7 @@ fn wait_duration_until(
         (near_start - now)
             .to_std()
             .expect("near transition must be after current time")
+            .min(MAX_WAIT_SLEEP)
     } else {
         STATE_NEAR_POLL_INTERVAL
     }
@@ -87,12 +88,33 @@ fn sleep_until(job: &PredicateJob, target: DateTime<FixedOffset>) -> Result<(), 
     }
 }
 
-fn angle_wait_duration(current_elevation: f64, threshold: f64) -> std::time::Duration {
-    let seconds = ((current_elevation - threshold).abs() * 120.0).clamp(
-        ANGLE_WAIT_MIN_INTERVAL.as_secs_f64(),
-        ANGLE_WAIT_MAX_INTERVAL.as_secs_f64(),
-    );
-    std::time::Duration::from_secs_f64(seconds)
+fn next_angle_transition(
+    job: &PredicateJob,
+    now: DateTime<FixedOffset>,
+    threshold: f64,
+    rising: bool,
+) -> Result<DateTime<FixedOffset>, String> {
+    let calculator = calculator(&job.params);
+    let end = now + chrono::Duration::days(370);
+    let location = Location {
+        latitude: job.lat,
+        longitude: job.lon,
+    };
+    let deltat = resolve_deltat(now, &job.params);
+    let target = ElevationTarget {
+        angle: threshold,
+        height: job.params.environment.elevation,
+        refraction: refraction_correction(&job.params)?,
+    };
+    let next = if rising {
+        calculator.next_elevation_rise(&now, &end, location, deltat, target)
+    } else {
+        calculator.next_elevation_set(&now, &end, location, deltat, target)
+    };
+    next.map_err(|err| format!("Failed to calculate elevation crossing: {err}"))?
+        .ok_or_else(|| {
+            "Predicate will not become true within the next year at this location".to_string()
+        })
 }
 
 pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
@@ -138,7 +160,9 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
                 {
                     return Ok(());
                 }
-                std::thread::sleep(angle_wait_duration(elevation, threshold));
+                let target = next_angle_transition(job, now, threshold, wait_for_above)?;
+                // The predicate uses strict inequalities, so wake just after the crossing.
+                sleep_until(job, target + chrono::Duration::seconds(1))?;
             }
         }
         PredicateCheck::State(state) => loop {
@@ -156,17 +180,22 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::CalculationAlgorithm;
     use chrono::TimeZone;
 
     #[test]
-    fn wait_duration_until_uses_long_sleep_before_transition_window() {
+    fn wait_duration_until_caps_sleep_before_transition_window() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let now = tz.with_ymd_and_hms(2024, 3, 21, 5, 0, 0).unwrap();
-        let target = tz.with_ymd_and_hms(2024, 3, 21, 6, 0, 0).unwrap();
-        assert_eq!(
-            wait_duration_until(now, target),
-            std::time::Duration::from_secs(58 * 60)
-        );
+        for (seconds_until_target, expected_sleep) in
+            [(150, 30), (180, 60), (3600, 60), (30 * 86400, 60)]
+        {
+            let target = now + chrono::Duration::seconds(seconds_until_target);
+            assert_eq!(
+                wait_duration_until(now, target),
+                std::time::Duration::from_secs(expected_sleep)
+            );
+        }
     }
 
     #[test]
@@ -186,20 +215,47 @@ mod tests {
     }
 
     #[test]
-    fn angle_wait_duration_scales_with_threshold_distance() {
-        assert_eq!(
-            angle_wait_duration(8.0, 10.0),
-            std::time::Duration::from_secs(240)
-        );
-    }
-
-    #[test]
-    fn angle_wait_duration_has_one_second_floor() {
-        assert_eq!(angle_wait_duration(9.995, 10.0), ANGLE_WAIT_MIN_INTERVAL);
-    }
-
-    #[test]
-    fn angle_wait_duration_has_ten_minute_cap() {
-        assert_eq!(angle_wait_duration(-10.0, 10.0), ANGLE_WAIT_MAX_INTERVAL);
+    fn angle_transitions_match_predicates_with_observation_settings() {
+        for (algorithm, height) in [
+            (CalculationAlgorithm::Spa, 5000.0),
+            (CalculationAlgorithm::Grena3, 0.0),
+        ] {
+            for refraction in [false, true] {
+                let mut params = Parameters {
+                    deltat: Some(200.0),
+                    ..Parameters::default()
+                };
+                params.calculation.algorithm = algorithm;
+                params.environment.elevation = height;
+                params.environment.refraction = refraction;
+                params.environment.pressure = 850.0;
+                params.environment.temperature = -15.0;
+                for (hour, check, rising) in [
+                    (0, PredicateCheck::ElevationAbove(1.0), true),
+                    (12, PredicateCheck::ElevationBelow(1.0), false),
+                ] {
+                    let now = FixedOffset::east_opt(0)
+                        .unwrap()
+                        .with_ymd_and_hms(2024, 12, 21, hour, 0, 0)
+                        .unwrap();
+                    let mut job = PredicateJob {
+                        lat: 63.0,
+                        lon: 13.4,
+                        time: PredicateTime::Fixed(now),
+                        check,
+                        wait: true,
+                        params: params.clone(),
+                    };
+                    assert!(!run_once(&job).unwrap());
+                    let next = next_angle_transition(&job, now, 1.0, rising).unwrap();
+                    assert!(next > now);
+                    for (offset, expected) in [(-1100, false), (1100, true)] {
+                        job.time =
+                            PredicateTime::Fixed(next + chrono::Duration::microseconds(offset));
+                        assert_eq!(run_once(&job).unwrap(), expected);
+                    }
+                }
+            }
+        }
     }
 }
