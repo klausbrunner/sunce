@@ -1,6 +1,7 @@
 //! Predicate evaluation and wait-until logic for automation use cases.
 
 use crate::compute::SolarState;
+use crate::data::time_utils::{convert_datetime_to_timezone, get_timezone_info};
 use crate::data::{Parameters, Predicate as CliPredicate};
 use crate::events::{is_after_sunset, next_state_transition, solar_state_at};
 use crate::position::{calculator, refraction_correction, resolve_deltat, solar_elevation_at};
@@ -46,6 +47,23 @@ impl PredicateCheck {
             CliPredicate::AfterSunset => Self::AfterSunset,
             CliPredicate::SunAbove(threshold) => Self::ElevationAbove(threshold),
             CliPredicate::SunBelow(threshold) => Self::ElevationBelow(threshold),
+        }
+    }
+}
+
+impl std::fmt::Display for PredicateCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::State(state) => f.write_str(match state {
+                SolarState::Daylight => "daylight",
+                SolarState::CivilTwilight => "civil twilight",
+                SolarState::NauticalTwilight => "nautical twilight",
+                SolarState::AstronomicalTwilight => "astronomical twilight",
+                SolarState::Night => "astronomical night",
+            }),
+            Self::AfterSunset => f.write_str("after sunset"),
+            Self::ElevationAbove(angle) => write!(f, "elevation above {angle} degrees"),
+            Self::ElevationBelow(angle) => write!(f, "elevation below {angle} degrees"),
         }
     }
 }
@@ -118,7 +136,14 @@ fn next_angle_transition(
 }
 
 pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
-    let now = resolve_time(&job.time, &job.params)?;
+    let result = predicate_at(job, resolve_time(&job.time, &job.params)?)?;
+    if job.params.verbose {
+        eprintln!("Predicate {}: {result}.", job.check);
+    }
+    Ok(result)
+}
+
+fn predicate_at(job: &PredicateJob, now: DateTime<FixedOffset>) -> Result<bool, String> {
     match job.check {
         PredicateCheck::State(state) => {
             Ok(solar_state_at(job.lat, job.lon, now, &job.params)? == state)
@@ -134,46 +159,58 @@ pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
 }
 
 pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
-    match job.check {
-        PredicateCheck::AfterSunset => loop {
-            let now = resolve_time(&job.time, &job.params)?;
-            if is_after_sunset(job.lat, job.lon, now, &job.params)? {
-                return Ok(());
+    let mut waited = false;
+    loop {
+        let now = resolve_time(&job.time, &job.params)?;
+        if predicate_at(job, now)? {
+            if job.params.verbose {
+                let status = if waited { "satisfied" } else { "already true" };
+                eprintln!("Predicate {}: {status}.", job.check);
             }
-
-            let target = next_state_transition(
+            return Ok(());
+        }
+        let target = match job.check {
+            PredicateCheck::AfterSunset => next_state_transition(
                 SolarState::CivilTwilight,
                 job.lat,
                 job.lon,
                 now,
                 &job.params,
-            )?;
-            sleep_until(job, target)?;
-        },
-        PredicateCheck::ElevationAbove(threshold) | PredicateCheck::ElevationBelow(threshold) => {
-            let wait_for_above = matches!(job.check, PredicateCheck::ElevationAbove(_));
-            loop {
-                let now = resolve_time(&job.time, &job.params)?;
-                let elevation = solar_elevation_at(job.lat, job.lon, now, &job.params)?;
-                if (wait_for_above && elevation > threshold)
-                    || (!wait_for_above && elevation < threshold)
-                {
-                    return Ok(());
-                }
-                let target = next_angle_transition(job, now, threshold, wait_for_above)?;
-                // The predicate uses strict inequalities, so wake just after the crossing.
-                sleep_until(job, target + chrono::Duration::seconds(1))?;
+            )?,
+            PredicateCheck::State(state) => {
+                next_state_transition(state, job.lat, job.lon, now, &job.params)?
             }
+            PredicateCheck::ElevationAbove(threshold) => {
+                next_angle_transition(job, now, threshold, true)?
+            }
+            PredicateCheck::ElevationBelow(threshold) => {
+                next_angle_transition(job, now, threshold, false)?
+            }
+        };
+        if job.params.verbose {
+            let zone = get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str()));
+            let transition = convert_datetime_to_timezone(target, &zone);
+            let seconds = (target - now).num_seconds().max(0);
+            eprintln!(
+                "Waiting for {}; estimated transition at {} (in {}h {}m {}s).",
+                job.check,
+                transition.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+                seconds / 3600,
+                seconds / 60 % 60,
+                seconds % 60
+            );
         }
-        PredicateCheck::State(state) => loop {
-            let now = resolve_time(&job.time, &job.params)?;
-            if solar_state_at(job.lat, job.lon, now, &job.params)? == state {
-                return Ok(());
-            }
-
-            let target = next_state_transition(state, job.lat, job.lon, now, &job.params)?;
-            sleep_until(job, target)?;
-        },
+        // Angle predicates use strict inequalities, so wake just after the crossing.
+        let deadline = if matches!(
+            job.check,
+            PredicateCheck::ElevationAbove(_) | PredicateCheck::ElevationBelow(_)
+        ) {
+            target + chrono::Duration::seconds(1)
+        } else {
+            target
+        };
+        sleep_until(job, deadline)?;
+        waited = true;
     }
 }
 

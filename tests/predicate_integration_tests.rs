@@ -178,6 +178,67 @@ fn angle_wait_returns_for_true_predicates_and_rejects_unreachable_thresholds() {
 }
 
 #[test]
+fn verbose_predicates_preserve_exit_codes_and_empty_stdout() {
+    for (command, predicate, code, message) in [
+        (
+            "position",
+            "--sun-above=-90",
+            0,
+            "elevation above -90 degrees: true",
+        ),
+        (
+            "position",
+            "--sun-below=-90",
+            1,
+            "elevation below -90 degrees: false",
+        ),
+        ("events", "--is-daylight", 0, "daylight: true"),
+        ("events", "--after-sunset", 1, "after sunset: false"),
+    ] {
+        assert_run(
+            &[
+                "-v",
+                "52",
+                "13.4",
+                "2024-06-21T12:00:00Z",
+                command,
+                predicate,
+            ],
+            code,
+            Some(message),
+        );
+    }
+    for flag in ["--verbose", "-v"] {
+        assert_run(
+            &[
+                flag,
+                "52",
+                "13.4",
+                "now",
+                "position",
+                "--sun-above=-90",
+                "--wait",
+            ],
+            0,
+            Some("already true"),
+        );
+        assert_run(
+            &[
+                flag,
+                "52",
+                "13.4",
+                "now",
+                "position",
+                "--sun-above=90",
+                "--wait",
+            ],
+            2,
+            Some("Predicate will not become true within the next year"),
+        );
+    }
+}
+
+#[test]
 fn test_predicate_timezone_and_dst_behavior() {
     for args in [
         vec![

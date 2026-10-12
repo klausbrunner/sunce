@@ -161,6 +161,7 @@ pub struct Parameters {
     pub environment: Environment,
     pub calculation: CalculationOptions,
     pub wait: bool,
+    pub verbose: bool,
     pub perf: bool,
     pub step: Option<Step>,
     pub timezone: Option<TimezoneOverride>,
@@ -174,6 +175,7 @@ impl Default for Parameters {
             environment: Environment::default(),
             calculation: CalculationOptions::default(),
             wait: false,
+            verbose: false,
             perf: false,
             step: None,
             timezone: None,
@@ -293,6 +295,7 @@ mod tests {
         let defaults = Parameters::default();
         assert_eq!(defaults.deltat, Some(0.0));
         assert!(!defaults.wait);
+        assert!(!defaults.verbose);
         assert!(!defaults.perf);
         assert!(defaults.step.is_none());
         assert!(defaults.timezone.is_none());

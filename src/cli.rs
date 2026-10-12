@@ -24,8 +24,8 @@ impl<'a> Arguments<'a> {
         let mut options = Vec::new();
         let mut args = args.iter().skip(1).peekable();
         while let Some(arg) = args.next() {
-            if arg == "-h" {
-                options.push(("help", None));
+            if matches!(arg.as_str(), "-h" | "-v") {
+                options.push((if arg == "-h" { "help" } else { "verbose" }, None));
                 continue;
             }
             let Some(option) = arg.strip_prefix("--") else {
@@ -51,9 +51,9 @@ impl<'a> Arguments<'a> {
                         | "sun-above"
                         | "sun-below"
                 )
-                && args
-                    .peek()
-                    .is_some_and(|next| !next.starts_with("--") && *next != "-h")
+                && args.peek().is_some_and(|next| {
+                    !next.starts_with("--") && !matches!(next.as_str(), "-h" | "-v")
+                })
             {
                 value = args.next().map(String::as_str);
             }
@@ -304,6 +304,10 @@ fn apply_option(
         "wait" => {
             ensure_flag("wait", value)?;
             params.wait = true;
+        }
+        "verbose" => {
+            ensure_flag("verbose", value)?;
+            params.verbose = true;
         }
         "no-refraction" => {
             ensure_flag("no-refraction", value)?;
@@ -574,6 +578,7 @@ Options:
                         files, and position date-only inputs unless
                         --no-show-inputs is used.
   --perf                Print performance statistics to stderr.
+  -v, --verbose         Print status messages to stderr.
   Predicate mode (automation via exit status):
     Works only with one explicit lat/lon pair and one explicit instant.
     Event predicates:
@@ -588,8 +593,8 @@ Options:
       --sun-below=<degrees>      Exit 0 if the elevation angle is below the threshold.
     Shared:
       --wait                     With `now`, wait until the predicate becomes true.
-                                 Completion is usually within seconds, not
-                                 guaranteed at the exact transition.
+                                 Completion is usually within seconds of the
+                                 transition, not guaranteed at the exact time.
   -h, --help            Show help (command-specific when a command is given).
   --version             Print version information and exit.
 
@@ -621,6 +626,7 @@ fn get_command_help(command: &str) -> CliResult<String> {
 Calculates topocentric solar coordinates.
 
 Options:
+  -v, --verbose            Print status messages to stderr.
   --algorithm=<alg>         Algorithm: spa, grena3. Default: {}
   --elevation=<meters>      Elevation above sea level in meters (Grena3: zero). Default: {}
   --elevation-angle         Output elevation angle instead of zenith angle.
@@ -635,8 +641,8 @@ Options:
                             the threshold, 1 if not.
   --wait                    Predicate mode: with `now`, wait until the
                             predicate becomes true. Completion is usually
-                            within seconds, not guaranteed at the exact
-                            transition.
+                            within seconds of the transition, not guaranteed
+                            at the exact time.
 
 Examples:
   sunce 52.0 13.4 2024-06-21T12:00:00 position
@@ -659,6 +665,7 @@ Outputs one row per event: date, day_state, event, time.
 Dates without events have empty event/time fields.
 
 Options:
+  -v, --verbose            Print status messages to stderr.
   --algorithm=<name>       Position model: spa (default) or grena3.
   --twilight                Include civil, nautical, and astronomical twilight times.
   --horizon=<degrees>       Custom horizon angle in degrees. Not valid with --twilight.
@@ -672,8 +679,8 @@ Options:
                             sunrise.
   --wait                    Predicate mode: with `now`, wait until the
                             predicate becomes true. Completion is usually
-                            within seconds, not guaranteed at the exact
-                            transition.
+                            within seconds of the transition, not guaranteed
+                            at the exact time.
 
 Examples:
   sunce 52.0 13.4 2024-06-21 events

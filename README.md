@@ -122,6 +122,7 @@ Events use sea-level solar-centre positions. Sunrise and sunset include the conv
 - `--format=<format>` – output format: `text`, `csv`, `json`, or `parquet`.
 - `--[no-]headers` – include/omit headers for text and CSV output.
 - `--[no-]show-inputs` – include input parameters in the output.
+- `-v`, `--verbose` – print status messages to stderr without changing result output.
 - `--step=<duration>` – time step for `position` time series sampling (integer seconds or a suffix like `10m`, `1h`, `1d`).
 
 Run `sunce --help` for a brief usage summary.
@@ -145,6 +146,8 @@ For automation, `sunce` can evaluate one solar condition for one explicit locati
 This mode is intentionally strict: it only works with a single latitude/longitude pair and one explicit instant (`now`, full datetime, or unix timestamp). Ranges, date-only inputs, and file/stdin inputs are rejected.
 
 Add `--wait` on `now` to sleep until a calculated transition, then recheck the predicate. Searches look up to one year ahead; no transition is an error. Angle waits use the same observation settings as position calculations. Completion is usually within seconds of the transition, not guaranteed at the exact transition.
+
+Use `--verbose` to show the estimated transition time, waiting duration, and predicate completion on stderr.
 
 Use `--after-sunset` for the practical "has the sun set yet?" check. `--is-astronomical-night` is stricter and only becomes true after astronomical twilight ends.
 

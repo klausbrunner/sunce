@@ -135,6 +135,55 @@ fn test_events_option_placement_variants() {
 }
 
 #[test]
+fn verbose_is_global_and_preserves_output() {
+    let formats = [
+        "text",
+        "csv",
+        "json",
+        #[cfg(feature = "parquet")]
+        "parquet",
+    ];
+    for command in ["position", "events"] {
+        for format in formats {
+            let args = [
+                "--timezone=UTC",
+                "--format",
+                format,
+                "52",
+                "13.4",
+                "2024-06-21T12:00:00Z",
+                command,
+            ];
+            let quiet = sunce_command().args(args).output().unwrap();
+            assert!(quiet.status.success());
+            assert!(quiet.stderr.is_empty());
+            for flag in ["--verbose", "-v"] {
+                let mut verbose = sunce_command();
+                if flag == "-v" {
+                    verbose.arg(flag).args(args);
+                } else {
+                    verbose.args(args).arg(flag);
+                }
+                let output = verbose.output().unwrap();
+                assert_eq!(output.status.code(), quiet.status.code());
+                assert_eq!(output.stdout, quiet.stdout, "{command}, {format}, {flag}");
+                let stderr = String::from_utf8(output.stderr).unwrap();
+                assert!(stderr.contains("Calculating"));
+                assert!(stderr.contains("Processed"));
+            }
+        }
+    }
+    assert_failure(
+        &["--verbose=true", "52", "13.4", "now", "position"],
+        "Option --verbose does not take a value",
+    );
+    assert_failure(
+        &["--format", "-v", "52", "13.4", "now", "position"],
+        "Option --format requires a value",
+    );
+}
+
+#[test]
 fn test_invalid_cli_combinations() {
     assert_failures(&[
         (
@@ -216,7 +265,13 @@ fn test_invalid_cli_combinations() {
 fn test_help_and_version_paths() {
     assert_help(
         &["--help"],
-        &["Usage:", "--is-daylight", "--sun-above=<degrees>", "--wait"],
+        &[
+            "Usage:",
+            "--is-daylight",
+            "--sun-above=<degrees>",
+            "--wait",
+            "-v, --verbose",
+        ],
     );
 
     sunce_command()
@@ -234,6 +289,7 @@ fn test_help_and_version_paths() {
             "Calculates topocentric solar coordinates.",
             "--sun-above=<degrees>",
             "--sun-below=<degrees>",
+            "-v, --verbose",
         ],
     );
     assert_help(

@@ -53,6 +53,16 @@ fn run_stream(request: validate::StreamRequest) -> i32 {
         source,
         params,
     } = request;
+    if params.verbose {
+        let operation = match command {
+            data::Command::Position => "positions",
+            data::Command::Events => "events",
+        };
+        eprintln!(
+            "Calculating {operation} using {}; output: {}.",
+            params.calculation.algorithm, params.output.format
+        );
+    }
     let watch_mode = source.is_watch_mode(params.step.is_some());
     let allow_time_cache = !watch_mode;
     let flush_each_record = source.uses_stdin() || watch_mode;
@@ -92,6 +102,8 @@ fn run_stream(request: validate::StreamRequest) -> i32 {
             elapsed.as_secs_f64(),
             record_count as f64 / elapsed.as_secs_f64()
         );
+    } else if params.verbose {
+        eprintln!("Processed {record_count} records.");
     }
     0
 }
