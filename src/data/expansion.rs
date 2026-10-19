@@ -1,20 +1,29 @@
 //! Input expansion for ranges, files, and cartesian products.
 
+#[cfg(feature = "cli")]
 use super::time_utils::{
-    InputTime, TimezoneInfo, convert_datetime_to_timezone, get_timezone_info, parse_input_time,
+    InputTime, convert_datetime_to_timezone, get_timezone_info, parse_input_time,
 };
-use super::types::{
-    CoordTimeResult, CoordTimeStream, InputPath, LocationSource, LocationStream, TimeSource,
-};
-use super::{Command, Step, TimezoneOverride, validate_latitude, validate_longitude};
-use chrono::{DateTime, Days, Duration, FixedOffset, NaiveDate, NaiveDateTime, Utc};
+#[cfg(feature = "cli")]
+use super::types::{CoordTimeResult, CoordTimeStream, InputPath, TimeSource};
+#[cfg(feature = "cli")]
+use super::types::{LocationSource, LocationStream};
+#[cfg(feature = "cli")]
+use super::{Command, Step, TimezoneOverride};
+#[cfg(feature = "cli")]
+use crate::input::{self, Line, non_comment_lines, read_locations_from, read_samples};
+#[cfg(feature = "cli")]
+use chrono::{NaiveTime, Utc};
+#[cfg(feature = "cli")]
 use std::fs::File;
+#[cfg(feature = "cli")]
 use std::io::{self, BufRead, BufReader};
-use std::sync::Arc;
 
+#[cfg(feature = "cli")]
 type TimeIter = Box<dyn Iterator<Item = Result<InputTime, String>>>;
 
-struct CoordRangeIter {
+#[derive(Clone)]
+pub(crate) struct CoordRangeIter {
     start: f64,
     end: f64,
     step: f64,
@@ -23,7 +32,7 @@ struct CoordRangeIter {
 }
 
 impl CoordRangeIter {
-    fn new(start: f64, end: f64, step: f64) -> Self {
+    pub(crate) fn new(start: f64, end: f64, step: f64) -> Self {
         Self {
             start,
             end,
@@ -70,115 +79,7 @@ impl Iterator for CoordRangeIter {
     }
 }
 
-struct CalendarDayIter {
-    tz: TimezoneInfo,
-    next: Option<NaiveDate>,
-    end: NaiveDate,
-}
-
-impl CalendarDayIter {
-    fn new(start: NaiveDate, end: NaiveDate, tz: TimezoneInfo) -> Self {
-        Self {
-            tz,
-            next: Some(start),
-            end,
-        }
-    }
-}
-
-impl Iterator for CalendarDayIter {
-    type Item = Result<InputTime, String>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let date = self.next?;
-        self.next = if date < self.end {
-            date.checked_add_days(Days::new(1))
-        } else {
-            None
-        };
-
-        let midnight = date
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight must be constructible");
-        Some(
-            self.tz
-                .to_datetime_from_local(&midnight)
-                .map(|datetime| InputTime {
-                    datetime,
-                    zone: self.tz,
-                })
-                .ok_or_else(|| format!("Midnight does not exist in timezone for {date}")),
-        )
-    }
-}
-
-struct TimeStepIter {
-    tz: TimezoneInfo,
-    next: Option<DateTime<FixedOffset>>,
-    end: DateTime<FixedOffset>,
-    step: Duration,
-}
-
-impl TimeStepIter {
-    fn new(
-        start: DateTime<FixedOffset>,
-        end: DateTime<FixedOffset>,
-        step: Duration,
-        tz: TimezoneInfo,
-    ) -> Self {
-        Self {
-            tz,
-            next: Some(start),
-            end,
-            step,
-        }
-    }
-}
-
-impl Iterator for TimeStepIter {
-    type Item = DateTime<FixedOffset>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.next?;
-        self.next = current
-            .naive_utc()
-            .checked_add_signed(self.step)
-            .filter(|candidate| *candidate <= self.end.naive_utc())
-            .map(|candidate| self.tz.to_datetime_from_utc(&candidate));
-
-        Some(current)
-    }
-}
-
-fn parse_delimited_line(line: &str) -> Vec<&str> {
-    if line.contains(',') {
-        line.split(',').collect()
-    } else {
-        line.split_whitespace().collect()
-    }
-}
-
-fn parse_lat_lon(
-    lat_str: &str,
-    lon_str: &str,
-    ctx: &str,
-    line: usize,
-) -> Result<(f64, f64), String> {
-    let lat_raw: f64 = lat_str
-        .trim()
-        .parse()
-        .map_err(|_| format!("{}:{}: invalid latitude '{}'", ctx, line, lat_str))?;
-    let lat = validate_latitude(lat_raw).map_err(|err| format!("{}:{}: {}", ctx, line, err))?;
-
-    let lon_raw: f64 = lon_str
-        .trim()
-        .parse()
-        .map_err(|_| format!("{}:{}: invalid longitude '{}'", ctx, line, lon_str))?;
-    let lon = validate_longitude(lon_raw).map_err(|err| format!("{}:{}: {}", ctx, line, err))?;
-
-    Ok((lat, lon))
-}
-
+#[cfg(feature = "cli")]
 fn open_input(input_path: &InputPath) -> io::Result<Box<dyn BufRead>> {
     match input_path {
         InputPath::Stdin => Ok(Box::new(BufReader::new(io::stdin()))),
@@ -189,134 +90,48 @@ fn open_input(input_path: &InputPath) -> io::Result<Box<dyn BufRead>> {
     }
 }
 
-struct Line {
-    number: usize,
-    content: String,
-    ctx: String,
-}
-
+#[cfg(feature = "cli")]
 fn input_context(input_path: &InputPath) -> String {
     match input_path {
-        InputPath::Stdin => "stdin".to_string(),
+        InputPath::Stdin => "stdin".to_owned(),
         InputPath::File(path) => path.display().to_string(),
     }
 }
 
+#[cfg(feature = "cli")]
 fn read_non_comment_lines(
     input_path: &InputPath,
 ) -> Result<Box<dyn Iterator<Item = Result<Line, String>>>, String> {
     let ctx = input_context(input_path);
-
     let reader = open_input(input_path).map_err(|e| format!("Error opening {}: {}", ctx, e))?;
-    let mut lines = reader.lines().enumerate();
-
-    Ok(Box::new(std::iter::from_fn(move || {
-        for (idx, line_result) in lines.by_ref() {
-            let number = idx + 1;
-            let line = match line_result {
-                Ok(value) => value,
-                Err(err) => {
-                    return Some(Err(format!(
-                        "{}:{}: failed to read line: {}",
-                        ctx, number, err
-                    )));
-                }
-            };
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            return Some(Ok(Line {
-                number,
-                content: trimmed.to_string(),
-                ctx: ctx.clone(),
-            }));
-        }
-        None
-    })))
+    Ok(non_comment_lines(reader, ctx))
 }
 
-fn coord_range_iter(start: f64, end: f64, step: f64) -> CoordRangeIter {
-    CoordRangeIter::new(start, end, step)
-}
-
-fn range_point_count(start: f64, end: f64, step: f64) -> usize {
-    if (end - start).abs() < f64::EPSILON {
-        1
-    } else {
-        ((end - start).abs() / step.abs()).floor() as usize + 1
-    }
-}
-
-fn shared_values(values: Arc<[f64]>) -> impl Iterator<Item = f64> {
-    let mut index = 0usize;
-    std::iter::from_fn(move || {
-        let value = values.get(index).copied();
-        index += 1;
-        value
-    })
-}
-
+#[cfg(feature = "cli")]
 pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, String> {
     match source {
+        #[cfg(feature = "cli")]
         LocationSource::Single(lat, lon) => Ok(Box::new(std::iter::once(Ok((lat, lon))))),
         LocationSource::Range { lat, lon } => {
-            let (lon_start, lon_end, lon_step) = lon;
-            let lat_count = range_point_count(lat.0, lat.1, lat.2);
-            let lon_count = range_point_count(lon_start, lon_end, lon_step);
-
-            if lat_count <= lon_count {
-                let lat_coords: Arc<[f64]> =
-                    Arc::from(coord_range_iter(lat.0, lat.1, lat.2).collect::<Vec<_>>());
-                Ok(Box::new(
-                    coord_range_iter(lon_start, lon_end, lon_step).flat_map(move |lon| {
-                        let lat_coords = Arc::clone(&lat_coords);
-                        shared_values(lat_coords)
-                            .map(move |lat| Ok::<(f64, f64), String>((lat, lon)))
-                    }),
-                ))
-            } else {
-                let lon_coords: Arc<[f64]> =
-                    Arc::from(coord_range_iter(lon_start, lon_end, lon_step).collect::<Vec<_>>());
-                Ok(Box::new(coord_range_iter(lat.0, lat.1, lat.2).flat_map(
-                    move |lat| {
-                        let lon_coords = Arc::clone(&lon_coords);
-                        shared_values(lon_coords)
-                            .map(move |lon| Ok::<(f64, f64), String>((lat, lon)))
-                    },
-                )))
-            }
+            let grid =
+                crate::input::CoordinateGrid::new(lat, lon).map_err(|err| err.to_string())?;
+            Ok(Box::new(grid.locations().map(|location| {
+                Ok((location.latitude, location.longitude))
+            })))
         }
+        #[cfg(feature = "cli")]
         LocationSource::File(input_path) => {
-            let iter = read_non_comment_lines(&input_path)?.map(|line_res| {
-                let line = line_res?;
-                let parts = parse_delimited_line(&line.content);
-                if parts.len() < 2 {
-                    return Err(format!(
-                        "{}:{}: expected 2 fields (lat lon), found {}",
-                        line.ctx,
-                        line.number,
-                        parts.len()
-                    ));
-                }
-                if parts.len() > 2 {
-                    return Err(format!(
-                        "{}:{}: expected 2 fields (lat lon), found {}. File appears to be a paired data file (lat lon datetime), which cannot be used with a separate time source.",
-                        line.ctx,
-                        line.number,
-                        parts.len()
-                    ));
-                }
-
-                let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
-                Ok((lat, lon))
-            });
-
-            Ok(Box::new(iter))
+            let context = input_context(&input_path);
+            let reader =
+                open_input(&input_path).map_err(|err| format!("Error opening {context}: {err}"))?;
+            Ok(Box::new(read_locations_from(reader, context).map(|item| {
+                item.map(|location| (location.latitude, location.longitude))
+            })))
         }
     }
 }
 
+#[cfg(feature = "cli")]
 pub fn expand_time_source(
     source: TimeSource,
     step_override: Option<Step>,
@@ -325,15 +140,39 @@ pub fn expand_time_source(
 ) -> Result<TimeIter, String> {
     match source {
         TimeSource::Single(dt) => Ok(Box::new(std::iter::once(Ok(dt)))),
-        TimeSource::Range(partial_date) => {
+        TimeSource::Daily(period, clock) => {
+            let zone = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
+            let times =
+                crate::input::daily_times(&period, zone, clock).map_err(|e| e.to_string())?;
+            Ok(Box::new(times.map(move |time| {
+                time.map(|datetime| InputTime { datetime, zone })
+                    .map_err(|e| e.to_string())
+            })))
+        }
+        TimeSource::Range(period) => {
+            let zone = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
+            if command == Command::Events {
+                let (start, end) = input::date_bounds(&period).map_err(|e| e.to_string())?;
+                let dates = input::event_dates(start, end).map_err(|e| e.to_string())?;
+                return Ok(Box::new(dates.map(move |date| {
+                    zone.at_or_after_local(&date.and_time(NaiveTime::MIN))
+                        .filter(|time| time.date_naive() == date)
+                        .map(|datetime| InputTime { datetime, zone })
+                        .ok_or_else(|| format!("Date does not exist in timezone: {date}"))
+                })));
+            }
             let step = step_override.unwrap_or_else(|| {
-                if command == Command::Events || partial_date.len() == 4 {
-                    Step(chrono::Duration::days(1))
+                Step(if period.len() == 4 {
+                    chrono::Duration::days(1)
                 } else {
-                    Step(chrono::Duration::hours(1))
-                }
+                    chrono::Duration::hours(1)
+                })
             });
-            expand_partial_date(partial_date, step, override_tz, command)
+            let times = input::position_times(&period, zone, step).map_err(|e| e.to_string())?;
+            Ok(Box::new(times.map(move |time| {
+                time.map(|datetime| InputTime { datetime, zone })
+                    .map_err(|e| e.to_string())
+            })))
         }
         TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
@@ -358,6 +197,7 @@ pub fn expand_time_source(
             } else {
                 Ok(Box::new(std::iter::once(Ok(InputTime {
                     datetime: convert_datetime_to_timezone(Utc::now(), &tz_info),
+                    #[cfg(feature = "cli")]
                     zone: tz_info,
                 }))))
             }
@@ -365,141 +205,7 @@ pub fn expand_time_source(
     }
 }
 
-struct NaiveBounds {
-    start: NaiveDateTime,
-    end: NaiveDateTime,
-}
-
-fn naive_bounds_from_partial(date_str: &str) -> Result<NaiveBounds, String> {
-    let to_day_bounds = |date: NaiveDate| -> NaiveBounds {
-        let start = date
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight must be constructible");
-        let end = date
-            .and_hms_opt(23, 59, 59)
-            .expect("end-of-day must be constructible");
-        NaiveBounds { start, end }
-    };
-
-    let parse_year = |value: &str| {
-        value
-            .parse::<i32>()
-            .map_err(|_| format!("Invalid year value: '{}'", value))
-    };
-
-    let parse_month = |value: &str| {
-        value
-            .parse::<u32>()
-            .map_err(|_| format!("Invalid month value: '{}'", value))
-    };
-
-    let parse_day = |value: &str| {
-        value
-            .parse::<u32>()
-            .map_err(|_| format!("Invalid day value: '{}'", value))
-    };
-
-    match date_str.len() {
-        4 => {
-            let year = parse_year(date_str)?;
-            let start = NaiveDate::from_ymd_opt(year, 1, 1)
-                .ok_or_else(|| format!("Invalid start of year for {}", date_str))?;
-            let end = NaiveDate::from_ymd_opt(year, 12, 31)
-                .ok_or_else(|| format!("Invalid end of year for {}", date_str))?;
-            Ok(NaiveBounds {
-                start: to_day_bounds(start).start,
-                end: to_day_bounds(end).end,
-            })
-        }
-        7 => {
-            let (year_str, month_str) = date_str
-                .split_once('-')
-                .ok_or_else(|| format!("Invalid year-month format: '{}'", date_str))?;
-            let year = parse_year(year_str)?;
-            let month = parse_month(month_str)?;
-            let start = NaiveDate::from_ymd_opt(year, month, 1)
-                .ok_or_else(|| format!("Invalid start date for {}", date_str))?;
-            let (next_year, next_month) = if month == 12 {
-                (year + 1, 1)
-            } else {
-                (year, month + 1)
-            };
-            let end = NaiveDate::from_ymd_opt(next_year, next_month, 1)
-                .and_then(|d| d.pred_opt())
-                .ok_or_else(|| format!("Cannot determine end date for {}", date_str))?;
-            Ok(NaiveBounds {
-                start: to_day_bounds(start).start,
-                end: to_day_bounds(end).end,
-            })
-        }
-        10 => {
-            let parts: Vec<_> = date_str.split('-').collect();
-            if parts.len() != 3 {
-                return Err(format!(
-                    "Invalid full date format: '{}'. Expected YYYY-MM-DD",
-                    date_str
-                ));
-            }
-            let date = NaiveDate::from_ymd_opt(
-                parse_year(parts[0])?,
-                parse_month(parts[1])?,
-                parse_day(parts[2])?,
-            )
-            .ok_or_else(|| format!("Invalid date: '{}'", date_str))?;
-            Ok(to_day_bounds(date))
-        }
-        _ => Err(format!(
-            "Unsupported date format: '{}'. Use YYYY, YYYY-MM, or YYYY-MM-DD",
-            date_str
-        )),
-    }
-}
-
-fn to_local_datetime(
-    tz_info: &TimezoneInfo,
-    naive: NaiveDateTime,
-    label: &str,
-    original: &str,
-) -> Result<DateTime<FixedOffset>, String> {
-    tz_info.to_datetime_from_local(&naive).ok_or_else(|| {
-        format!(
-            "{} time does not exist in timezone (likely DST gap): {}",
-            label, original
-        )
-    })
-}
-
-fn expand_partial_date(
-    date_str: String,
-    step: Step,
-    override_tz: Option<TimezoneOverride>,
-    command: Command,
-) -> Result<TimeIter, String> {
-    let step_duration: chrono::Duration = step.into();
-    let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
-    let bounds = naive_bounds_from_partial(&date_str)?;
-
-    if command == Command::Events {
-        return Ok(Box::new(CalendarDayIter::new(
-            bounds.start.date(),
-            bounds.end.date(),
-            tz_info,
-        )));
-    }
-
-    let start_dt = to_local_datetime(&tz_info, bounds.start, "Start", &date_str)?;
-    let end_dt = to_local_datetime(&tz_info, bounds.end, "End", &date_str)?;
-
-    let iter = TimeStepIter::new(start_dt, end_dt, step_duration, tz_info).map(move |datetime| {
-        Ok(InputTime {
-            datetime,
-            zone: tz_info,
-        })
-    });
-
-    Ok(Box::new(iter))
-}
-
+#[cfg(feature = "cli")]
 fn read_times_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
@@ -513,13 +219,14 @@ fn read_times_file(
     Ok(Box::new(iter))
 }
 
+#[cfg(feature = "cli")]
 fn expand_time_outer(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
     override_tz: Option<TimezoneOverride>,
     command: Command,
-) -> Result<CoordTimeStream, String> {
+) -> Result<CoordTimeStream<'static>, String> {
     let iter = expand_time_source(time_source, step, override_tz.clone(), command)?.flat_map(
         move |time_res| match time_res {
             Ok(dt) => match expand_location_source(loc_source.clone()) {
@@ -534,13 +241,14 @@ fn expand_time_outer(
     Ok(Box::new(iter))
 }
 
+#[cfg(feature = "cli")]
 fn expand_location_outer(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
     override_tz: Option<TimezoneOverride>,
     command: Command,
-) -> Result<CoordTimeStream, String> {
+) -> Result<CoordTimeStream<'static>, String> {
     let iter = expand_location_source(loc_source)?.flat_map(move |coord_res| match coord_res {
         Ok((lat, lon)) => {
             match expand_time_source(time_source.clone(), step, override_tz.clone(), command) {
@@ -554,13 +262,14 @@ fn expand_location_outer(
     Ok(Box::new(iter))
 }
 
+#[cfg(feature = "cli")]
 pub fn expand_cartesian_product(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
     override_tz: Option<TimezoneOverride>,
     command: Command,
-) -> Result<CoordTimeStream, String> {
+) -> Result<CoordTimeStream<'static>, String> {
     let loc_is_single = matches!(loc_source, LocationSource::Single(_, _));
     let loc_replayable = !matches!(loc_source, LocationSource::File(InputPath::Stdin));
 
@@ -602,37 +311,23 @@ pub fn expand_cartesian_product(
     Err("Cannot combine non-replayable streams for both locations and times. Use files instead of stdin or provide bounded values.".to_string())
 }
 
+#[cfg(feature = "cli")]
 pub fn expand_paired_file(
     input_path: InputPath,
     override_tz: Option<TimezoneOverride>,
-) -> Result<CoordTimeStream, String> {
-    let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
-        let line = line_res?;
-        let parts = parse_delimited_line(&line.content);
-        if parts.len() < 3 {
-            return Err(format!(
-                "{}:{}: expected 3 fields (lat lon datetime), found {}",
-                line.ctx,
-                line.number,
-                parts.len()
-            ));
-        }
-
-        let (lat, lon) = parse_lat_lon(parts[0], parts[1], &line.ctx, line.number)?;
-
-        let dt_str = parts[2..].join(" ");
-        let dt = parse_input_time(dt_str.trim(), override_tz.as_ref().map(|tz| tz.as_str()))
-            .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))?;
-        Ok((lat, lon, dt))
-    });
-
-    Ok(Box::new(iter))
+) -> Result<CoordTimeStream<'static>, String> {
+    let ctx = input_context(&input_path);
+    let reader = open_input(&input_path).map_err(|err| format!("Error opening {ctx}: {err}"))?;
+    Ok(read_samples(reader, ctx, move |time| {
+        parse_input_time(time, override_tz.as_ref().map(|tz| tz.as_str()))
+    }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cli"))]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "cli")]
     #[test]
     fn range_with_fixed_longitude_handles_single_step() {
         let source = LocationSource::Range {
@@ -653,6 +348,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn range_supports_descending_steps() {
         let source = LocationSource::Range {
@@ -670,6 +366,7 @@ mod tests {
         assert_eq!(collected.last().copied(), Some((52.0, 11.0)));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn range_does_not_overshoot_endpoint() {
         let source = LocationSource::Range {
@@ -685,6 +382,7 @@ mod tests {
         assert_eq!(collected, vec![(0.0, 0.0), (0.6, 0.0)]);
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn events_ranges_stay_at_local_midnight_across_dst() {
         let times = expand_time_source(

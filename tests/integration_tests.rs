@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use common::*;
 use std::collections::{HashMap, HashSet};

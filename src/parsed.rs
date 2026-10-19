@@ -22,6 +22,7 @@ pub struct ParsedOptionUsage {
     pub show_inputs: bool,
     pub perf: bool,
     pub step: bool,
+    pub at: bool,
     pub no_refraction: bool,
     pub elevation_angle: bool,
     pub elevation: bool,

@@ -49,8 +49,27 @@ jobs:
 
       - name: Run tests without default features (Linux only)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --locked --no-default-features --verbose
+        run: cargo test --locked --no-default-features --features cli --verbose
 
       - name: Run clippy without default features (Linux only)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --no-default-features --all-targets -- -D warnings
+        run: cargo clippy --no-default-features --features cli --all-targets -- -D warnings
+
+      - name: Test the library without native adapters (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo test --locked --no-default-features
+          cargo clippy --no-default-features --all-targets -- -D warnings
+
+  wasm:
+    name: WebAssembly library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust with the WebAssembly target
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          target: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the library without native adapters
+        run: cargo check --locked --lib --no-default-features --target wasm32-unknown-unknown

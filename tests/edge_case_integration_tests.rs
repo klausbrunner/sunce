@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use common::{sunce_command, sunce_exe_path, write_text_file};
 use predicates::prelude::*;

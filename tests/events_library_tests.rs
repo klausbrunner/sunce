@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use chrono::{Duration, FixedOffset, NaiveDate, Utc};
 use common::{parse_csv_output_maps, parse_rfc3339, sunce_command};

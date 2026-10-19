@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use common::{
     find_csv_row, load_fixture_rows, parse_csv_output_maps, sunce_command, write_text_file,

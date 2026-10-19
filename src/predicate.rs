@@ -112,17 +112,17 @@ fn next_angle_transition(
     threshold: f64,
     rising: bool,
 ) -> Result<DateTime<FixedOffset>, String> {
-    let calculator = calculator(&job.params);
+    let calculator = calculator(&job.params.position_options());
     let end = now + chrono::Duration::days(370);
     let location = Location {
         latitude: job.lat,
         longitude: job.lon,
     };
-    let deltat = resolve_deltat(now, &job.params);
+    let deltat = resolve_deltat(now, &job.params.position_options());
     let target = ElevationTarget {
         angle: threshold,
         height: job.params.environment.elevation,
-        refraction: refraction_correction(&job.params)?,
+        refraction: refraction_correction(&job.params.position_options())?,
     };
     let next = if rising {
         calculator.next_elevation_rise(&now, &end, location, deltat, target)
@@ -146,14 +146,22 @@ pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
 fn predicate_at(job: &PredicateJob, now: DateTime<FixedOffset>) -> Result<bool, String> {
     match job.check {
         PredicateCheck::State(state) => {
-            Ok(solar_state_at(job.lat, job.lon, now, &job.params)? == state)
+            Ok(solar_state_at(job.lat, job.lon, now, &job.params.position_options())? == state)
         }
-        PredicateCheck::AfterSunset => is_after_sunset(job.lat, job.lon, now, &job.params),
+        PredicateCheck::AfterSunset => {
+            is_after_sunset(job.lat, job.lon, now, &job.params.position_options())
+        }
         PredicateCheck::ElevationAbove(threshold) => {
-            Ok(solar_elevation_at(job.lat, job.lon, now, &job.params)? > threshold)
+            Ok(
+                solar_elevation_at(job.lat, job.lon, now, &job.params.position_options())?
+                    > threshold,
+            )
         }
         PredicateCheck::ElevationBelow(threshold) => {
-            Ok(solar_elevation_at(job.lat, job.lon, now, &job.params)? < threshold)
+            Ok(
+                solar_elevation_at(job.lat, job.lon, now, &job.params.position_options())?
+                    < threshold,
+            )
         }
     }
 }
@@ -175,11 +183,17 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
                 job.lat,
                 job.lon,
                 now,
-                &job.params,
+                &job.params.position_options(),
+                get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str())),
             )?,
-            PredicateCheck::State(state) => {
-                next_state_transition(state, job.lat, job.lon, now, &job.params)?
-            }
+            PredicateCheck::State(state) => next_state_transition(
+                state,
+                job.lat,
+                job.lon,
+                now,
+                &job.params.position_options(),
+                get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str())),
+            )?,
             PredicateCheck::ElevationAbove(threshold) => {
                 next_angle_transition(job, now, threshold, true)?
             }
@@ -258,10 +272,8 @@ mod tests {
             (CalculationAlgorithm::Grena3, 0.0),
         ] {
             for refraction in [false, true] {
-                let mut params = Parameters {
-                    deltat: Some(200.0),
-                    ..Parameters::default()
-                };
+                let mut params = Parameters::default();
+                params.calculation.deltat = Some(200.0);
                 params.calculation.algorithm = algorithm;
                 params.environment.elevation = height;
                 params.environment.refraction = refraction;

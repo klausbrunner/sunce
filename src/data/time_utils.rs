@@ -1,14 +1,19 @@
 //! Date, time, duration, and timezone parsing utilities.
 
-use chrono::{
-    DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
-};
-use chrono_tz::Tz;
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+#[cfg(feature = "cli")]
+use chrono::{Local, Offset};
+use chrono_tz::{GapInfo, Tz};
+#[cfg(feature = "cli")]
 use iana_time_zone::get_timezone;
+#[cfg(feature = "cli")]
 use std::env;
+#[cfg(feature = "cli")]
 use std::sync::OnceLock;
 
+#[cfg(feature = "cli")]
 static SYSTEM_TIMEZONE: OnceLock<TimezoneInfo> = OnceLock::new();
+#[cfg(feature = "cli")]
 const SYSTEM_TZ_OVERRIDE_ENV: &str = "SUNCE_SYSTEM_TIMEZONE";
 
 fn timezone_gap_error(dt_str: &str) -> String {
@@ -62,18 +67,13 @@ fn parse_datetime_input(dt_str: &str) -> Result<ParsedDateTime, String> {
 
 fn resolve_datetime(
     parsed: ParsedDateTime,
-    override_tz: Option<&str>,
+    tz_info: TimezoneInfo,
     original: &str,
 ) -> Result<InputTime, String> {
-    let tz_info = match &parsed {
-        ParsedDateTime::Fixed(dt) if override_tz.is_none() => TimezoneInfo::Fixed(*dt.offset()),
-        ParsedDateTime::UnixTimestamp(_) if override_tz.is_none() => {
-            TimezoneInfo::Fixed(FixedOffset::east_opt(0).unwrap())
-        }
-        _ => get_timezone_info(override_tz),
-    };
     let datetime = match parsed {
-        ParsedDateTime::Now => Ok(convert_datetime_to_timezone(Utc::now(), &tz_info)),
+        ParsedDateTime::Now => {
+            Err("Resolve 'now' to an explicit instant before calling the library".to_owned())
+        }
         ParsedDateTime::Fixed(dt) => Ok(convert_datetime_to_timezone(dt, &tz_info)),
         ParsedDateTime::Naive(naive_dt) => tz_info
             .to_datetime_from_local(&naive_dt)
@@ -83,7 +83,8 @@ fn resolve_datetime(
                 .and_hms_opt(0, 0, 0)
                 .expect("Midnight time creation cannot fail");
             tz_info
-                .to_datetime_from_local(&naive_dt)
+                .at_or_after_local(&naive_dt)
+                .filter(|datetime| datetime.date_naive() == date)
                 .ok_or_else(|| timezone_gap_error(original))
         }
         ParsedDateTime::UnixTimestamp(ts) => {
@@ -95,6 +96,7 @@ fn resolve_datetime(
     }?;
     Ok(InputTime {
         datetime,
+        #[cfg(feature = "cli")]
         zone: tz_info,
     })
 }
@@ -102,6 +104,7 @@ fn resolve_datetime(
 #[derive(Debug, Clone, Copy)]
 pub struct InputTime {
     pub datetime: DateTime<FixedOffset>,
+    #[cfg(feature = "cli")]
     pub zone: TimezoneInfo,
 }
 
@@ -131,6 +134,16 @@ impl TimezoneInfo {
                 .map(|dt| dt.fixed_offset()),
         }
     }
+
+    /// Resolve a local time, choosing the earlier occurrence when it repeats.
+    /// A missing time advances to the first valid instant after the gap. An
+    /// entirely skipped date therefore resolves into the following date.
+    pub fn at_or_after_local(self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
+        self.to_datetime_from_local(dt).or_else(|| match self {
+            Self::Named(tz) => GapInfo::new(dt, &tz)?.end.map(|time| time.fixed_offset()),
+            Self::Fixed(_) => None,
+        })
+    }
 }
 
 pub fn convert_datetime_to_timezone<Tz: TimeZone>(
@@ -140,6 +153,7 @@ pub fn convert_datetime_to_timezone<Tz: TimeZone>(
     tz_info.to_datetime_from_utc(&dt.naive_utc())
 }
 
+#[cfg(feature = "cli")]
 pub fn parse_datetime_string(
     dt_str: &str,
     override_tz: Option<&str>,
@@ -147,8 +161,28 @@ pub fn parse_datetime_string(
     parse_input_time(dt_str, override_tz).map(|input| input.datetime)
 }
 
+/// Parse with a caller-supplied time zone and no system fallbacks.
+pub(crate) fn parse_in_timezone(dt_str: &str, timezone: TimezoneInfo) -> Result<InputTime, String> {
+    resolve_datetime(parse_datetime_input(dt_str)?, timezone, dt_str)
+}
+
+#[cfg(feature = "cli")]
 pub fn parse_input_time(dt_str: &str, override_tz: Option<&str>) -> Result<InputTime, String> {
-    resolve_datetime(parse_datetime_input(dt_str)?, override_tz, dt_str)
+    let parsed = parse_datetime_input(dt_str)?;
+    let timezone = match &parsed {
+        ParsedDateTime::Fixed(dt) if override_tz.is_none() => TimezoneInfo::Fixed(*dt.offset()),
+        ParsedDateTime::UnixTimestamp(_) if override_tz.is_none() => {
+            TimezoneInfo::Fixed(FixedOffset::east_opt(0).unwrap())
+        }
+        _ => get_timezone_info(override_tz),
+    };
+    if matches!(parsed, ParsedDateTime::Now) {
+        return Ok(InputTime {
+            datetime: convert_datetime_to_timezone(Utc::now(), &timezone),
+            zone: timezone,
+        });
+    }
+    resolve_datetime(parsed, timezone, dt_str)
 }
 
 pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
@@ -197,6 +231,7 @@ pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
     duration.ok_or_else(|| format!("Step is too large: '{}'", s))
 }
 
+#[cfg(feature = "cli")]
 pub fn is_date_without_time(s: &str) -> bool {
     s.len() == 10
         && s.matches('-').count() == 2
@@ -207,6 +242,7 @@ pub fn is_date_without_time(s: &str) -> bool {
             .all(|(idx, c)| matches!(idx, 4 | 7) || c.is_ascii_digit())
 }
 
+#[cfg(feature = "cli")]
 pub fn is_partial_date(s: &str) -> bool {
     match s.len() {
         4 => s.chars().all(|c| c.is_ascii_digit()),
@@ -225,22 +261,34 @@ pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
         .or_else(|| spec.parse::<Tz>().ok().map(TimezoneInfo::Named))
 }
 
+#[cfg(feature = "cli")]
 fn detect_system_timezone() -> TimezoneInfo {
     parse_timezone_env(env::var(SYSTEM_TZ_OVERRIDE_ENV).ok())
         .or_else(|| parse_timezone_env(get_timezone().ok()))
         .unwrap_or_else(|| TimezoneInfo::Fixed(Local::now().offset().fix()))
 }
 
+#[cfg(feature = "cli")]
 pub fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
     parse_timezone_override(override_tz)
         .or_else(|| parse_timezone_env(env::var("TZ").ok()))
         .unwrap_or_else(|| *SYSTEM_TIMEZONE.get_or_init(detect_system_timezone))
 }
 
+#[cfg(feature = "cli")]
 fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {
     spec.map(str::trim).and_then(parse_timezone_spec)
 }
 
+#[cfg(feature = "cli")]
 fn parse_timezone_env(value: Option<String>) -> Option<TimezoneInfo> {
     parse_timezone_override(value.as_deref())
+}
+
+impl std::str::FromStr for TimezoneInfo {
+    type Err = crate::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_timezone_spec(value)
+            .ok_or_else(|| crate::Error::Input(format!("Invalid timezone: '{value}'")))
+    }
 }

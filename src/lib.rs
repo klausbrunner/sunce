@@ -1,130 +1,30 @@
-//! Solar position calculator application pipeline.
+#![doc = include_str!("../docs/library.md")]
 
+#[cfg(feature = "cli")]
+mod app;
+#[cfg(feature = "cli")]
 mod cli;
 mod compute;
 mod data;
 mod error;
 mod events;
-mod output;
+pub mod input;
+pub mod output;
 #[cfg(feature = "parquet")]
-mod parquet;
+pub mod parquet;
+#[cfg(feature = "cli")]
 mod parsed;
 mod position;
+#[cfg(feature = "cli")]
 mod predicate;
+#[cfg(feature = "cli")]
 mod validate;
 
-fn cli_error_exit_code(err: crate::error::CliError) -> i32 {
-    match err {
-        crate::error::CliError::Exit(message) => {
-            println!("{}", message);
-            0
-        }
-        crate::error::CliError::Message(message) => {
-            eprintln!("Error: {}", message);
-            1
-        }
-        crate::error::CliError::MessageWithCode(message, code) => {
-            eprintln!("Error: {}", message);
-            code
-        }
-    }
-}
-
-fn run_predicate(job: predicate::PredicateJob) -> i32 {
-    let result = if job.wait {
-        predicate::wait_until_true(&job).map(|()| true)
-    } else {
-        predicate::run_once(&job)
-    };
-
-    match result {
-        Ok(true) => 0,
-        Ok(false) => 1,
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            2
-        }
-    }
-}
-
-fn run_stream(request: validate::StreamRequest) -> i32 {
-    let validate::StreamRequest {
-        command,
-        source,
-        params,
-    } = request;
-    if params.verbose {
-        let operation = match command {
-            data::Command::Position => "positions",
-            data::Command::Events => "events",
-        };
-        eprintln!(
-            "Calculating {operation} using {}; output: {}.",
-            params.calculation.algorithm, params.output.format
-        );
-    }
-    let watch_mode = source.is_watch_mode(params.step.is_some());
-    let allow_time_cache = !watch_mode;
-    let flush_each_record = source.uses_stdin() || watch_mode;
-    let data_iter = match source {
-        data::DataSource::Separate(locations, times) => data::expand_cartesian_product(
-            locations,
-            times,
-            params.step,
-            params.timezone.clone(),
-            command,
-        ),
-        data::DataSource::Paired(path) => data::expand_paired_file(path, params.timezone.clone()),
-    };
-    let data_iter = match data_iter {
-        Ok(iter) => iter,
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            return 1;
-        }
-    };
-    let start = params.perf.then(std::time::Instant::now);
-
-    let results = compute::calculate_stream(data_iter, command, params.clone(), allow_time_cache);
-    let record_count = match output::dispatch_output(results, command, &params, flush_each_record) {
-        Ok(count) => count,
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            return 1;
-        }
-    };
-
-    if let Some(start_time) = start {
-        let elapsed = start_time.elapsed();
-        eprintln!(
-            "Processed {} records in {:.3}s ({:.0} records/sec)",
-            record_count,
-            elapsed.as_secs_f64(),
-            record_count as f64 / elapsed.as_secs_f64()
-        );
-    } else if params.verbose {
-        eprintln!("Processed {record_count} records.");
-    }
-    0
-}
-
-fn execute(valid: validate::ValidCommand) -> i32 {
-    match valid {
-        validate::ValidCommand::Predicate(job) => run_predicate(job),
-        validate::ValidCommand::Stream(request) => run_stream(request),
-    }
-}
-
-pub fn run(args: Vec<String>) -> i32 {
-    // Detect predicate intent before parsing so even errors preceding the flag
-    // cannot be mistaken for a false predicate by a calling script.
-    let args = cli::Arguments::new(&args);
-    let predicate_requested = args.predicate_requested();
-    match cli::parse_cli(args).and_then(validate::validate) {
-        Ok(valid) => execute(valid),
-        Err(crate::error::CliError::Message(message)) if predicate_requested => {
-            cli_error_exit_code(crate::error::predicate_error(message))
-        }
-        Err(err) => cli_error_exit_code(err),
-    }
-}
+#[cfg(feature = "cli")]
+pub use app::run;
+pub use compute::{PositionRecord, events, positions};
+pub use data::config::{CalculationAlgorithm, Environment, EventOptions, PositionOptions, Step};
+pub use data::time_utils::TimezoneInfo as Timezone;
+pub use error::Error;
+pub use events::{DayState, EventRecord};
+pub use solar_positioning::{Location, SolarPosition};

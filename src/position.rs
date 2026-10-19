@@ -1,10 +1,10 @@
 //! Solar position calculations and time-cache helpers.
 
-use crate::data::{CalculationAlgorithm, Parameters};
+#[cfg(any(test, feature = "cli"))]
+use crate::Location;
+use crate::{CalculationAlgorithm, PositionOptions};
 use chrono::{DateTime, FixedOffset};
-use solar_positioning::{
-    Location, PreparedPositions, RefractionCorrection, SolarPositions, delta_t,
-};
+use solar_positioning::{PreparedPositions, RefractionCorrection, SolarPositions, delta_t};
 use std::collections::{HashMap, VecDeque};
 
 pub(crate) const TIME_CACHE_CAPACITY: usize = 2048;
@@ -12,19 +12,14 @@ pub(crate) const TIME_CACHE_CAPACITY: usize = 2048;
 pub(crate) type TimeCacheKey = (DateTime<FixedOffset>, i32);
 pub(crate) type TimeCache = HashMap<TimeCacheKey, (PreparedPositions, f64)>;
 
-pub(crate) struct PositionCalculation {
-    pub position: solar_positioning::SolarPosition,
-    pub deltat: f64,
-}
-
-pub(crate) fn resolve_deltat(dt: DateTime<FixedOffset>, params: &Parameters) -> f64 {
+pub(crate) fn resolve_deltat(dt: DateTime<FixedOffset>, params: &PositionOptions) -> f64 {
     params
         .deltat
         .unwrap_or_else(|| delta_t::estimate_from_date_like(&dt).unwrap_or(0.0))
 }
 
 pub(crate) fn refraction_correction(
-    params: &Parameters,
+    params: &PositionOptions,
 ) -> Result<Option<RefractionCorrection>, String> {
     if params.environment.refraction {
         RefractionCorrection::new(params.environment.pressure, params.environment.temperature)
@@ -40,11 +35,12 @@ pub(crate) fn refraction_correction(
     }
 }
 
+#[cfg(feature = "cli")]
 pub(crate) fn solar_elevation_at(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
 ) -> Result<f64, String> {
     Ok(90.0
         - calculate_position(lat, lon, dt, params)?
@@ -52,23 +48,25 @@ pub(crate) fn solar_elevation_at(
             .zenith_angle())
 }
 
+#[cfg(any(test, feature = "cli"))]
 pub(crate) fn calculate_position(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
-) -> Result<PositionCalculation, String> {
+    params: &PositionOptions,
+) -> Result<crate::PositionRecord, String> {
     let refraction = refraction_correction(params)?;
     calculate_position_with_refraction(lat, lon, dt, params, refraction)
 }
 
+#[cfg(any(test, feature = "cli"))]
 pub(crate) fn calculate_position_with_refraction(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
     refraction: Option<RefractionCorrection>,
-) -> Result<PositionCalculation, String> {
+) -> Result<crate::PositionRecord, String> {
     let deltat = resolve_deltat(dt, params);
 
     let position = calculator(params)
@@ -84,11 +82,19 @@ pub(crate) fn calculate_position_with_refraction(
         )
         .map_err(|e| format!("Failed to calculate solar position: {e}"))?;
 
-    Ok(PositionCalculation { position, deltat })
+    Ok(crate::PositionRecord {
+        location: Location {
+            latitude: lat,
+            longitude: lon,
+        },
+        datetime: dt,
+        position,
+        deltat,
+    })
 }
 
-pub(crate) fn calculator(params: &Parameters) -> SolarPositions {
-    match params.calculation.algorithm {
+pub(crate) fn calculator(params: &PositionOptions) -> SolarPositions {
+    match params.algorithm {
         CalculationAlgorithm::Spa => SolarPositions::new(),
         CalculationAlgorithm::Grena3 => SolarPositions::grena3(),
     }
@@ -99,7 +105,7 @@ pub(crate) fn time_cache_get(
     order: &mut VecDeque<TimeCacheKey>,
     capacity: usize,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
 ) -> Result<(PreparedPositions, f64), String> {
     let key = (dt, dt.offset().local_minus_utc());
     if let Some(existing) = cache.get(&key).copied() {
@@ -131,7 +137,7 @@ mod tests {
     fn time_cache_hits_do_not_grow_entries_or_order() {
         let mut cache: TimeCache = HashMap::new();
         let mut order = VecDeque::new();
-        let params = Parameters::default();
+        let params = PositionOptions::default();
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
@@ -146,9 +152,9 @@ mod tests {
     fn time_cache_preserves_local_date_for_delta_t_estimates() {
         let first = DateTime::parse_from_rfc3339("2024-02-01T00:30:00Z").unwrap();
         let second = first.with_timezone(&FixedOffset::west_opt(3600).unwrap());
-        let params = Parameters {
+        let params = PositionOptions {
             deltat: None,
-            ..Parameters::default()
+            ..PositionOptions::default()
         };
         let mut cache = TimeCache::default();
         let mut order = VecDeque::new();
@@ -162,7 +168,7 @@ mod tests {
     fn time_cache_eviction_keeps_existing_when_not_full() {
         let mut cache: TimeCache = HashMap::new();
         let mut order = VecDeque::new();
-        let params = Parameters::default();
+        let params = PositionOptions::default();
         let tz = FixedOffset::east_opt(0).unwrap();
 
         let dt1 = tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();

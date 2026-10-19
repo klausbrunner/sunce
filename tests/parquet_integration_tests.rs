@@ -1,3 +1,4 @@
+#![cfg(feature = "cli")]
 #![cfg(feature = "parquet")]
 
 mod common;

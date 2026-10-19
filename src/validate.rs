@@ -80,6 +80,14 @@ fn validate_input(
     params: &Parameters,
     mode: ValidationMode,
 ) -> Result<DataSource, CliError> {
+    if params.at.is_some() {
+        if params.step.is_some() {
+            return Err("Option --at cannot be combined with --step".into());
+        }
+        if !matches!(&input, ParsedInput::Separate(_, ParsedTimeSource::Value(_))) {
+            return Err("Option --at requires date-only input or a date range".into());
+        }
+    }
     if params.step.is_some()
         && matches!(
             &input,
@@ -108,21 +116,23 @@ fn resolve_time_source(
         ParsedTimeSource::Now => Ok(TimeSource::Now),
         ParsedTimeSource::Value(value) => {
             let is_date_only = crate::data::time_utils::is_date_without_time(&value);
-            if matches!(mode, ValidationMode::Predicate)
-                && (crate::data::time_utils::is_partial_date(&value) || is_date_only)
-            {
+            let is_range = value.contains('/') || crate::data::time_utils::is_partial_date(&value);
+            if matches!(mode, ValidationMode::Predicate) && (is_range || is_date_only) {
                 return Err(predicate_error(
                     "Predicate mode requires a single explicit instant",
                 ));
             }
 
-            if crate::data::time_utils::is_partial_date(&value)
-                || (is_date_only
-                    && (matches!(mode, ValidationMode::Position) || params.step.is_some()))
-            {
+            if is_range || (is_date_only && matches!(mode, ValidationMode::Position)) {
+                if let Some(clock) = params.at {
+                    return Ok(TimeSource::Daily(value, clock));
+                }
                 return Ok(TimeSource::Range(value));
             }
 
+            if params.at.is_some() {
+                return Err("Option --at requires date-only input or a date range".into());
+            }
             if params.step.is_some() {
                 return Err(
                     "Option --step requires date-only input (YYYY, YYYY-MM, or YYYY-MM-DD) or 'now'"
@@ -169,6 +179,9 @@ fn validate_predicate_common(
     if usage.step {
         return Err(predicate_error("Option --step not valid in predicate mode"));
     }
+    if usage.at {
+        return Err(predicate_error("Option --at not valid in predicate mode"));
+    }
     if params.wait && !matches!(source, DataSource::Separate(_, TimeSource::Now)) {
         return Err(predicate_error(
             "Option --wait requires 'now' in predicate mode",
@@ -188,9 +201,9 @@ fn validate_predicate_common(
         DataSource::Separate(LocationSource::Range { .. }, _) => Err(predicate_error(
             "Predicate mode requires a single latitude/longitude pair",
         )),
-        DataSource::Separate(_, TimeSource::Range(_)) => Err(predicate_error(
-            "Predicate mode requires a single explicit instant",
-        )),
+        DataSource::Separate(_, TimeSource::Range(_) | TimeSource::Daily(_, _)) => Err(
+            predicate_error("Predicate mode requires a single explicit instant"),
+        ),
         DataSource::Separate(
             LocationSource::Single(_, _),
             TimeSource::Single(_) | TimeSource::Now,
@@ -271,6 +284,7 @@ fn validate_events_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
     validate_command_options(
         &[
             (usage.step, "--step"),
+            (usage.at, "--at"),
             (usage.no_refraction, "--no-refraction"),
             (usage.elevation_angle, "--elevation-angle"),
             (usage.elevation, "--elevation"),
@@ -299,7 +313,10 @@ fn should_auto_show_inputs(source: &DataSource) -> bool {
     match source {
         DataSource::Separate(loc, time) => {
             matches!(loc, LocationSource::Range { .. } | LocationSource::File(_))
-                || matches!(time, TimeSource::Range(_) | TimeSource::File(_))
+                || matches!(
+                    time,
+                    TimeSource::Range(_) | TimeSource::Daily(_, _) | TimeSource::File(_)
+                )
         }
         DataSource::Paired(_) => true,
     }
@@ -324,7 +341,9 @@ fn build_predicate_job(
         time: match time {
             TimeSource::Single(dt) => PredicateTime::Fixed(dt.datetime),
             TimeSource::Now => PredicateTime::Now,
-            TimeSource::Range(_) | TimeSource::File(_) => unreachable!("validated above"),
+            TimeSource::Range(_) | TimeSource::Daily(_, _) | TimeSource::File(_) => {
+                unreachable!("validated above")
+            }
         },
         check: PredicateCheck::from_cli(predicate),
         wait: params.wait,

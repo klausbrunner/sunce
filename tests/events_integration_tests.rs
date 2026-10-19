@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use common::{parse_csv_output_maps, parse_json_lines, parse_rfc3339, sunce_command};
 use std::collections::HashSet;
