@@ -1,6 +1,6 @@
 //! Streaming text, CSV and JSON Lines exports to caller-owned writers.
 
-use crate::{Environment, Error, EventRecord, PositionRecord};
+use crate::{Environment, Error, EventKind, EventRecord, PositionRecord};
 
 /// Formats supported by ordinary `std::io::Write` destinations.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,6 @@ pub(crate) struct OutputContext {
     pub environment: Environment,
     pub output: Options,
 }
-use crate::error::OutputError;
 use ahash::AHashMap;
 use chrono::{DateTime, FixedOffset};
 use serde::Serializer;
@@ -466,7 +465,7 @@ impl OutputRow for EventRecord {
             idx += 1;
         }
         set_field(out, idx, self.day_state.label());
-        set_field(out, idx + 1, self.event.unwrap_or(""));
+        set_field(out, idx + 1, self.event.map_or("", EventKind::label));
         set_cached_optional_datetime(out, idx + 2, datetime_cache, self.time.as_ref());
         out.truncate(idx + 3);
     }
@@ -496,7 +495,7 @@ impl OutputRow for EventRecord {
         }
         map.serialize_entry("day_state", self.day_state.label())
             .map_err(|e| e.to_string())?;
-        map.serialize_entry("event", &self.event)
+        map.serialize_entry("event", &self.event.map(EventKind::label))
             .map_err(|e| e.to_string())?;
         map.serialize_entry(
             "time",
@@ -617,7 +616,7 @@ pub(crate) fn normalize_position_result(result: PositionRecord) -> PositionRow {
     }
 }
 
-fn write_csv_line<W: std::io::Write, I, S>(writer: &mut W, fields: I) -> Result<(), String>
+fn write_csv_line<W: std::io::Write, I, S>(writer: &mut W, fields: I) -> std::io::Result<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -625,14 +624,12 @@ where
     let mut first = true;
     for field in fields {
         if !first {
-            writer.write_all(b",").map_err(|e| e.to_string())?;
+            writer.write_all(b",")?;
         }
         first = false;
-        writer
-            .write_all(field.as_ref().as_bytes())
-            .map_err(|e| e.to_string())?;
+        writer.write_all(field.as_ref().as_bytes())?;
     }
-    writer.write_all(b"\n").map_err(|e| e.to_string())
+    writer.write_all(b"\n")
 }
 
 fn is_numeric_column(name: &str) -> bool {
@@ -668,22 +665,22 @@ fn write_pretty_header<W: std::io::Write>(
     writer: &mut W,
     headers: &[&str],
     widths: &[usize],
-) -> Result<(), OutputError> {
+) -> std::io::Result<()> {
     for (idx, (header, width)) in headers.iter().zip(widths).enumerate() {
         if idx > 0 {
-            write!(writer, "  ").map_err(OutputError::from)?;
+            write!(writer, "  ")?;
         }
-        write!(writer, "{:<width$}", header, width = *width).map_err(OutputError::from)?;
+        write!(writer, "{:<width$}", header, width = *width)?;
     }
-    writeln!(writer).map_err(OutputError::from)?;
+    writeln!(writer)?;
 
     for (idx, width) in widths.iter().enumerate() {
         if idx > 0 {
-            write!(writer, "  ").map_err(OutputError::from)?;
+            write!(writer, "  ")?;
         }
-        write!(writer, "{}", "-".repeat(*width)).map_err(OutputError::from)?;
+        write!(writer, "{}", "-".repeat(*width))?;
     }
-    writeln!(writer).map_err(OutputError::from)
+    writeln!(writer)
 }
 
 fn write_pretty_row<W: std::io::Write>(
@@ -691,18 +688,18 @@ fn write_pretty_row<W: std::io::Write>(
     headers: &[&str],
     widths: &[usize],
     values: &[String],
-) -> Result<(), OutputError> {
+) -> std::io::Result<()> {
     for (idx, ((header, width), value)) in headers.iter().zip(widths).zip(values).enumerate() {
         if idx > 0 {
-            write!(writer, "  ").map_err(OutputError::from)?;
+            write!(writer, "  ")?;
         }
         if is_numeric_column(header) {
-            write!(writer, "{:>width$}", value, width = *width).map_err(OutputError::from)?;
+            write!(writer, "{:>width$}", value, width = *width)?;
         } else {
-            write!(writer, "{:<width$}", value, width = *width).map_err(OutputError::from)?;
+            write!(writer, "{:<width$}", value, width = *width)?;
         }
     }
-    writeln!(writer).map_err(OutputError::from)
+    writeln!(writer)
 }
 
 /// Export positions, including filtered, limited or previously collected records.
@@ -764,9 +761,8 @@ fn write_buffered<W: std::io::Write, R: OutputRow>(
         layout,
         &mut writer,
         params.output.flush_each_record,
-    )
-    .map_err(|err| err.0)?;
-    writer.flush().map_err(Error::from)?;
+    )?;
+    writer.flush()?;
     Ok(count)
 }
 
@@ -789,7 +785,7 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
     layout: R::Layout,
     writer: &mut W,
     flush_each: bool,
-) -> Result<usize, OutputError> {
+) -> Result<usize, Error> {
     let headers = R::headers(layout);
     let mut count = 0;
     let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
@@ -798,7 +794,7 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
     let mut widths = Vec::new();
 
     for result in results {
-        let row = R::normalize(result.map_err(OutputError::from)?);
+        let row = R::normalize(result?);
         match params.output.format {
             Format::Text | Format::Csv => {
                 row.csv_values(
@@ -823,7 +819,9 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
                     write_csv_line(writer, row_values.iter())?;
                 }
             }
-            Format::Json => row.write_json(params, layout, writer, &mut datetime_cache)?,
+            Format::Json => row
+                .write_json(params, layout, writer, &mut datetime_cache)
+                .map_err(Error::Output)?,
         }
         count += 1;
         if flush_each {
@@ -1051,7 +1049,7 @@ mod tests {
             date: dt.date_naive(),
             deltat: 69.123,
             day_state: crate::events::DayState::Crossing,
-            event: Some("sunrise"),
+            event: Some(EventKind::Sunrise),
             time: Some(dt + chrono::Duration::hours(4)),
         };
 

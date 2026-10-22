@@ -12,7 +12,7 @@ fn twilight_rows_match_library_and_json_matches_csv() {
         "--deltat=69.184",
         "52",
         "13.4",
-        "2024-06-21",
+        "2024-03-20",
         "events",
         "--twilight",
     ];
@@ -34,6 +34,7 @@ fn twilight_rows_match_library_and_json_matches_csv() {
         .clone();
     let csv = parse_csv_output_maps(std::str::from_utf8(&csv).unwrap());
     let json = parse_json_lines(std::str::from_utf8(&json).unwrap());
+    assert_eq!(csv.len(), 9);
     assert_eq!(csv.len(), json.len());
     for (csv, json) in csv.iter().zip(json) {
         for (name, value) in csv {
@@ -54,7 +55,7 @@ fn twilight_rows_match_library_and_json_matches_csv() {
     ] {
         let day = SolarEvents::new()
             .for_date(
-                NaiveDate::from_ymd_opt(2024, 6, 21).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 3, 20).unwrap(),
                 &Utc,
                 Location {
                     latitude: 52.0,

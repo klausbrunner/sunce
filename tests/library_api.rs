@@ -4,8 +4,8 @@ use std::io::{self, BufRead, Cursor, Read, Write};
 use sunce::input::{self, CoordinateGrid, EventInput, PositionInput};
 use sunce::output::{self, Format, Options};
 use sunce::{
-    CalculationAlgorithm, Error, EventOptions, Location, PositionOptions, PositionRecord, events,
-    positions,
+    CalculationAlgorithm, Error, EventKind, EventOptions, Location, PositionOptions,
+    PositionRecord, events, positions,
 };
 
 fn location() -> Location {
@@ -177,7 +177,7 @@ fn elapsed_time_sampling_and_calendar_dates_preserve_dst() {
         .unwrap();
     let sunrise: Vec<_> = events
         .into_iter()
-        .filter(|row| row.event == Some("sunrise"))
+        .filter(|row| row.event == Some(EventKind::Sunrise))
         .map(|row| row.time.unwrap())
         .collect();
     assert_eq!(sunrise.len(), 3);
@@ -197,7 +197,7 @@ fn event_dates_do_not_require_an_existing_midnight() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert!(rows.iter().any(|row| row.event == Some("sunrise")));
+    assert!(rows.iter().any(|row| row.event == Some(EventKind::Sunrise)));
 
     let input = EventInput {
         location: Location {
@@ -211,7 +211,7 @@ fn event_dates_do_not_require_an_existing_midnight() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert!(rows.iter().any(|row| row.event == Some("sunrise")));
+    assert!(rows.iter().any(|row| row.event == Some(EventKind::Sunrise)));
 
     let input = EventInput {
         location: Location {
@@ -352,26 +352,28 @@ fn reader_writer_and_final_flush_failures_are_returned() {
         .unwrap_err();
     assert!(matches!(error, Error::Input(_)));
     assert!(error.to_string().contains("reader failed"));
-    for fail_flush in [false, true] {
-        let error = output::write_positions(
-            position_request(),
-            &sunce::Environment::default(),
-            Options {
-                format: Format::Csv,
-                ..Default::default()
-            },
-            BrokenWriter { fail_flush },
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::Output(_)));
-        assert_eq!(
-            error.to_string(),
-            if fail_flush {
-                "flush failed"
-            } else {
-                "write failed"
-            }
-        );
+    for format in [Format::Text, Format::Csv, Format::Json] {
+        for fail_flush in [false, true] {
+            let error = output::write_positions(
+                position_request(),
+                &sunce::Environment::default(),
+                Options {
+                    format,
+                    ..Default::default()
+                },
+                BrokenWriter { fail_flush },
+            )
+            .unwrap_err();
+            assert!(matches!(error, Error::Output(_)));
+            assert_eq!(
+                error.to_string(),
+                if fail_flush {
+                    "flush failed"
+                } else {
+                    "write failed"
+                }
+            );
+        }
     }
 }
 
@@ -685,7 +687,10 @@ fn composed_and_collected_results_export_to_single_threaded_writers() {
         };
         let rows = events([Ok(input)], EventOptions::default())
             .unwrap()
-            .filter(|row| row.as_ref().is_ok_and(|row| row.event == Some("sunrise")))
+            .filter(|row| {
+                row.as_ref()
+                    .is_ok_and(|row| row.event == Some(EventKind::Sunrise))
+            })
             .take(1);
         let count = output::write_events(
             rows,

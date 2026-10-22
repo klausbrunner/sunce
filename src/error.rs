@@ -44,39 +44,6 @@ impl fmt::Display for CliError {
     }
 }
 
-#[derive(Debug)]
-pub struct OutputError(pub Error);
-
-impl From<String> for OutputError {
-    fn from(value: String) -> Self {
-        Self(Error::Output(value))
-    }
-}
-
-impl From<&str> for OutputError {
-    fn from(value: &str) -> Self {
-        Self(Error::Output(value.to_string()))
-    }
-}
-
-impl From<io::Error> for OutputError {
-    fn from(value: io::Error) -> Self {
-        Self(Error::Output(value.to_string()))
-    }
-}
-
-impl From<Error> for OutputError {
-    fn from(value: Error) -> Self {
-        Self(value)
-    }
-}
-
-impl fmt::Display for OutputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
 /// An error at a library pipeline boundary. CLI exit codes are handled separately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

@@ -59,6 +59,41 @@ impl DayState {
     }
 }
 
+/// Solar event kind; `Rise` and `Set` refer to a custom horizon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    Sunrise,
+    Sunset,
+    Transit,
+    CivilDawn,
+    CivilDusk,
+    NauticalDawn,
+    NauticalDusk,
+    AstronomicalDawn,
+    AstronomicalDusk,
+    Rise,
+    Set,
+}
+
+impl EventKind {
+    /// Label used in text, CSV, JSON and Parquet output.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sunrise => "sunrise",
+            Self::Sunset => "sunset",
+            Self::Transit => "transit",
+            Self::CivilDawn => "civil_dawn",
+            Self::CivilDusk => "civil_dusk",
+            Self::NauticalDawn => "nautical_dawn",
+            Self::NauticalDusk => "nautical_dusk",
+            Self::AstronomicalDawn => "astronomical_dawn",
+            Self::AstronomicalDusk => "astronomical_dusk",
+            Self::Rise => "rise",
+            Self::Set => "set",
+        }
+    }
+}
+
 /// An event on a local date, or a status-only record when that date has no events.
 #[derive(Debug, Clone, Copy)]
 pub struct EventRecord {
@@ -68,9 +103,8 @@ pub struct EventRecord {
     pub deltat: f64,
     /// State of the requested horizon; sunrise/sunset when twilight is enabled.
     pub day_state: DayState,
-    /// `sunrise`, `sunset`, `transit`, `{civil,nautical,astronomical}_{dawn,dusk}`,
-    /// or `rise`/`set` for a custom horizon. `None` on status-only records.
-    pub event: Option<&'static str>,
+    /// Event kind; `None` on status-only records.
+    pub event: Option<EventKind>,
     /// Event instant with its local UTC offset; `None` on status-only records.
     pub time: Option<DateTime<FixedOffset>>,
 }
@@ -82,13 +116,14 @@ fn calculator(algorithm: CalculationAlgorithm) -> SolarEvents {
     }
 }
 
-fn event_labels(horizon: Horizon) -> (&'static str, &'static str) {
+fn event_kinds(horizon: Horizon) -> (EventKind, EventKind) {
+    use EventKind::*;
     match horizon {
-        Horizon::SunriseSunset => ("sunrise", "sunset"),
-        Horizon::CivilTwilight => ("civil_dawn", "civil_dusk"),
-        Horizon::NauticalTwilight => ("nautical_dawn", "nautical_dusk"),
-        Horizon::AstronomicalTwilight => ("astronomical_dawn", "astronomical_dusk"),
-        Horizon::Custom(_) => ("rise", "set"),
+        Horizon::SunriseSunset => (Sunrise, Sunset),
+        Horizon::CivilTwilight => (CivilDawn, CivilDusk),
+        Horizon::NauticalTwilight => (NauticalDawn, NauticalDusk),
+        Horizon::AstronomicalTwilight => (AstronomicalDawn, AstronomicalDusk),
+        Horizon::Custom(_) => (Rise, Set),
     }
 }
 
@@ -149,13 +184,13 @@ fn event_rows<Tz: TimeZone>(
     let mut rows = Vec::new();
     for time in &days[0].1.transits {
         rows.push(EventRecord {
-            event: Some("transit"),
+            event: Some(EventKind::Transit),
             time: Some(time.fixed_offset()),
             ..base
         });
     }
     for (horizon, day) in days {
-        let (rise, set) = event_labels(horizon);
+        let (rise, set) = event_kinds(horizon);
         for (event, times) in [(rise, day.rises), (set, day.sets)] {
             rows.extend(times.into_iter().map(|time| EventRecord {
                 event: Some(event),

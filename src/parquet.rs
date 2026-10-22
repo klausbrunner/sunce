@@ -5,7 +5,7 @@ use crate::output::{
     DATETIME_CACHE_CAPACITY, DateTimeCache, EventLayout, PositionLayout, cached_datetime,
     normalize_position_result,
 };
-use crate::{Environment, Error, EventRecord, PositionRecord};
+use crate::{Environment, Error, EventKind, EventRecord, PositionRecord};
 use arrow_array::builder::{Float64Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -160,7 +160,7 @@ impl EventBatchBuilders {
         }
         self.date.append_value(row.date.to_string());
         self.day_state.append_value(row.day_state.label());
-        self.event.append_option(row.event);
+        self.event.append_option(row.event.map(EventKind::label));
         match row.time {
             Some(time) => append_time(&mut self.time, &time, datetime_cache),
             None => self.time.append_null(),
