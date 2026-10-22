@@ -4,15 +4,15 @@ use chrono::Duration;
 use std::fmt;
 use std::str::FromStr;
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
-    Text,
-    Csv,
-    Json,
+    Standard(crate::output::Format),
     #[cfg(feature = "parquet")]
     Parquet,
 }
 
+#[cfg(feature = "cli")]
 impl OutputFormat {
     pub(crate) const fn all() -> &'static [&'static str] {
         &[
@@ -25,27 +25,26 @@ impl OutputFormat {
     }
 }
 
+#[cfg(feature = "cli")]
 impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            OutputFormat::Text => "text",
-            OutputFormat::Csv => "csv",
-            OutputFormat::Json => "json",
+        match self {
+            OutputFormat::Standard(format) => format.fmt(f),
             #[cfg(feature = "parquet")]
-            OutputFormat::Parquet => "parquet",
-        };
-        f.write_str(s)
+            OutputFormat::Parquet => f.write_str("parquet"),
+        }
     }
 }
 
+#[cfg(feature = "cli")]
 impl FromStr for OutputFormat {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "text" => Ok(OutputFormat::Text),
-            "csv" => Ok(OutputFormat::Csv),
-            "json" => Ok(OutputFormat::Json),
+            "text" => Ok(OutputFormat::Standard(crate::output::Format::Text)),
+            "csv" => Ok(OutputFormat::Standard(crate::output::Format::Csv)),
+            "json" => Ok(OutputFormat::Standard(crate::output::Format::Json)),
             #[cfg(feature = "parquet")]
             "parquet" => Ok(OutputFormat::Parquet),
             #[cfg(not(feature = "parquet"))]
@@ -61,6 +60,7 @@ impl FromStr for OutputFormat {
     }
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone)]
 pub struct OutputOptions {
     pub format: OutputFormat,
@@ -69,6 +69,7 @@ pub struct OutputOptions {
     pub elevation_angle: bool,
 }
 
+#[cfg(feature = "cli")]
 impl OutputOptions {
     /// Returns whether inputs should be emitted in the output stream.
     pub fn should_show_inputs(&self) -> bool {
@@ -76,10 +77,11 @@ impl OutputOptions {
     }
 }
 
+#[cfg(feature = "cli")]
 impl Default for OutputOptions {
     fn default() -> Self {
         Self {
-            format: OutputFormat::Text,
+            format: OutputFormat::Standard(crate::output::Format::Text),
             headers: true,
             show_inputs: None,
             elevation_angle: false,
@@ -118,11 +120,16 @@ impl FromStr for CalculationAlgorithm {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Observer and atmospheric settings for position calculations.
+#[derive(Debug, Clone, Copy)]
 pub struct Environment {
+    /// Apply atmospheric refraction; defaults to `true`.
     pub refraction: bool,
+    /// Observer elevation in metres; defaults to 0. Grena3 requires 0.
     pub elevation: f64,
+    /// Air temperature in degrees Celsius; defaults to 15. Used with refraction.
     pub temperature: f64,
+    /// Atmospheric pressure in hPa; defaults to 1013.25. Used with refraction.
     pub pressure: f64,
 }
 
@@ -137,58 +144,126 @@ impl Default for Environment {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CalculationOptions {
+/// Options for solar positions at explicit instants.
+/// Defaults to SPA and delta-T of 0 seconds.
+#[derive(Debug, Clone, Copy)]
+pub struct PositionOptions {
     pub algorithm: CalculationAlgorithm,
-    pub horizon: Option<f64>,
-    pub twilight: bool,
+    /// Delta-T in seconds; `None` estimates it for each input date.
+    pub deltat: Option<f64>,
+    pub environment: Environment,
 }
 
-impl Default for CalculationOptions {
+impl Default for PositionOptions {
     fn default() -> Self {
         Self {
             algorithm: CalculationAlgorithm::Spa,
+            deltat: Some(0.0),
+            environment: Environment::default(),
+        }
+    }
+}
+
+impl PositionOptions {
+    pub(crate) fn validate(&self) -> Result<(), crate::Error> {
+        validate_deltat(self.deltat)?;
+        if !self.environment.elevation.is_finite() {
+            return Err(crate::Error::Input(
+                "Observer elevation must be finite".into(),
+            ));
+        }
+        if self.algorithm == CalculationAlgorithm::Grena3 && self.environment.elevation != 0.0 {
+            return Err(crate::Error::Input(
+                "Grena3 requires zero observer elevation".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Options for solar events on local calendar dates.
+/// Defaults to SPA, delta-T of 0 seconds and the sunrise/sunset horizon.
+#[derive(Debug, Clone, Copy)]
+pub struct EventOptions {
+    pub algorithm: CalculationAlgorithm,
+    /// Delta-T in seconds; `None` estimates it for each input date.
+    pub deltat: Option<f64>,
+    /// A custom horizon in degrees; `None` uses the sunrise/sunset horizon.
+    pub horizon: Option<f64>,
+    /// Include civil, nautical and astronomical dawn/dusk; incompatible with `horizon`.
+    pub twilight: bool,
+}
+
+impl Default for EventOptions {
+    fn default() -> Self {
+        Self {
+            algorithm: CalculationAlgorithm::Spa,
+            deltat: Some(0.0),
             horizon: None,
             twilight: false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+impl EventOptions {
+    pub(crate) fn validate(&self) -> Result<(), crate::Error> {
+        validate_deltat(self.deltat)?;
+        if let Some(horizon) = self.horizon {
+            if self.twilight {
+                return Err(crate::Error::Input(
+                    "Custom horizon cannot be combined with twilight".into(),
+                ));
+            }
+            if !horizon.is_finite() || !(-90.0..=90.0).contains(&horizon) {
+                return Err(crate::Error::Input(
+                    "Horizon must be between -90 and 90 degrees".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_deltat(deltat: Option<f64>) -> Result<(), crate::Error> {
+    if deltat.is_some_and(|value| !value.is_finite()) {
+        return Err(crate::Error::Input("Delta-T must be finite".into()));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+#[derive(Debug, Clone, Default)]
 pub struct Parameters {
-    pub deltat: Option<f64>,
     pub output: OutputOptions,
     pub environment: Environment,
-    pub calculation: CalculationOptions,
+    pub calculation: EventOptions,
     pub wait: bool,
     pub verbose: bool,
     pub perf: bool,
     pub step: Option<Step>,
+    pub at: Option<chrono::NaiveTime>,
     pub timezone: Option<TimezoneOverride>,
 }
 
-impl Default for Parameters {
-    fn default() -> Self {
-        Self {
-            deltat: Some(0.0),
-            output: OutputOptions::default(),
-            environment: Environment::default(),
-            calculation: CalculationOptions::default(),
-            wait: false,
-            verbose: false,
-            perf: false,
-            step: None,
-            timezone: None,
+#[cfg(feature = "cli")]
+impl Parameters {
+    pub(crate) fn position_options(&self) -> PositionOptions {
+        PositionOptions {
+            algorithm: self.calculation.algorithm,
+            deltat: self.calculation.deltat,
+            environment: self.environment,
         }
     }
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     Position,
     Events,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Predicate {
     IsDaylight,
@@ -201,6 +276,7 @@ pub enum Predicate {
     SunBelow(f64),
 }
 
+/// Elapsed sampling interval. Parses positive seconds or an integer with `s`, `m`, `h` or `d`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Step(pub Duration);
 
@@ -218,15 +294,18 @@ impl FromStr for Step {
     }
 }
 
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimezoneOverride(String);
 
+#[cfg(feature = "cli")]
 impl TimezoneOverride {
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+#[cfg(feature = "cli")]
 impl FromStr for TimezoneOverride {
     type Err = String;
 
@@ -244,11 +323,21 @@ impl FromStr for TimezoneOverride {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "cli")]
     #[test]
     fn output_format_parsing_and_defaults_work() {
-        assert_eq!("text".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
-        assert_eq!("CSV".parse::<OutputFormat>().unwrap(), OutputFormat::Csv);
-        assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
+        assert_eq!(
+            "text".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Standard(crate::output::Format::Text)
+        );
+        assert_eq!(
+            "CSV".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Standard(crate::output::Format::Csv)
+        );
+        assert_eq!(
+            "json".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Standard(crate::output::Format::Json)
+        );
         #[cfg(feature = "parquet")]
         assert_eq!(
             "parquet".parse::<OutputFormat>().unwrap(),
@@ -257,7 +346,10 @@ mod tests {
         assert!("wat".parse::<OutputFormat>().is_err());
 
         let defaults = OutputOptions::default();
-        assert_eq!(defaults.format, OutputFormat::Text);
+        assert_eq!(
+            defaults.format,
+            OutputFormat::Standard(crate::output::Format::Text)
+        );
         assert!(defaults.headers);
         assert_eq!(defaults.show_inputs, None);
         assert!(!defaults.should_show_inputs());
@@ -281,25 +373,32 @@ mod tests {
         assert!("0s".parse::<Step>().is_err());
         assert!("bad".parse::<Step>().is_err());
 
-        let fixed = "+05:30".parse::<TimezoneOverride>().unwrap();
-        assert_eq!(fixed.as_str(), "+05:30");
-        let named = "Europe/Berlin".parse::<TimezoneOverride>().unwrap();
-        assert_eq!(named.as_str(), "Europe/Berlin");
-        assert!("".parse::<TimezoneOverride>().is_err());
-        assert!("+00:99".parse::<TimezoneOverride>().is_err());
-        assert!("Not/AZone".parse::<TimezoneOverride>().is_err());
+        #[cfg(feature = "cli")]
+        {
+            let fixed = "+05:30".parse::<TimezoneOverride>().unwrap();
+            assert_eq!(fixed.as_str(), "+05:30");
+            let named = "Europe/Berlin".parse::<TimezoneOverride>().unwrap();
+            assert_eq!(named.as_str(), "Europe/Berlin");
+            assert!("".parse::<TimezoneOverride>().is_err());
+            assert!("+00:99".parse::<TimezoneOverride>().is_err());
+            assert!("Not/AZone".parse::<TimezoneOverride>().is_err());
+        }
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn parameter_defaults_are_sensible() {
         let defaults = Parameters::default();
-        assert_eq!(defaults.deltat, Some(0.0));
+        assert_eq!(defaults.calculation.deltat, Some(0.0));
         assert!(!defaults.wait);
         assert!(!defaults.verbose);
         assert!(!defaults.perf);
         assert!(defaults.step.is_none());
         assert!(defaults.timezone.is_none());
-        assert_eq!(defaults.output.format, OutputFormat::Text);
+        assert_eq!(
+            defaults.output.format,
+            OutputFormat::Standard(crate::output::Format::Text)
+        );
         assert!(defaults.output.headers);
         assert_eq!(defaults.calculation.algorithm, CalculationAlgorithm::Spa);
         assert!(defaults.calculation.horizon.is_none());

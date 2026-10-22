@@ -1,11 +1,11 @@
 //! Parquet output format support.
 
-use crate::compute::CalculationResult;
-use crate::data::{Command, Parameters};
+use crate::output::OutputContext;
 use crate::output::{
     DATETIME_CACHE_CAPACITY, DateTimeCache, EventLayout, PositionLayout, cached_datetime,
-    normalize_event_result, normalize_position_result,
+    normalize_position_result,
 };
+use crate::{Environment, Error, EventRecord, PositionRecord};
 use arrow_array::builder::{Float64Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -68,7 +68,7 @@ impl PositionBatchBuilders {
     fn append_row(
         &mut self,
         row: &crate::output::PositionRow,
-        params: &Parameters,
+        params: &OutputContext,
         layout: PositionLayout,
         datetime_cache: &mut DateTimeCache,
     ) {
@@ -149,7 +149,7 @@ impl EventBatchBuilders {
 
     fn append_row(
         &mut self,
-        row: &crate::output::EventRow,
+        row: &EventRecord,
         layout: EventLayout,
         datetime_cache: &mut DateTimeCache,
     ) {
@@ -201,23 +201,56 @@ fn finish_string(builder: &mut StringBuilder, capacity: usize, arrays: &mut Vec<
     *builder = StringBuilder::with_capacity(BATCH_SIZE, capacity);
 }
 
-pub fn write_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    command: Command,
-    params: &Parameters,
+/// Parquet column controls. Refraction columns follow the supplied environment.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Options {
+    pub show_inputs: bool,
+    pub elevation_angle: bool,
+}
+
+/// Export position records in bounded batches. Parquet requires a `Send` writer.
+pub fn write_positions<I, W>(
+    records: I,
+    environment: &Environment,
+    options: Options,
     writer: W,
-) -> io::Result<usize> {
-    match command {
-        Command::Position => write_position_parquet(results, params, writer),
-        Command::Events => write_events_parquet(results, params, writer),
-    }
+) -> Result<usize, Error>
+where
+    I: IntoIterator<Item = Result<PositionRecord, Error>>,
+    W: Write + Send,
+{
+    let context = OutputContext {
+        environment: *environment,
+        output: crate::output::Options {
+            show_inputs: options.show_inputs,
+            elevation_angle: options.elevation_angle,
+            ..Default::default()
+        },
+    };
+    write_position_parquet(records, &context, writer)
+}
+
+/// Export event records in bounded batches, preserving upstream errors.
+pub fn write_events<I, W>(records: I, show_inputs: bool, writer: W) -> Result<usize, Error>
+where
+    I: IntoIterator<Item = Result<EventRecord, Error>>,
+    W: Write + Send,
+{
+    let context = OutputContext {
+        output: crate::output::Options {
+            show_inputs,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    write_events_parquet(records, &context, writer)
 }
 
 fn write_position_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    params: &Parameters,
+    results: impl IntoIterator<Item = Result<PositionRecord, Error>>,
+    params: &OutputContext,
     writer: W,
-) -> io::Result<usize> {
+) -> Result<usize, Error> {
     let layout = PositionLayout::from_params(params);
     let schema = build_schema(layout.csv_headers());
     let props = WriterProperties::builder()
@@ -231,8 +264,8 @@ fn write_position_parquet<W: Write + Send>(
     let mut total_count = 0;
 
     for result in results {
-        let result = result.map_err(io::Error::other)?;
-        let row = normalize_position_result(&result);
+        let result = result?;
+        let row = normalize_position_result(result);
         builders.append_row(&row, params, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;
@@ -254,10 +287,10 @@ fn write_position_parquet<W: Write + Send>(
 }
 
 fn write_events_parquet<W: Write + Send>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    params: &Parameters,
+    results: impl IntoIterator<Item = Result<EventRecord, Error>>,
+    params: &OutputContext,
     writer: W,
-) -> io::Result<usize> {
+) -> Result<usize, Error> {
     let layout = EventLayout::from_params(params);
     let schema = build_schema(layout.csv_headers());
     let props = WriterProperties::builder()
@@ -271,8 +304,8 @@ fn write_events_parquet<W: Write + Send>(
     let mut total_count = 0;
 
     for result in results {
-        let result = result.map_err(io::Error::other)?;
-        let row = normalize_event_result(&result);
+        let result = result?;
+        let row = result;
         builders.append_row(&row, layout, &mut datetime_cache);
         batch_count += 1;
         total_count += 1;

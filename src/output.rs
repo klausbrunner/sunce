@@ -1,9 +1,68 @@
-//! Output formatting for CSV, JSON, and text table formats.
+//! Streaming text, CSV and JSON Lines exports to caller-owned writers.
 
-use crate::compute::CalculationResult;
-use crate::data::{Command, OutputFormat, Parameters};
+use crate::{Environment, Error, EventRecord, PositionRecord};
+
+/// Formats supported by ordinary `std::io::Write` destinations.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    #[default]
+    Text,
+    Csv,
+    Json,
+}
+
+impl std::fmt::Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Text => "text",
+            Self::Csv => "csv",
+            Self::Json => "json",
+        })
+    }
+}
+
+impl std::str::FromStr for Format {
+    type Err = Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "text" => Ok(Self::Text),
+            "csv" => Ok(Self::Csv),
+            "json" => Ok(Self::Json),
+            _ => Err(Error::Input(format!(
+                "Invalid text output format: '{value}'"
+            ))),
+        }
+    }
+}
+
+/// Formatting controls. Calculation records retain their full precision.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    pub format: Format,
+    pub headers: bool,
+    pub show_inputs: bool,
+    pub elevation_angle: bool,
+    pub flush_each_record: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            format: Format::Text,
+            headers: true,
+            show_inputs: false,
+            elevation_angle: false,
+            flush_each_record: false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct OutputContext {
+    pub environment: Environment,
+    pub output: Options,
+}
 use crate::error::OutputError;
-pub(crate) use crate::events::EventRow;
 use ahash::AHashMap;
 use chrono::{DateTime, FixedOffset};
 use serde::Serializer;
@@ -209,7 +268,9 @@ impl PositionRow {
 impl OutputRow for PositionRow {
     type Layout = PositionLayout;
 
-    fn normalize(result: &CalculationResult) -> Self {
+    type Input = PositionRecord;
+
+    fn normalize(result: Self::Input) -> Self {
         normalize_position_result(result)
     }
 
@@ -219,7 +280,7 @@ impl OutputRow for PositionRow {
 
     fn csv_values(
         &self,
-        params: &Parameters,
+        params: &OutputContext,
         layout: PositionLayout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -277,7 +338,7 @@ impl OutputRow for PositionRow {
 
     fn write_json(
         &self,
-        params: &Parameters,
+        params: &OutputContext,
         layout: PositionLayout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
@@ -370,11 +431,13 @@ fn write_position_json_string<W: std::io::Write + ?Sized>(
     writer.write_all(b"\"").map_err(|e| e.to_string())
 }
 
-impl OutputRow for EventRow {
+impl OutputRow for EventRecord {
     type Layout = EventLayout;
 
-    fn normalize(result: &CalculationResult) -> Self {
-        normalize_event_result(result)
+    type Input = EventRecord;
+
+    fn normalize(result: Self::Input) -> Self {
+        result
     }
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
@@ -383,7 +446,7 @@ impl OutputRow for EventRow {
 
     fn csv_values(
         &self,
-        _params: &Parameters,
+        _params: &OutputContext,
         layout: EventLayout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -410,7 +473,7 @@ impl OutputRow for EventRow {
 
     fn write_json(
         &self,
-        _params: &Parameters,
+        _params: &OutputContext,
         layout: EventLayout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
@@ -453,9 +516,9 @@ pub(crate) struct PositionLayout {
 }
 
 impl PositionLayout {
-    pub(crate) fn from_params(params: &Parameters) -> Self {
+    pub(crate) fn from_params(params: &OutputContext) -> Self {
         Self {
-            show_inputs: params.output.should_show_inputs(),
+            show_inputs: params.output.show_inputs,
             include_refraction: params.environment.refraction,
             elevation_angle: params.output.elevation_angle,
         }
@@ -502,9 +565,9 @@ pub(crate) struct EventLayout {
 }
 
 impl EventLayout {
-    pub(crate) fn from_params(params: &Parameters) -> Self {
+    pub(crate) fn from_params(params: &OutputContext) -> Self {
         Self {
-            show_inputs: params.output.should_show_inputs(),
+            show_inputs: params.output.show_inputs,
         }
     }
 
@@ -522,11 +585,13 @@ impl EventLayout {
 trait OutputRow: Sized {
     type Layout: Copy;
 
-    fn normalize(result: &CalculationResult) -> Self;
+    type Input;
+
+    fn normalize(result: Self::Input) -> Self;
     fn headers(layout: Self::Layout) -> Vec<&'static str>;
     fn csv_values(
         &self,
-        params: &Parameters,
+        params: &OutputContext,
         layout: Self::Layout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -534,39 +599,21 @@ trait OutputRow: Sized {
     );
     fn write_json(
         &self,
-        params: &Parameters,
+        params: &OutputContext,
         layout: Self::Layout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String>;
 }
 
-pub(crate) fn normalize_position_result(result: &CalculationResult) -> PositionRow {
-    if let CalculationResult::Position {
-        lat,
-        lon,
-        datetime,
-        position,
-        deltat,
-    } = result
-    {
-        PositionRow {
-            lat: *lat,
-            lon: *lon,
-            datetime: *datetime,
-            deltat: *deltat,
-            azimuth: position.azimuth(),
-            zenith: position.zenith_angle(),
-        }
-    } else {
-        unreachable!("position command produced an event result")
-    }
-}
-
-pub(crate) fn normalize_event_result(result: &CalculationResult) -> EventRow {
-    match result {
-        CalculationResult::Event(row) => *row,
-        _ => unreachable!("events command produced a position result"),
+pub(crate) fn normalize_position_result(result: PositionRecord) -> PositionRow {
+    PositionRow {
+        lat: result.location.latitude,
+        lon: result.location.longitude,
+        datetime: result.datetime,
+        deltat: result.deltat,
+        azimuth: result.position.azimuth(),
+        zenith: result.position.zenith_angle(),
     }
 }
 
@@ -658,59 +705,69 @@ fn write_pretty_row<W: std::io::Write>(
     writeln!(writer).map_err(OutputError::from)
 }
 
-pub fn dispatch_output(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    command: Command,
-    params: &Parameters,
-    flush_each_record: bool,
-) -> Result<usize, OutputError> {
-    match params.output.format {
-        #[cfg(feature = "parquet")]
-        OutputFormat::Parquet => {
-            let stdout = std::io::stdout();
-            return crate::parquet::write_parquet(results, command, params, stdout)
-                .map_err(OutputError::from);
-        }
-        _ => {}
-    }
-
-    let stdout = std::io::stdout();
-    dispatch_buffered_output(results, command, params, flush_each_record, stdout.lock())
+/// Export positions, including filtered, limited or previously collected records.
+///
+/// Pass the environment used for the calculation so input columns describe it
+/// accurately. A final flush is attempted; input, write and flush errors propagate.
+/// Enable the `parquet` feature for the separate Parquet exporters.
+pub fn write_positions<I, W>(
+    records: I,
+    environment: &Environment,
+    options: Options,
+    destination: W,
+) -> Result<usize, Error>
+where
+    I: IntoIterator<Item = Result<PositionRecord, Error>>,
+    W: std::io::Write,
+{
+    let context = OutputContext {
+        environment: *environment,
+        output: options,
+    };
+    write_buffered::<_, PositionRow>(
+        records,
+        &context,
+        PositionLayout::from_params(&context),
+        destination,
+    )
 }
 
-fn dispatch_buffered_output<W: std::io::Write>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    command: Command,
-    params: &Parameters,
-    flush_each_record: bool,
+/// Export solar events to text, CSV or JSON Lines, flushing on completion.
+pub fn write_events<I, W>(records: I, options: Options, destination: W) -> Result<usize, Error>
+where
+    I: IntoIterator<Item = Result<EventRecord, Error>>,
+    W: std::io::Write,
+{
+    let context = OutputContext {
+        output: options,
+        ..Default::default()
+    };
+    write_buffered::<_, EventRecord>(
+        records,
+        &context,
+        EventLayout::from_params(&context),
+        destination,
+    )
+}
+
+fn write_buffered<W: std::io::Write, R: OutputRow>(
+    results: impl IntoIterator<Item = Result<R::Input, Error>>,
+    params: &OutputContext,
+    layout: R::Layout,
     output: W,
-) -> Result<usize, OutputError> {
+) -> Result<usize, Error> {
     use std::io::{BufWriter, Write};
     let mut writer = BufWriter::new(output);
-    let count = match command {
-        Command::Position => write_rows::<_, PositionRow>(
-            results,
-            params,
-            PositionLayout::from_params(params),
-            &mut writer,
-            flush_each_record,
-        ),
-        Command::Events => write_rows::<_, EventRow>(
-            results,
-            params,
-            EventLayout::from_params(params),
-            &mut writer,
-            flush_each_record,
-        ),
-    }?;
-    writer.flush().map_err(OutputError::from)?;
+    let count = write_rows::<_, R>(
+        results,
+        params,
+        layout,
+        &mut writer,
+        params.output.flush_each_record,
+    )
+    .map_err(|err| err.0)?;
+    writer.flush().map_err(Error::from)?;
     Ok(count)
-}
-
-fn row_from_result<R: OutputRow>(
-    result: Result<CalculationResult, String>,
-) -> Result<R, OutputError> {
-    Ok(R::normalize(&result.map_err(OutputError::from)?))
 }
 
 fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
@@ -727,8 +784,8 @@ fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
 }
 
 fn write_rows<W: std::io::Write, R: OutputRow>(
-    results: Box<dyn Iterator<Item = Result<CalculationResult, String>>>,
-    params: &Parameters,
+    results: impl IntoIterator<Item = Result<R::Input, Error>>,
+    params: &OutputContext,
     layout: R::Layout,
     writer: &mut W,
     flush_each: bool,
@@ -741,9 +798,9 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
     let mut widths = Vec::new();
 
     for result in results {
-        let row = row_from_result::<R>(result)?;
+        let row = R::normalize(result.map_err(OutputError::from)?);
         match params.output.format {
-            OutputFormat::Text | OutputFormat::Csv => {
+            Format::Text | Format::Csv => {
                 row.csv_values(
                     params,
                     layout,
@@ -751,7 +808,7 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
                     &mut fixed_decimal_cache,
                     &mut row_values,
                 );
-                if params.output.format == OutputFormat::Text {
+                if params.output.format == Format::Text {
                     if count == 0 {
                         widths = header_widths(&headers, &row_values);
                         if params.output.headers {
@@ -766,9 +823,7 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
                     write_csv_line(writer, row_values.iter())?;
                 }
             }
-            OutputFormat::Json => row.write_json(params, layout, writer, &mut datetime_cache)?,
-            #[cfg(feature = "parquet")]
-            OutputFormat::Parquet => return Err(OutputError::from("Unsupported format")),
+            Format::Json => row.write_json(params, layout, writer, &mut datetime_cache)?,
         }
         count += 1;
         if flush_each {
@@ -782,8 +837,6 @@ fn write_rows<W: std::io::Write, R: OutputRow>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::OutputFormat;
-    use crate::data::config::OutputOptions;
     use chrono::{FixedOffset, TimeZone};
     use std::io::Write;
 
@@ -814,12 +867,23 @@ mod tests {
         lat: f64,
         lon: f64,
         datetime: DateTime<FixedOffset>,
-        params: &Parameters,
-    ) -> CalculationResult {
-        let calculation = crate::position::calculate_position(lat, lon, datetime, params).unwrap();
-        CalculationResult::Position {
+        params: &OutputContext,
+    ) -> PositionRecord {
+        let calculation = crate::position::calculate_position(
             lat,
             lon,
+            datetime,
+            &crate::PositionOptions {
+                environment: params.environment,
+                ..crate::PositionOptions::default()
+            },
+        )
+        .unwrap();
+        PositionRecord {
+            location: crate::Location {
+                latitude: lat,
+                longitude: lon,
+            },
             datetime,
             position: calculation.position,
             deltat: calculation.deltat,
@@ -831,17 +895,16 @@ mod tests {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
-        let params = Parameters {
-            output: OutputOptions {
-                format: OutputFormat::Text,
-                ..OutputOptions::default()
+        let params = OutputContext {
+            output: Options {
+                format: Format::Text,
+                ..Options::default()
             },
-            ..Parameters::default()
+            ..OutputContext::default()
         };
 
         let calc = position_result(52.0, 13.4, dt, &params);
-        let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
-            Box::new(vec![Ok(calc)].into_iter());
+        let results = [Ok(calc)];
 
         let mut writer = MockWriter::default();
         write_rows::<_, PositionRow>(
@@ -861,23 +924,27 @@ mod tests {
     fn dispatch_reports_final_flush_failure() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
-        let params = Parameters {
-            output: OutputOptions {
-                format: OutputFormat::Csv,
-                ..OutputOptions::default()
+        let params = OutputContext {
+            output: Options {
+                format: Format::Csv,
+                ..Options::default()
             },
-            ..Parameters::default()
+            ..OutputContext::default()
         };
         let calc = position_result(52.0, 13.4, dt, &params);
-        let results: Box<dyn Iterator<Item = Result<CalculationResult, String>>> =
-            Box::new(std::iter::once(Ok(calc)));
+        let results = [Ok(calc)];
         let writer = MockWriter {
             fail_flush: true,
             ..MockWriter::default()
         };
 
-        let err = dispatch_buffered_output(results, Command::Position, &params, false, writer)
-            .expect_err("flush failure must be reported");
+        let err = write_buffered::<_, PositionRow>(
+            results,
+            &params,
+            PositionLayout::from_params(&params),
+            writer,
+        )
+        .expect_err("flush failure must be reported");
 
         assert_eq!(err.to_string(), "flush failed");
     }
@@ -921,13 +988,13 @@ mod tests {
     fn position_text_and_csv_field_order_match() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
-        let params = Parameters {
-            output: OutputOptions {
-                show_inputs: Some(true),
+        let params = OutputContext {
+            output: Options {
+                show_inputs: true,
                 elevation_angle: true,
-                ..OutputOptions::default()
+                ..Options::default()
             },
-            ..Parameters::default()
+            ..OutputContext::default()
         };
         let row = PositionRow {
             lat: 52.0,
@@ -971,18 +1038,14 @@ mod tests {
     fn events_text_and_csv_field_order_match() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 0, 0, 0).unwrap();
-        let params = Parameters {
-            output: OutputOptions {
-                show_inputs: Some(true),
-                ..OutputOptions::default()
+        let params = OutputContext {
+            output: Options {
+                show_inputs: true,
+                ..Options::default()
             },
-            calculation: crate::data::config::CalculationOptions {
-                twilight: true,
-                ..crate::data::config::CalculationOptions::default()
-            },
-            ..Parameters::default()
+            ..OutputContext::default()
         };
-        let row = EventRow {
+        let row = EventRecord {
             lat: 52.0,
             lon: 13.4,
             date: dt.date_naive(),

@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use common::{fields, parse_csv_output, parse_json_output, sunce_command, write_text_file};
 

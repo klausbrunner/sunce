@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 use predicates::prelude::*;
 
 mod common;

@@ -1,12 +1,20 @@
 //! Solar events and daylight predicates.
 
+#[cfg(feature = "cli")]
+use crate::PositionOptions;
+#[cfg(feature = "cli")]
 use crate::compute::SolarState;
-use crate::data::time_utils::{
-    InputTime, TimezoneInfo, convert_datetime_to_timezone, get_timezone_info,
-};
-use crate::data::{CalculationAlgorithm, Parameters};
-use crate::position::{calculator as position_calculator, resolve_deltat};
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, TimeZone};
+use crate::data::time_utils::TimezoneInfo;
+#[cfg(feature = "cli")]
+use crate::data::time_utils::convert_datetime_to_timezone;
+#[cfg(feature = "cli")]
+use crate::position::calculator as position_calculator;
+#[cfg(feature = "cli")]
+use crate::position::resolve_deltat;
+use crate::{CalculationAlgorithm, EventOptions};
+#[cfg(feature = "cli")]
+use chrono::Duration;
+use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 use solar_positioning::{Events, Horizon, HorizonState, Location, SolarEvents};
 
 const HORIZONS: [Horizon; 4] = [
@@ -51,19 +59,24 @@ impl DayState {
     }
 }
 
+/// An event on a local date, or a status-only record when that date has no events.
 #[derive(Debug, Clone, Copy)]
-pub struct EventRow {
+pub struct EventRecord {
     pub lat: f64,
     pub lon: f64,
     pub date: NaiveDate,
     pub deltat: f64,
+    /// State of the requested horizon; sunrise/sunset when twilight is enabled.
     pub day_state: DayState,
+    /// `sunrise`, `sunset`, `transit`, `{civil,nautical,astronomical}_{dawn,dusk}`,
+    /// or `rise`/`set` for a custom horizon. `None` on status-only records.
     pub event: Option<&'static str>,
+    /// Event instant with its local UTC offset; `None` on status-only records.
     pub time: Option<DateTime<FixedOffset>>,
 }
 
-fn calculator(params: &Parameters) -> SolarEvents {
-    match params.calculation.algorithm {
+fn calculator(algorithm: CalculationAlgorithm) -> SolarEvents {
+    match algorithm {
         CalculationAlgorithm::Spa => SolarEvents::new(),
         CalculationAlgorithm::Grena3 => SolarEvents::grena3(),
     }
@@ -82,27 +95,28 @@ fn event_labels(horizon: Horizon) -> (&'static str, &'static str) {
 pub fn calculate_events(
     lat: f64,
     lon: f64,
-    input: InputTime,
-    params: &Parameters,
-) -> Result<Vec<EventRow>, String> {
-    let date = input.datetime.date_naive();
-    let deltat = resolve_deltat(input.datetime, params);
+    date: NaiveDate,
+    timezone: TimezoneInfo,
+    params: &EventOptions,
+) -> Result<Vec<EventRecord>, String> {
+    let deltat = params.deltat.unwrap_or_else(|| {
+        solar_positioning::delta_t::estimate_from_date_like(&date).unwrap_or(0.0)
+    });
     let horizon = params
-        .calculation
         .horizon
         .map(Horizon::Custom)
         .unwrap_or(Horizon::SunriseSunset);
-    let horizons = if params.calculation.twilight {
+    let horizons = if params.twilight {
         &HORIZONS[..]
     } else {
         std::slice::from_ref(&horizon)
     };
-    let calculator = calculator(params);
+    let calculator = calculator(params.algorithm);
     let location = Location {
         latitude: lat,
         longitude: lon,
     };
-    match input.zone {
+    match timezone {
         TimezoneInfo::Fixed(zone) => {
             event_rows(&calculator, date, &zone, location, deltat, horizons)
         }
@@ -120,10 +134,10 @@ fn event_rows<Tz: TimeZone>(
     location: Location,
     deltat: f64,
     horizons: &[Horizon],
-) -> solar_positioning::Result<Vec<EventRow>> {
+) -> solar_positioning::Result<Vec<EventRecord>> {
     let days =
         calculator.for_date_multiple(date, zone, location, deltat, horizons.iter().copied())?;
-    let base = EventRow {
+    let base = EventRecord {
         lat: location.latitude,
         lon: location.longitude,
         date,
@@ -134,7 +148,7 @@ fn event_rows<Tz: TimeZone>(
     };
     let mut rows = Vec::new();
     for time in &days[0].1.transits {
-        rows.push(EventRow {
+        rows.push(EventRecord {
             event: Some("transit"),
             time: Some(time.fixed_offset()),
             ..base
@@ -143,7 +157,7 @@ fn event_rows<Tz: TimeZone>(
     for (horizon, day) in days {
         let (rise, set) = event_labels(horizon);
         for (event, times) in [(rise, day.rises), (set, day.sets)] {
-            rows.extend(times.into_iter().map(|time| EventRow {
+            rows.extend(times.into_iter().map(|time| EventRecord {
                 event: Some(event),
                 time: Some(time.fixed_offset()),
                 ..base
@@ -157,11 +171,12 @@ fn event_rows<Tz: TimeZone>(
     Ok(rows)
 }
 
+#[cfg(feature = "cli")]
 pub fn solar_state_at(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
 ) -> Result<SolarState, String> {
     let elevation = position_calculator(params)
         .at(
@@ -189,21 +204,24 @@ pub fn solar_state_at(
     })
 }
 
+#[cfg(feature = "cli")]
 pub fn is_after_sunset(
     lat: f64,
     lon: f64,
     dt: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
 ) -> Result<bool, String> {
     Ok(solar_state_at(lat, lon, dt, params)? != SolarState::Daylight)
 }
 
+#[cfg(feature = "cli")]
 pub fn next_state_transition(
     target: SolarState,
     lat: f64,
     lon: f64,
     now: DateTime<FixedOffset>,
-    params: &Parameters,
+    params: &PositionOptions,
+    timezone: TimezoneInfo,
 ) -> Result<DateTime<FixedOffset>, String> {
     if solar_state_at(lat, lon, now, params)? == target {
         return Ok(now);
@@ -223,7 +241,7 @@ pub fn next_state_transition(
         SolarState::Night => (None, Some(Horizon::AstronomicalTwilight)),
     };
     let end = now + Duration::days(370);
-    let calculator = calculator(params);
+    let calculator = calculator(params.algorithm);
     let location = Location {
         latitude: lat,
         longitude: lon,
@@ -242,20 +260,16 @@ pub fn next_state_transition(
     let next = rise.into_iter().chain(set).min().ok_or_else(|| {
         "Predicate will not become true within the next year at this location".to_string()
     })?;
-    let zone = get_timezone_info(params.timezone.as_ref().map(|tz| tz.as_str()));
-    Ok(convert_datetime_to_timezone(next, &zone))
+    Ok(convert_datetime_to_timezone(next, &timezone))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cli"))]
 mod tests {
     use super::*;
     use chrono::{Days, TimeZone};
 
-    fn predicate_params() -> Parameters {
-        Parameters {
-            timezone: Some("UTC".parse().unwrap()),
-            ..Parameters::default()
-        }
+    fn predicate_params() -> PositionOptions {
+        PositionOptions::default()
     }
 
     #[test]
@@ -270,7 +284,9 @@ mod tests {
                 SolarState::Night,
             ] {
                 let params = predicate_params();
-                let next = next_state_transition(target, 52.0, 13.4, now, &params).unwrap();
+                let next =
+                    next_state_transition(target, 52.0, 13.4, now, &params, "UTC".parse().unwrap())
+                        .unwrap();
                 assert!(next >= now);
                 assert_eq!(
                     solar_state_at(52.0, 13.4, next + Duration::seconds(1), &params).unwrap(),
@@ -288,17 +304,21 @@ mod tests {
 
     #[test]
     fn next_state_transition_tracks_dst_offset_changes() {
-        let params = Parameters {
-            timezone: Some("Europe/Berlin".parse().unwrap()),
-            ..Parameters::default()
-        };
+        let params = PositionOptions::default();
         for (now, expected_offset) in [
             ("2024-03-30T22:00:00+01:00", 7200),
             ("2024-10-26T22:00:00+02:00", 3600),
         ] {
             let now = DateTime::parse_from_rfc3339(now).unwrap();
-            let transition =
-                next_state_transition(SolarState::Daylight, 52.0, 13.4, now, &params).unwrap();
+            let transition = next_state_transition(
+                SolarState::Daylight,
+                52.0,
+                13.4,
+                now,
+                &params,
+                "Europe/Berlin".parse().unwrap(),
+            )
+            .unwrap();
             assert_eq!(transition.date_naive(), now.date_naive() + Days::new(1));
             assert_eq!(transition.offset().local_minus_utc(), expected_offset);
         }
@@ -310,9 +330,15 @@ mod tests {
             .unwrap()
             .with_ymd_and_hms(2024, 3, 21, 0, 0, 0)
             .unwrap();
-        let transition =
-            next_state_transition(SolarState::Daylight, 52.0, 13.4, now, &predicate_params())
-                .unwrap();
+        let transition = next_state_transition(
+            SolarState::Daylight,
+            52.0,
+            13.4,
+            now,
+            &predicate_params(),
+            "UTC".parse().unwrap(),
+        )
+        .unwrap();
         assert_eq!(transition.date_naive(), now.date_naive());
         assert!(transition > now);
     }
@@ -323,9 +349,15 @@ mod tests {
             .unwrap()
             .with_ymd_and_hms(2024, 3, 21, 22, 0, 0)
             .unwrap();
-        let transition =
-            next_state_transition(SolarState::Daylight, 52.0, 13.4, now, &predicate_params())
-                .unwrap();
+        let transition = next_state_transition(
+            SolarState::Daylight,
+            52.0,
+            13.4,
+            now,
+            &predicate_params(),
+            "UTC".parse().unwrap(),
+        )
+        .unwrap();
         assert!(transition.date_naive() > now.date_naive());
     }
 }

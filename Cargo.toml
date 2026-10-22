@@ -3,7 +3,7 @@ name = "sunce"
 version = "0.5.1"
 edition = "2024"
 rust-version = "1.98.1"
-description = "High-performance command-line solar position calculator"
+description = "Streaming solar position and event calculations with a scripting-friendly CLI"
 license = "MIT"
 repository = "https://github.com/klausbrunner/sunce"
 homepage = "https://github.com/klausbrunner/sunce"
@@ -15,6 +15,8 @@ categories = ["command-line-utilities", "science"]
 include = [
     "src/**/*",
     "tests/**/*",
+    "examples/**/*",
+    "docs/**/*",
     "build.rs",
     "Cargo.toml",
     "Cargo.lock",
@@ -23,20 +25,26 @@ include = [
 ]
 
 [dependencies]
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
-solar-positioning = "0.7.1"
+solar-positioning = "0.7.2"
 arrow-array = { version = "60", default-features = false, optional = true }
 arrow-schema = { version = "60", default-features = false, optional = true }
 parquet = { version = "60", features = ["arrow", "snap"], default-features = false, optional = true }
-iana-time-zone = "0.1"
+iana-time-zone = { version = "0.1", optional = true }
 serde = "1"
 serde_json = "1"
-ahash = "0.8"
+ahash = { version = "0.8", default-features = false, features = ["std"] }
 
 [features]
-default = ["parquet"]
+default = ["cli", "parquet"]
+cli = ["chrono/clock", "dep:iana-time-zone", "ahash/runtime-rng"]
 parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
+
+[[bin]]
+name = "sunce"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 assert_cmd = "2.2"

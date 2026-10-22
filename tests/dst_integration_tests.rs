@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 use chrono::{DateTime, FixedOffset};
 use common::{
@@ -194,6 +196,65 @@ fn test_named_timezone_override_offsets() {
             &[],
         ));
         assert_eq!(json.get("dateTime").and_then(Value::as_str), Some(expected));
+    }
+}
+
+#[test]
+fn midnight_transitions_keep_the_whole_position_day() {
+    for (zone, date, count, first, last) in [
+        (
+            "America/Santiago",
+            "2026-04-04",
+            25,
+            "2026-04-04T00:00:00-03:00",
+            "2026-04-04T23:00:00-04:00",
+        ),
+        (
+            "America/Sao_Paulo",
+            "2018-11-04",
+            23,
+            "2018-11-04T01:00:00-02:00",
+            "2018-11-04T23:00:00-02:00",
+        ),
+    ] {
+        let timezone = format!("--timezone={zone}");
+        let times = csv_datetimes(
+            &[
+                &timezone,
+                "--format=csv",
+                "0",
+                "0",
+                date,
+                "position",
+                "--step=1h",
+            ],
+            &[],
+        );
+        assert_eq!(times.len(), count);
+        assert_eq!(times[0], first);
+        assert_eq!(times.last().unwrap(), last);
+    }
+}
+
+#[test]
+fn event_day_and_month_inputs_accept_a_midnight_gap() {
+    for period in ["2018-11-04", "2018-11"] {
+        let text = output_text(
+            &[
+                "--timezone=America/Sao_Paulo",
+                "--format=json",
+                "--show-inputs",
+                "-23.55",
+                "-46.63",
+                period,
+                "events",
+            ],
+            &[],
+        );
+        assert!(text.lines().any(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            row["date"] == "2018-11-04" && row["event"] == "sunrise"
+        }));
     }
 }
 

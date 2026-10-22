@@ -64,6 +64,7 @@ sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.
 - `position` with a date-only input like `2026-03-28` expands to a time series for that day. Year-month and year inputs expand further.
 - `events` treats a date-like input as a day or day series and returns event times for those days.
 - `now` means the current instant. With `position --step`, it becomes a live stream and requires one explicit latitude/longitude pair.
+- `2026-03-28/2026-03-30` selects an inclusive range of local dates, for positions or daily events.
 - `--timezone` overrides timezone interpretation for parsing and output.
 
 ## File input and streaming
@@ -124,6 +125,7 @@ Events use sea-level solar-centre positions. Sunrise and sunset include the conv
 - `--[no-]show-inputs` – include input parameters in the output.
 - `-v`, `--verbose` – print status messages to stderr without changing result output.
 - `--step=<duration>` – time step for `position` time series sampling (integer seconds or a suffix like `10m`, `1h`, `1d`).
+- `--at=HH:MM:SS` – sample positions once per local date at this clock time. Use with a day, month, year or date range; cannot be combined with `--step`. Missing times advance past the gap, repeated times use the earlier occurrence, and entirely skipped dates produce no sample.
 
 Run `sunce --help` for a brief usage summary.
 
@@ -180,13 +182,18 @@ fi
 
 ## Performance
 
-`sunce` is designed for high throughput with streaming output. Memory is bounded by input expansion (the smaller range dimension), the prepared-position cache, and output buffering/batching; results are not collected in full.
+`sunce` is designed for high throughput with streaming output. Coordinate grids expand lazily, and results stream directly to output. Working memory includes bounded calculation caches and output buffers.
 
-Standard smoke test (release build):
+Standard performance smoke test (release build):
 
 ```bash
 target/release/sunce --perf --format=csv --no-headers 50:55:0.1 10:15:0.1 2024 position --step=3h > /dev/null
 ```
+
+## Rust library
+
+Sunce can also be embedded in Rust applications and compiled for WebAssembly.
+See the [library guide](docs/library.md) and [in-memory example](examples/in_memory.rs).
 
 ## License
 

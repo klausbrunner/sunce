@@ -44,6 +44,7 @@ impl<'a> Arguments<'a> {
                         | "timezone"
                         | "algorithm"
                         | "step"
+                        | "at"
                         | "elevation"
                         | "temperature"
                         | "pressure"
@@ -236,7 +237,7 @@ fn apply_option(
                 return Err(DELTAT_MULTIPLE_ERROR.into());
             }
             *deltat_seen = true;
-            params.deltat = match value {
+            params.calculation.deltat = match value {
                 Some(v) => Some(parse_f64("deltat", v)?),
                 None => None,
             };
@@ -255,6 +256,14 @@ fn apply_option(
             let v = required_value("step", value)?;
             params.step = Some(v.parse::<Step>().map_err(CliError::from)?);
             option_usage.step = true;
+        }
+        "at" => {
+            let v = required_value("at", value)?;
+            params.at = Some(
+                v.parse()
+                    .map_err(|_| CliError::from("Option --at requires HH:MM:SS"))?,
+            );
+            option_usage.at = true;
         }
         "elevation" => {
             let v = required_value("elevation", value)?;
@@ -551,6 +560,7 @@ Arguments:
                        "2024-01-01 12:00"   date and time (space separator; quote it)
                        2024                 entire year (daily by default)
                        2024-06              entire month (position: hourly, events: daily)
+                       2024-06-01/2024-08-31 inclusive date range
                        now                  current time (position repeats with --step
                                               for a single lat/lon only)
                        1704067200           unix timestamp (seconds)
@@ -635,6 +645,9 @@ Options:
   --temperature=<celsius>   Air temperature in C (refraction). Default: {}
   --step=<interval>         Time step for ranges and date-only inputs.
                             Examples: 30s, 15m, 2h, 1d
+  --at=<HH:MM:SS>           One sample per local date at this clock time.
+                            Gaps advance; overlaps use the earlier occurrence.
+                            Cannot be combined with --step.
   --sun-above=<degrees>     Predicate mode: exit 0 if elevation angle is above
                             the threshold, 1 if not.
   --sun-below=<degrees>     Predicate mode: exit 0 if elevation angle is below
