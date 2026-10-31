@@ -6,7 +6,7 @@ Built on the [solar-positioning](https://crates.io/crates/solar-positioning) lib
 
 ## Status
 
-Under active development as of 2026. While the core functionality is stable, some features are still being added and the command-line interface may change.
+Under (somewhat) active development. While the core functionality is stable, some features are still being added and the command-line interface may change.
 
 ## Requirements and installation
 
@@ -194,11 +194,9 @@ target/release/sunce --perf --format=csv --no-headers 50:55:0.1 10:15:0.1 2024 p
 
 Sunce can also be embedded in Rust applications and compiled for WebAssembly.
 See the [library guide](docs/library.md) and [in-memory example](examples/in_memory.rs).
+An experimental web app based on the WASM build can be found at [klaus.brunners.name/sunce](https://klaus.brunners.name/sunce/).
 
 ## License
 
 This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Contributing
-
-Please open issues or pull requests for bugs, documentation improvements, and feature requests. Include command-line examples and expected output when reporting problems.
