@@ -65,7 +65,7 @@ sunce --format=parquet 50:55:0.1 10:15:0.1 2024 position --step=3h > solar_data.
 - `events` treats a date-like input as a day or day series and returns event times for those days.
 - `now` means the current instant. With `position --step`, it becomes a live stream and requires one explicit latitude/longitude pair.
 - `2026-03-28/2026-03-30` selects an inclusive range of local dates, for positions or daily events.
-- `--timezone` overrides timezone interpretation for parsing and output.
+- `--timezone` overrides timezone interpretation for parsing and output. Local dates and times otherwise use `TZ` or the system time zone.
 
 ## File input and streaming
 
@@ -96,11 +96,11 @@ Files may include blank lines and comments (lines starting with `#`). Both space
 ## Output formats
 
 - `text` (default) – readable text for quick checks.
-- `csv` – comma-separated values with headers by default; use `--no-headers` to omit them.
+- `csv` – comma-separated values with headers by default, even with no rows; use `--no-headers` to omit them.
 - `json` – JSON Lines (one JSON object per line), good for `jq` and similar tools.
-- `parquet` – compressed Apache Parquet format for efficient columnar storage and analytics.
+- `parquet` – compressed Apache Parquet for finite inputs (not `now --step`).
 
-Field names and values are consistent across formats. Position output contains one row per location and timestamp.
+Field names and values are consistent across formats. Position output contains one row per location and timestamp, retaining fractional seconds when present. Event times are shown to whole seconds.
 
 Event output contains one row per event, ordered by time within each location and local date. Its minimal columns are:
 
@@ -137,13 +137,24 @@ estimate and never consumes the following coordinate.
 Use `-h` as a short form of `--help`. For command-specific help, run
 `sunce position --help`, `sunce events --help`, or `sunce help <command>`.
 
-## Automation and predicate mode
+## Automation
 
-For automation, `sunce` can evaluate one solar condition for one explicit location and one explicit instant and report the result via the process exit code:
+Pin the time zone, format, and columns so a script doesn't depend on the host or the input source:
 
-- `0` – predicate is true
+```bash
+sunce --timezone=Europe/Berlin --format=csv --headers --no-show-inputs \
+  52.522 13.413 2026-03-28 events
+```
+
+Errors go to stderr. Check the exit status before using a batch result: a failed stream may already have emitted rows.
+
+### Predicates
+
+Predicates check one solar condition without writing to stdout. Exit status:
+
+- `0` – success or a true predicate
 - `1` – predicate is false
-- `2` – usage or runtime error
+- `2` – usage or runtime error in any mode
 
 This mode is intentionally strict: it only works with a single latitude/longitude pair and one explicit instant (`now`, full datetime, or unix timestamp). Ranges, date-only inputs, and file/stdin inputs are rejected.
 
@@ -151,7 +162,7 @@ Add `--wait` on `now` to sleep until a calculated transition, then recheck the p
 
 Use `--verbose` to show the estimated transition time, waiting duration, and predicate completion on stderr.
 
-Use `--after-sunset` for the practical "has the sun set yet?" check. `--is-astronomical-night` is stricter and only becomes true after astronomical twilight ends.
+`--after-sunset` is true from sunset until sunrise. `--is-astronomical-night` is true when solar elevation is below −18°.
 
 Examples:
 
@@ -176,7 +187,10 @@ For shell scripts:
 
 ```bash
 if sunce 52.522 13.413 now events --after-sunset; then
-  echo "Sun has set"
+  echo "Sun is below the sunrise/sunset horizon"
+else
+  status=$?
+  [ "$status" -eq 1 ] || exit "$status"
 fi
 ```
 

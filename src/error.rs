@@ -6,17 +6,10 @@ use std::io;
 #[cfg(feature = "cli")]
 #[derive(Debug)]
 pub enum CliError {
-    /// Print message to stdout and exit with code 0 (help/version/usage).
+    /// Print help or version information and exit successfully.
     Exit(String),
-    /// Print message to stderr and exit with code 1.
+    /// Print a diagnostic to stderr and exit with code 2.
     Message(String),
-    /// Print message to stderr and exit with a specific code.
-    MessageWithCode(String, i32),
-}
-
-#[cfg(feature = "cli")]
-pub fn predicate_error(message: impl Into<String>) -> CliError {
-    CliError::MessageWithCode(message.into(), 2)
 }
 
 #[cfg(feature = "cli")]
@@ -30,17 +23,6 @@ impl From<String> for CliError {
 impl From<&str> for CliError {
     fn from(value: &str) -> Self {
         Self::Message(value.to_string())
-    }
-}
-
-#[cfg(feature = "cli")]
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CliError::Exit(msg) | CliError::Message(msg) | CliError::MessageWithCode(msg, _) => {
-                f.write_str(msg)
-            }
-        }
     }
 }
 

@@ -138,6 +138,41 @@ fn test_parquet_position_with_inputs() {
 }
 
 #[test]
+fn parquet_rejects_live_mode_before_writing() {
+    use predicates::str::contains;
+    sunce_command()
+        .args([
+            "52",
+            "13.4",
+            "now",
+            "position",
+            "--step=1s",
+            "--format=parquet",
+        ])
+        .timeout(std::time::Duration::from_secs(5))
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(contains("Parquet output requires finite input"));
+}
+
+#[test]
+fn empty_parquet_stdin_preserves_the_requested_schema() {
+    let bytes = sunce_command()
+        .args(["@-", "position", "--format=parquet", "--no-refraction"])
+        .write_stdin("")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes)).unwrap();
+    assert!(reader.schema().field_with_name("elevation").is_ok());
+    assert!(reader.schema().field_with_name("pressure").is_err());
+    assert_eq!(reader.build().unwrap().count(), 0);
+}
+
+#[test]
 fn batch_boundaries_preserve_position_and_event_rows() {
     // Both outputs exceed the writer's 8,192-row batch and leave a partial final batch.
     for (case, count) in [
@@ -185,12 +220,14 @@ fn test_parquet_timezone_preservation() {
 }
 
 #[test]
-fn preserves_offsets_for_equal_instants() {
+fn position_timestamps_preserve_offsets_and_fractions() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("instants.csv");
     write_text_file(
         &path,
-        "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n",
+        "52 13.4 2024-01-01T12:00:00+00:00\n\
+         52 13.4 2024-01-01T13:00:00+01:00\n\
+         52 13.4 2024-01-01T12:00:00.123456789+00:00\n",
     );
     let input = format!("@{}", path.display());
     let command = "position";
@@ -198,6 +235,7 @@ fn preserves_offsets_for_equal_instants() {
     let dates = string_array(&batch, "dateTime");
     assert_eq!(dates.value(0), "2024-01-01T12:00:00+00:00");
     assert_eq!(dates.value(1), "2024-01-01T13:00:00+01:00");
+    assert_eq!(dates.value(2), "2024-01-01T12:00:00.123456789+00:00");
 }
 
 #[test]

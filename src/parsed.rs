@@ -17,20 +17,12 @@ pub enum ParsedInput {
 
 #[derive(Debug, Default)]
 pub struct ParsedOptionUsage {
+    // These options can be given explicitly without changing their default values.
     pub format: bool,
     pub headers: bool,
-    pub show_inputs: bool,
-    pub perf: bool,
-    pub step: bool,
-    pub at: bool,
-    pub no_refraction: bool,
-    pub elevation_angle: bool,
     pub elevation: bool,
     pub temperature: bool,
     pub pressure: bool,
-    pub algorithm: bool,
-    pub horizon: bool,
-    pub twilight: bool,
 }
 
 #[derive(Debug)]

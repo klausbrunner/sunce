@@ -4,7 +4,7 @@ use crate::data::{
     self, CalculationAlgorithm, Command, InputPath, LocationSource, OutputFormat, Parameters,
     Predicate, Step, TimezoneOverride,
 };
-use crate::error::{CliError, predicate_error};
+use crate::error::CliError;
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use std::path::PathBuf;
 
@@ -13,13 +13,13 @@ const PREDICATE_MULTIPLE_ERROR: &str = "Predicate options cannot be used multipl
 
 type CliResult<T> = Result<T, CliError>;
 
-pub struct Arguments<'a> {
+struct Arguments<'a> {
     positional: Vec<String>,
     options: Vec<(&'a str, Option<&'a str>)>,
 }
 
 impl<'a> Arguments<'a> {
-    pub fn new(args: &'a [String]) -> Self {
+    fn new(args: &'a [String]) -> Self {
         let mut positional = Vec::new();
         let mut options = Vec::new();
         let mut args = args.iter().skip(1).peekable();
@@ -65,35 +65,13 @@ impl<'a> Arguments<'a> {
             options,
         }
     }
-
-    pub fn predicate_requested(&self) -> bool {
-        self.options.iter().any(|(name, _)| {
-            matches!(
-                *name,
-                "is-daylight"
-                    | "is-civil-twilight"
-                    | "is-nautical-twilight"
-                    | "is-astronomical-twilight"
-                    | "is-astronomical-night"
-                    | "after-sunset"
-                    | "sun-above"
-                    | "sun-below"
-            )
-        })
-    }
 }
 
-pub fn parse_cli(args: Arguments<'_>) -> CliResult<ParsedCommand> {
+pub fn parse_cli(args: &[String]) -> CliResult<ParsedCommand> {
     let Arguments {
         positional,
         options,
-    } = args;
-    if positional.is_empty() && options.is_empty() {
-        return Err(CliError::Exit(
-            "Usage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|events>".to_string(),
-        ));
-    }
-
+    } = Arguments::new(args);
     if positional.first().is_some_and(|arg| arg == "help") {
         if positional.len() > 2 {
             return Err("Usage: sunce help [position|events]".into());
@@ -163,7 +141,7 @@ fn ensure_flag(opt: &str, value: Option<&str>) -> CliResult<()> {
 
 fn set_predicate(predicate: Predicate, parsed: &mut Option<Predicate>) -> CliResult<()> {
     if parsed.is_some() {
-        return Err(predicate_error(PREDICATE_MULTIPLE_ERROR));
+        return Err(PREDICATE_MULTIPLE_ERROR.into());
     }
     *parsed = Some(predicate);
     Ok(())
@@ -195,20 +173,14 @@ fn parse_predicate_option(name: &str, value: Option<&str>) -> CliResult<Option<P
             ensure_flag(name, value)?;
             Some(Predicate::AfterSunset)
         }
-        "sun-above" => Some(Predicate::SunAbove(
-            parse_f64(
-                "sun-above",
-                value.ok_or_else(|| predicate_error("Option --sun-above requires a value"))?,
-            )
-            .map_err(|err| predicate_error(err.to_string()))?,
-        )),
-        "sun-below" => Some(Predicate::SunBelow(
-            parse_f64(
-                "sun-below",
-                value.ok_or_else(|| predicate_error("Option --sun-below requires a value"))?,
-            )
-            .map_err(|err| predicate_error(err.to_string()))?,
-        )),
+        "sun-above" => Some(Predicate::SunAbove(parse_f64(
+            name,
+            required_value(name, value)?,
+        )?)),
+        "sun-below" => Some(Predicate::SunBelow(parse_f64(
+            name,
+            required_value(name, value)?,
+        )?)),
         _ => None,
     };
     Ok(parsed)
@@ -250,12 +222,10 @@ fn apply_option(
             let v = required_value("algorithm", value)?;
             params.calculation.algorithm =
                 v.parse::<CalculationAlgorithm>().map_err(CliError::from)?;
-            option_usage.algorithm = true;
         }
         "step" => {
             let v = required_value("step", value)?;
             params.step = Some(v.parse::<Step>().map_err(CliError::from)?);
-            option_usage.step = true;
         }
         "at" => {
             let v = required_value("at", value)?;
@@ -263,7 +233,6 @@ fn apply_option(
                 v.parse()
                     .map_err(|_| CliError::from("Option --at requires HH:MM:SS"))?,
             );
-            option_usage.at = true;
         }
         "elevation" => {
             let v = required_value("elevation", value)?;
@@ -283,7 +252,6 @@ fn apply_option(
         "horizon" => {
             let v = required_value("horizon", value)?;
             params.calculation.horizon = Some(parse_f64("horizon", v)?);
-            option_usage.horizon = true;
         }
         "headers" => {
             ensure_flag("headers", value)?;
@@ -298,17 +266,14 @@ fn apply_option(
         "show-inputs" => {
             ensure_flag("show-inputs", value)?;
             params.output.show_inputs = Some(true);
-            option_usage.show_inputs = true;
         }
         "no-show-inputs" => {
             ensure_flag("no-show-inputs", value)?;
             params.output.show_inputs = Some(false);
-            option_usage.show_inputs = true;
         }
         "perf" => {
             ensure_flag("perf", value)?;
             params.perf = true;
-            option_usage.perf = true;
         }
         "wait" => {
             ensure_flag("wait", value)?;
@@ -321,17 +286,14 @@ fn apply_option(
         "no-refraction" => {
             ensure_flag("no-refraction", value)?;
             params.environment.refraction = false;
-            option_usage.no_refraction = true;
         }
         "elevation-angle" => {
             ensure_flag("elevation-angle", value)?;
             params.output.elevation_angle = true;
-            option_usage.elevation_angle = true;
         }
         "twilight" => {
             ensure_flag("twilight", value)?;
             params.calculation.twilight = true;
-            option_usage.twilight = true;
         }
         "help" => {
             ensure_flag("help", value)?;
@@ -347,7 +309,7 @@ fn apply_option(
     Ok(())
 }
 
-fn required_value<'a>(flag: &'static str, value: Option<&'a str>) -> CliResult<&'a str> {
+fn required_value<'a>(flag: &str, value: Option<&'a str>) -> CliResult<&'a str> {
     value.ok_or_else(|| CliError::from(format!("Option --{} requires a value", flag)))
 }
 
@@ -410,9 +372,13 @@ fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, Pars
     let command_index = positional_args
         .iter()
         .position(|arg| arg == "position" || arg == "events")
-        .ok_or("No command found".to_string())?;
+        .ok_or("No command found\nUsage: sunce [OPTIONS] <lat> <lon> <dateTime> <position|events>\nRun 'sunce --help' for more.")?;
     if command_index == 0 {
-        return Err("Need at least command and one argument".into());
+        return Err(format!(
+            "Pass inputs before the command. Run 'sunce {} --help' for usage.",
+            positional_args[0]
+        )
+        .into());
     }
     if command_index + 1 != positional_args.len() {
         return Err(format!(
@@ -434,46 +400,30 @@ fn parse_positional_args(positional_args: &[String]) -> CliResult<(Command, Pars
 }
 
 fn parse_data_source(args: &[String]) -> CliResult<ParsedInput> {
-    match args.len() {
-        1 => {
-            if args[0].starts_with('@') {
-                Ok(ParsedInput::Paired(parse_file_arg(&args[0])))
-            } else {
-                Err("Single argument must be a file (@file or @-)".into())
-            }
-        }
-        2 => {
-            if !args[0].starts_with('@') {
-                Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into())
-            } else {
-                Ok(ParsedInput::Separate(
-                    LocationSource::File(parse_file_arg(&args[0])),
-                    if args[1].starts_with('@') {
-                        ParsedTimeSource::File(parse_file_arg(&args[1]))
-                    } else {
-                        parse_time_arg(&args[1])?
-                    },
-                ))
-            }
-        }
-        3 => Ok(ParsedInput::Separate(
-            parse_location_args(&args[0], &args[1])?,
-            parse_time_arg(&args[2])?,
+    match args {
+        [path] if path.starts_with('@') => Ok(ParsedInput::Paired(parse_file_arg(path))),
+        [_] => Err("Single argument must be a file (@file or @-)".into()),
+        [path, time] if path.starts_with('@') => Ok(ParsedInput::Separate(
+            LocationSource::File(parse_file_arg(path)),
+            parse_time_arg(time),
+        )),
+        [_, _] => Err("Two arguments: Use @coords.txt @times.txt, @coords.txt datetime, or three arguments (lat lon datetime)".into()),
+        [lat, lon, time] => Ok(ParsedInput::Separate(
+            parse_location_args(lat, lon)?,
+            parse_time_arg(time),
         )),
         _ => Err("Too many arguments".into()),
     }
 }
 
-fn parse_time_arg(time_str: &str) -> CliResult<ParsedTimeSource> {
+fn parse_time_arg(time_str: &str) -> ParsedTimeSource {
     if time_str.starts_with('@') {
-        return Ok(ParsedTimeSource::File(parse_file_arg(time_str)));
+        ParsedTimeSource::File(parse_file_arg(time_str))
+    } else if time_str == "now" {
+        ParsedTimeSource::Now
+    } else {
+        ParsedTimeSource::Value(time_str.to_owned())
     }
-
-    if time_str == "now" {
-        return Ok(ParsedTimeSource::Now);
-    }
-
-    Ok(ParsedTimeSource::Value(time_str.to_string()))
 }
 
 fn parse_range(s: &str) -> Result<Option<(f64, f64, f64)>, CliError> {
@@ -519,9 +469,36 @@ fn get_version_text() -> String {
     )
 }
 
-fn get_help_text() -> String {
+fn shared_help() -> String {
     let defaults = Parameters::default();
     let formats = OutputFormat::all().join(", ");
+    format!(
+        r#"Shared options:
+  --algorithm=<name>    Solar model: spa or grena3. Default: {}.
+  --deltat[=<seconds>]  Default: 0. Bare --deltat estimates from the date
+                        (falls back to 0 if unavailable).
+  --format=<format>     Output format: {formats}. Default: {}.
+  --timezone=<tz>       Offset (+01:00) or IANA name (Europe/Berlin).
+                        Local dates and times otherwise use TZ or the system zone.
+  --[no-]headers        Include headers in text/CSV. Default: {}.
+  --[no-]show-inputs    Include input columns. Default: auto for ranges and files.
+  --perf                Print performance statistics to stderr.
+  -v, --verbose         Print status messages to stderr.
+  -h, --help            Show help.
+  --version             Print version information and exit.
+
+Required option values accept '--option=value' or '--option value'.
+An explicit --deltat value requires '='.
+
+Exit status: 0 for success or a true predicate, 1 for a false predicate,
+2 for errors. Predicates produce no stdout and require one location and instant.
+Use --wait with a predicate and 'now' to wait for a calculated transition.
+"#,
+        defaults.calculation.algorithm, defaults.output.format, defaults.output.headers
+    )
+}
+
+fn get_help_text() -> String {
     format!(
         r#"sunce {}
 Calculates topocentric solar coordinates or solar events.
@@ -574,57 +551,21 @@ Arguments:
     - Blank lines and lines starting with # are ignored.
     - Stdin (@-) can be used for only one input parameter.
 
-Options:
-  --algorithm=<name>   Position model: spa (default) or grena3.
-  --deltat[=<seconds>]  Delta T in seconds. Default: 0 when omitted. Use
-                        --deltat=<seconds> for an explicit value, or
-                        --deltat (no value) to estimate from the date
-                        (falls back to 0 if unavailable).
-  --format=<format>     Output format: {}. Default: {}
-  --timezone=<tz>       Timezone offset (+01:00) or IANA name (Europe/Berlin).
-                        Overrides timezone for parsing and output.
-  --[no-]headers        Include headers in text/CSV output. Default: {}
-  --[no-]show-inputs    Include inputs in output. Auto-enabled for ranges,
-                        files, and position date-only inputs unless
-                        --no-show-inputs is used.
-  --perf                Print performance statistics to stderr.
-  -v, --verbose         Print status messages to stderr.
-  Predicate mode (automation via exit status):
-    Works only with one explicit lat/lon pair and one explicit instant.
-    Event predicates:
-      --is-daylight              Exit 0 if the instant is daylight.
-      --is-civil-twilight        Exit 0 if the instant is in civil twilight.
-      --is-nautical-twilight     Exit 0 if the instant is in nautical twilight.
-      --is-astronomical-twilight Exit 0 if the instant is in astronomical twilight.
-      --is-astronomical-night    Exit 0 if the instant is outside astronomical twilight.
-      --after-sunset             Exit 0 from sunset until the next sunrise.
-    Position predicates:
-      --sun-above=<degrees>      Exit 0 if the elevation angle is above the threshold.
-      --sun-below=<degrees>      Exit 0 if the elevation angle is below the threshold.
-    Shared:
-      --wait                     With `now`, wait until the predicate becomes true.
-                                 Completion is usually within seconds of the
-                                 transition, not guaranteed at the exact time.
-  -h, --help            Show help (command-specific when a command is given).
-  --version             Print version information and exit.
-
 Commands:
   position              Calculate topocentric solar coordinates.
   events                Calculate sunrise, transit, sunset, and optional twilight.
 
-Options with required values accept both '--option=value' and '--option value'.
-An explicit --deltat value requires '='; bare --deltat requests an estimate.
+{}
 Run 'sunce help <command>' or 'sunce <command> --help' for command-specific options.
 "#,
         env!("CARGO_PKG_VERSION"),
-        formats,
-        defaults.output.format,
-        defaults.output.headers
+        shared_help()
     )
 }
 
 fn get_command_help(command: &str) -> CliResult<String> {
     let defaults = Parameters::default();
+    let shared = shared_help();
     Ok(match command {
         "position" => format!(
             r#"Usage:
@@ -635,39 +576,33 @@ fn get_command_help(command: &str) -> CliResult<String> {
 
 Calculates topocentric solar coordinates.
 
-Options:
-  -v, --verbose            Print status messages to stderr.
-  --algorithm=<alg>         Algorithm: spa, grena3. Default: {}
+Position options:
   --elevation=<meters>      Elevation above sea level in meters (Grena3: zero). Default: {}
   --elevation-angle         Output elevation angle instead of zenith angle.
   --no-refraction           Disable refraction correction.
   --pressure=<hPa>          Air pressure in hPa (refraction). Default: {}
   --temperature=<celsius>   Air temperature in C (refraction). Default: {}
-  --step=<interval>         Time step for ranges and date-only inputs.
-                            Examples: 30s, 15m, 2h, 1d
+  --step=<interval>         Time step for series or live output with 'now'.
+                            Examples: 30s, 15m, 2h, 1d. Parquet needs finite input.
   --at=<HH:MM:SS>           One sample per local date at this clock time.
                             Gaps advance; overlaps use the earlier occurrence.
                             Cannot be combined with --step.
-  --sun-above=<degrees>     Predicate mode: exit 0 if elevation angle is above
-                            the threshold, 1 if not.
-  --sun-below=<degrees>     Predicate mode: exit 0 if elevation angle is below
-                            the threshold, 1 if not.
-  --wait                    Predicate mode: with `now`, wait until the
-                            predicate becomes true. Completion is usually
-                            within seconds of the transition, not guaranteed
-                            at the exact time.
+  --sun-above=<degrees>     Predicate: elevation angle is above the threshold.
+  --sun-below=<degrees>     Predicate: elevation angle is below the threshold.
+
+{shared}
 
 Examples:
   sunce 52.0 13.4 2024-06-21T12:00:00 position
   sunce 52.0 13.4 2024-06-21 position --step=10m
   sunce 50:55:0.5 10:15:0.5 2024-06-21T12:00:00 position --algorithm=grena3
 "#,
-            defaults.calculation.algorithm,
             defaults.environment.elevation,
             defaults.environment.pressure,
             defaults.environment.temperature
         ),
-        "events" => r#"Usage:
+        "events" => format!(
+            r#"Usage:
   sunce [OPTIONS] <latitude> <longitude> <dateTime> events
   sunce [OPTIONS] @data.txt events
   sunce [OPTIONS] @coords.txt @times.txt events
@@ -677,30 +612,24 @@ Calculates sunrise, transit, sunset and (optionally) twilight times.
 Outputs one row per event: date, day_state, event, time.
 Dates without events have empty event/time fields.
 
-Options:
-  -v, --verbose            Print status messages to stderr.
-  --algorithm=<name>       Position model: spa (default) or grena3.
+Event options:
   --twilight                Include civil, nautical, and astronomical twilight times.
   --horizon=<degrees>       Custom horizon angle in degrees. Not valid with --twilight.
-  --is-daylight             Predicate mode: exit 0 if the instant is daylight.
-  --is-civil-twilight       Predicate mode: exit 0 if the instant is in civil twilight.
-  --is-nautical-twilight    Predicate mode: exit 0 if the instant is in nautical twilight.
-  --is-astronomical-twilight Predicate mode: exit 0 if the instant is in astronomical twilight.
-  --is-astronomical-night   Predicate mode: exit 0 if the instant is outside
-                            astronomical twilight.
-  --after-sunset            Predicate mode: exit 0 from sunset until the next
-                            sunrise.
-  --wait                    Predicate mode: with `now`, wait until the
-                            predicate becomes true. Completion is usually
-                            within seconds of the transition, not guaranteed
-                            at the exact time.
+  --is-daylight             Predicate: the instant is in daylight.
+  --is-civil-twilight       Predicate: the instant is in civil twilight.
+  --is-nautical-twilight    Predicate: the instant is in nautical twilight.
+  --is-astronomical-twilight Predicate: the instant is in astronomical twilight.
+  --is-astronomical-night   Predicate: solar elevation is below -18 degrees.
+  --after-sunset            Predicate: the instant is between sunset and sunrise.
+
+{shared}
 
 Examples:
   sunce 52.0 13.4 2024-06-21 events
   sunce 52.0 13.4 2024-06 events --twilight
   sunce 52.0 13.4 2024-06-21 events --horizon=-6.0
 "#
-        .to_string(),
+        ),
         _ => {
             return Err(format!(
                 "Unknown command: {}\n\nRun 'sunce --help' for usage.",

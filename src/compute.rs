@@ -3,7 +3,9 @@
 use crate::events::calculate_events;
 use crate::input::{EventInput, PositionInput};
 use crate::position::{TIME_CACHE_CAPACITY, TimeCache, refraction_correction, time_cache_get};
-use crate::{Error, EventOptions, EventRecord, Location, PositionOptions, SolarPosition};
+use crate::{
+    Environment, Error, EventOptions, EventRecord, Location, PositionOptions, SolarPosition,
+};
 use chrono::{DateTime, FixedOffset};
 use std::collections::VecDeque;
 
@@ -24,6 +26,7 @@ pub struct PositionRecord {
     pub datetime: DateTime<FixedOffset>,
     pub position: SolarPosition,
     pub deltat: f64,
+    pub environment: Environment,
 }
 
 /// Calculate positions lazily from a fallible input iterator.
@@ -62,6 +65,7 @@ where
             datetime: input.datetime,
             position,
             deltat,
+            environment: options.environment,
         })
     }))
 }

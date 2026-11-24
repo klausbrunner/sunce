@@ -108,6 +108,30 @@ fn test_empty_file_handling() {
 }
 
 #[test]
+fn empty_csv_preserves_the_selected_columns() {
+    for (args, header) in [
+        (
+            &["position", "--no-refraction"][..],
+            "latitude,longitude,elevation,dateTime,deltaT,azimuth,zenith\n",
+        ),
+        (
+            &["events"][..],
+            "latitude,longitude,date,deltaT,day_state,event,time\n",
+        ),
+    ] {
+        for (flag, expected) in [("--headers", header), ("--no-headers", "")] {
+            sunce_command()
+                .args(["@-", "--format=csv", flag])
+                .args(args)
+                .write_stdin("")
+                .assert()
+                .success()
+                .stdout(expected);
+        }
+    }
+}
+
+#[test]
 fn test_unicode_in_error_messages() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let unicode_path = dir.path().join("файл_文件.txt");
@@ -124,7 +148,7 @@ fn invalid_steps_report_errors_without_panicking() {
         sunce_command()
             .args(["52", "13.4", "2024-01-01", "position", "--step", step])
             .assert()
-            .code(1)
+            .code(2)
             .stderr(predicate::str::contains("panicked").not());
     }
 }

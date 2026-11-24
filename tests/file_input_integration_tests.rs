@@ -82,6 +82,25 @@ fn file_arg(dir: &Path, name: &str, contents: &str) -> String {
     format!("@{}", path.display())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn pipe_backed_coordinate_path_is_read_once() {
+    let rows = csv_records(
+        &[
+            "--format=csv",
+            "--timezone=UTC",
+            "@/dev/fd/0",
+            "2026-01-01",
+            "position",
+            "--step=12h",
+        ],
+        Some("52 13\n"),
+        &[],
+    );
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["dateTime"], "2026-01-01T12:00:00+00:00");
+}
+
 #[test]
 fn test_file_comments_and_mixed_delimiters() {
     let dir = tempdir().unwrap();
@@ -169,7 +188,7 @@ fn test_file_input_error_cases() {
         sunce_command()
             .args(&refs)
             .assert()
-            .failure()
+            .code(2)
             .stderr(predicate::str::contains(stderr));
     }
 }
@@ -315,9 +334,15 @@ fn test_cartesian_products_with_file_inputs() {
 }
 
 #[test]
-fn preserves_offsets_for_equal_instants() {
-    let input = "52 13.4 2024-01-01T12:00:00+00:00\n52 13.4 2024-01-01T13:00:00+01:00\n";
-    let expected = ["2024-01-01T12:00:00+00:00", "2024-01-01T13:00:00+01:00"];
+fn position_timestamps_preserve_offsets_and_fractions() {
+    let input = "52 13.4 2024-01-01T12:00:00.100+00:00\n\
+                 52 13.4 2024-01-01T13:00:00.100+01:00\n\
+                 52 13.4 2024-01-01T12:00:00.900+00:00\n";
+    let expected = [
+        "2024-01-01T12:00:00.100+00:00",
+        "2024-01-01T13:00:00.100+01:00",
+        "2024-01-01T12:00:00.900+00:00",
+    ];
     let command = "position";
     let rows = csv_records(&["@-", command, "--format=csv"], Some(input), &[]);
     assert_eq!(

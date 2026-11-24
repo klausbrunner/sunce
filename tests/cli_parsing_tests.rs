@@ -13,27 +13,13 @@ fn assert_failure(args: &[&str], expected_stderr: &str) {
     sunce_command()
         .args(args)
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(expected_stderr));
-}
-
-fn assert_failure_code(args: &[&str], code: i32, expected_stderr: &str) {
-    sunce_command()
-        .args(args)
-        .assert()
-        .code(code)
+        .code(2)
         .stderr(predicate::str::contains(expected_stderr));
 }
 
 fn assert_failures(cases: &[(&[&str], &str)]) {
     for (args, expected_stderr) in cases {
         assert_failure(args, expected_stderr);
-    }
-}
-
-fn assert_failure_code_cases(code: i32, cases: &[(&[&str], &str)]) {
-    for (args, expected_stderr) in cases {
-        assert_failure_code(args, code, expected_stderr);
     }
 }
 
@@ -269,8 +255,8 @@ fn test_help_and_version_paths() {
         &["--help"],
         &[
             "Usage:",
-            "--is-daylight",
-            "--sun-above=<degrees>",
+            "Run 'sunce help <command>'",
+            "1 for a false predicate",
             "--wait",
             "-v, --verbose",
         ],
@@ -291,6 +277,8 @@ fn test_help_and_version_paths() {
             "Calculates topocentric solar coordinates.",
             "--sun-above=<degrees>",
             "--sun-below=<degrees>",
+            "--timezone=<tz>",
+            "--format=<format>",
             "-v, --verbose",
         ],
     );
@@ -300,11 +288,14 @@ fn test_help_and_version_paths() {
             "Calculates sunrise, transit, sunset",
             "--is-daylight",
             "--is-astronomical-night",
+            "solar elevation is below -18 degrees",
+            "--timezone=<tz>",
+            "--format=<format>",
             "--after-sunset",
             "--wait",
         ],
     );
-    assert_failure_code(&["help", "nonsense"], 1, "Unknown command: nonsense");
+    assert_failure(&["help", "nonsense"], "Unknown command: nonsense");
 }
 
 #[test]
@@ -361,7 +352,7 @@ fn test_separated_option_values_match_equals_form() {
     // Bare --deltat must not consume the following latitude as its value.
     assert_success(&["--deltat", "52", "13.4", "2024-01-01T12:00:00Z", "position"]);
     for args in [vec!["--format"], vec!["--format", "--no-headers"]] {
-        assert_failure_code(&args, 1, "Option --format requires a value");
+        assert_failure(&args, "Option --format requires a value");
     }
 }
 
@@ -385,17 +376,21 @@ fn test_predicate_errors_are_distinct_from_false_regardless_of_option_order() {
         ),
         (&["52", "13.4", "now"], "No command found"),
     ];
+    assert_failures(cases);
     for (args, message) in cases {
         for before in [true, false] {
             let mut full_args = args.to_vec();
             full_args.insert(if before { 0 } else { full_args.len() }, "--is-daylight");
-            assert_failure_code(&full_args, 2, message);
+            assert_failure(&full_args, message);
         }
     }
-    assert_failure_code(&["--is-daylight=yes"], 2, "does not take a value");
-    assert_failure_code(&["--sun-above", "--timezone=UTC"], 2, "requires a value");
-    // Predicate-looking option values must not change ordinary error codes.
-    assert_failure_code(&["--timezone=--is-daylight"], 1, "Invalid timezone");
+    assert_failure(&["--is-daylight=yes"], "does not take a value");
+    assert_failure(&["--sun-above", "--timezone=UTC"], "requires a value");
+    assert_failure(&["--timezone=--is-daylight"], "Invalid timezone");
+    assert_failure(
+        &["52", "13", "now", "events", "--is-dayligth"],
+        "Unknown option",
+    );
     for flag in ["--help", "--version"] {
         assert_success(&["--is-daylight", flag]);
     }
@@ -403,6 +398,11 @@ fn test_predicate_errors_are_distinct_from_false_regardless_of_option_order() {
 
 #[test]
 fn test_unknown_option_and_argument_count_errors() {
+    sunce_command()
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::contains("Usage:"));
     assert_failures(&[
         (&["--wat"], "Unknown option: --wat"),
         (&["52.0"], "No command found"),
@@ -454,7 +454,7 @@ fn test_step_without_unit_and_with_unit_both_work() {
 #[test]
 fn test_predicate_flag_parsing_and_validation() {
     let events_format = [
-        "--format=csv",
+        "--format=text",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
@@ -462,7 +462,7 @@ fn test_predicate_flag_parsing_and_validation() {
         "--is-daylight",
     ];
     let position_headers = [
-        "--no-headers",
+        "--headers",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
@@ -470,7 +470,7 @@ fn test_predicate_flag_parsing_and_validation() {
         "--sun-above=10",
     ];
     let events_show_inputs = [
-        "--show-inputs",
+        "--no-show-inputs",
         "52.0",
         "13.4",
         "2024-03-21T12:00:00Z",
@@ -486,139 +486,136 @@ fn test_predicate_flag_parsing_and_validation() {
         "--is-daylight",
     ];
 
-    assert_failure_code_cases(
-        2,
-        &[
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "events",
-                    "--is-daylight",
-                    "--is-astronomical-night",
-                ],
-                "Predicate options cannot be used multiple times",
-            ),
-            (
-                &position_predicate_args("2024-03-21T12:00:00Z", "--is-daylight"),
-                "Event predicates require the events command",
-            ),
-            (
-                &events_predicate_args("2024-03-21T12:00:00Z", "--sun-above=10"),
-                "Sun angle predicates require the position command",
-            ),
-            (
-                &events_format,
-                "Option --format not valid in predicate mode",
-            ),
-            (
-                &position_headers,
-                "Option --headers/--no-headers not valid in predicate mode",
-            ),
-            (
-                &events_show_inputs,
-                "Option --show-inputs/--no-show-inputs not valid in predicate mode",
-            ),
-            (&events_perf, "Option --perf not valid in predicate mode"),
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "events",
-                    "--twilight",
-                    "--is-daylight",
-                ],
-                "Option --twilight not valid in predicate mode",
-            ),
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "events",
-                    "--horizon=-6",
-                    "--is-daylight",
-                ],
-                "Option --horizon not valid in predicate mode",
-            ),
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "position",
-                    "--elevation-angle",
-                    "--sun-above=10",
-                ],
-                "Option --elevation-angle not valid in predicate mode",
-            ),
-            (
-                &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=91"),
-                "Elevation threshold must be between -90 and 90 degrees",
-            ),
-            (
-                &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=NaN"),
-                "Invalid sun above value: expected finite number",
-            ),
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "now",
-                    "position",
-                    "--step=1h",
-                    "--sun-above=10",
-                ],
-                "Option --step not valid in predicate mode",
-            ),
-            (
-                &["52.0", "13.4", "now", "events", "--wait"],
-                "Option --wait requires a predicate option",
-            ),
-            (
-                &[
-                    "52.0",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "events",
-                    "--is-daylight",
-                    "--wait",
-                ],
-                "Option --wait requires 'now' in predicate mode",
-            ),
-            (
-                &[
-                    "52:53:1",
-                    "13.4",
-                    "2024-03-21T12:00:00Z",
-                    "position",
-                    "--sun-above=10",
-                ],
-                "Predicate mode requires a single latitude/longitude pair",
-            ),
-            (
-                &["52.0", "13.4", "2024-03-21", "events", "--is-daylight"],
-                "Predicate mode requires a single explicit instant",
-            ),
-            (
-                &[
-                    "@coords.txt",
-                    "2024-03-21T12:00:00Z",
-                    "position",
-                    "--sun-above=10",
-                ],
-                "Predicate mode does not support coordinate file input",
-            ),
-            (
-                &["52.0", "13.4", "@times.txt", "position", "--sun-above=10"],
-                "Predicate mode does not support datetime file input",
-            ),
-            (
-                &["@data.txt", "events", "--is-daylight"],
-                "Predicate mode requires explicit latitude, longitude, and datetime arguments",
-            ),
-        ],
-    );
+    assert_failures(&[
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "events",
+                "--is-daylight",
+                "--is-astronomical-night",
+            ],
+            "Predicate options cannot be used multiple times",
+        ),
+        (
+            &position_predicate_args("2024-03-21T12:00:00Z", "--is-daylight"),
+            "Event predicates require the events command",
+        ),
+        (
+            &events_predicate_args("2024-03-21T12:00:00Z", "--sun-above=10"),
+            "Sun angle predicates require the position command",
+        ),
+        (
+            &events_format,
+            "Option --format not valid in predicate mode",
+        ),
+        (
+            &position_headers,
+            "Option --headers/--no-headers not valid in predicate mode",
+        ),
+        (
+            &events_show_inputs,
+            "Option --show-inputs/--no-show-inputs not valid in predicate mode",
+        ),
+        (&events_perf, "Option --perf not valid in predicate mode"),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "events",
+                "--twilight",
+                "--is-daylight",
+            ],
+            "Option --twilight not valid in predicate mode",
+        ),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "events",
+                "--horizon=-6",
+                "--is-daylight",
+            ],
+            "Option --horizon not valid in predicate mode",
+        ),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "position",
+                "--elevation-angle",
+                "--sun-above=10",
+            ],
+            "Option --elevation-angle not valid in predicate mode",
+        ),
+        (
+            &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=91"),
+            "Elevation threshold must be between -90 and 90 degrees",
+        ),
+        (
+            &position_predicate_args("2024-03-21T12:00:00Z", "--sun-above=NaN"),
+            "Invalid sun above value: expected finite number",
+        ),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "now",
+                "position",
+                "--step=1h",
+                "--sun-above=10",
+            ],
+            "Option --step not valid in predicate mode",
+        ),
+        (
+            &["52.0", "13.4", "now", "events", "--wait"],
+            "Option --wait requires a predicate option",
+        ),
+        (
+            &[
+                "52.0",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "events",
+                "--is-daylight",
+                "--wait",
+            ],
+            "Option --wait requires 'now' in predicate mode",
+        ),
+        (
+            &[
+                "52:53:1",
+                "13.4",
+                "2024-03-21T12:00:00Z",
+                "position",
+                "--sun-above=10",
+            ],
+            "Predicate mode requires a single latitude/longitude pair",
+        ),
+        (
+            &["52.0", "13.4", "2024-03-21", "events", "--is-daylight"],
+            "Predicate mode requires a single explicit instant",
+        ),
+        (
+            &[
+                "@coords.txt",
+                "2024-03-21T12:00:00Z",
+                "position",
+                "--sun-above=10",
+            ],
+            "Predicate mode does not support coordinate file input",
+        ),
+        (
+            &["52.0", "13.4", "@times.txt", "position", "--sun-above=10"],
+            "Predicate mode does not support datetime file input",
+        ),
+        (
+            &["@data.txt", "events", "--is-daylight"],
+            "Predicate mode requires explicit latitude, longitude, and datetime arguments",
+        ),
+    ]);
 }

@@ -20,7 +20,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut csv = Vec::new();
     output::write_positions(
         rows,
-        &options.environment,
         output::Options {
             format: output::Format::Csv,
             show_inputs: true,
@@ -62,10 +61,10 @@ horizon, which cannot be combined. Grena3 positions require zero observer elevat
 ## Output and features
 
 `output::write_positions` and `output::write_events` export text, CSV or JSON Lines
-to any `std::io::Write`, returning the row count. Position exports need the same
-environment as the calculation. Input, write and final flush errors propagate;
-failures may leave partial output. Records retain full precision; exports apply
-Sunce's usual formatting.
+to any `std::io::Write`, returning the row count. Position input columns use each
+record's environment; refraction must be enabled for all rows or none. Input,
+write and final flush errors propagate and may leave partial output. Records
+retain full precision; exports apply Sunce's usual formatting.
 
 The default features are `cli` and `parquet`. Disable them for the core library;
 enable `parquet` for bounded-batch Parquet exports, which require `Write + Send`.

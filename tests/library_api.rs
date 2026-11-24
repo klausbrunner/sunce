@@ -356,7 +356,6 @@ fn reader_writer_and_final_flush_failures_are_returned() {
         for fail_flush in [false, true] {
             let error = output::write_positions(
                 position_request(),
-                &sunce::Environment::default(),
                 Options {
                     format,
                     ..Default::default()
@@ -384,7 +383,6 @@ fn exporters_preserve_input_errors_and_use_caller_owned_memory() {
         let mut bytes = Vec::new();
         let count = output::write_positions(
             position_request(),
-            &sunce::Environment::default(),
             Options {
                 format,
                 ..Default::default()
@@ -401,7 +399,6 @@ fn exporters_preserve_input_errors_and_use_caller_owned_memory() {
         .unwrap();
         let error = output::write_positions(
             request,
-            &sunce::Environment::default(),
             Options {
                 format,
                 ..Default::default()
@@ -411,6 +408,50 @@ fn exporters_preserve_input_errors_and_use_caller_owned_memory() {
         .unwrap_err();
         assert_eq!(error, Error::Calculation("source failed".into()));
     }
+}
+
+#[test]
+fn position_exports_use_each_records_environment() {
+    let mut rows = [(125.0, 990.0), (750.0, 925.0)].map(|(elevation, pressure)| {
+        let mut settings = PositionOptions::default();
+        settings.environment.elevation = elevation;
+        settings.environment.pressure = pressure;
+        positions([Ok(position())], settings)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+    });
+    let options = Options {
+        format: Format::Json,
+        show_inputs: true,
+        ..Default::default()
+    };
+    let mut bytes = Vec::new();
+    assert_eq!(
+        output::write_positions(rows.map(Ok), options, &mut bytes).unwrap(),
+        2
+    );
+    let values: Vec<serde_json::Value> = serde_json::Deserializer::from_slice(&bytes)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(values[0]["elevation"], 125.0);
+    assert_eq!(values[0]["pressure"], 990.0);
+    assert_eq!(values[1]["elevation"], 750.0);
+    assert_eq!(values[1]["pressure"], 925.0);
+
+    let mut settings = PositionOptions::default();
+    settings.environment.refraction = false;
+    rows[1] = positions([Ok(position())], settings)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        output::write_positions(rows.map(Ok), options, io::sink()),
+        Err(Error::Output(_))
+    ));
 }
 
 #[cfg(feature = "cli")]
@@ -439,7 +480,7 @@ fn position_grid_exports_match_the_cli() {
                 ..Default::default()
             };
             let mut bytes = Vec::new();
-            export_positions(request, settings, format, options, &mut bytes).unwrap();
+            export_positions(request, format, options, &mut bytes).unwrap();
             let cli = std::process::Command::new(assert_cmd::cargo::cargo_bin!("sunce"))
                 .args([
                     "--format",
@@ -594,7 +635,6 @@ fn cli_uses_library_event_options_for_delta_t_horizons_and_twilight() {
 #[cfg(feature = "cli")]
 fn export_positions(
     rows: impl Iterator<Item = Result<PositionRecord, Error>>,
-    settings: PositionOptions,
     format: &str,
     options: Options,
     bytes: &mut Vec<u8>,
@@ -603,7 +643,6 @@ fn export_positions(
     if format == "parquet" {
         return sunce::parquet::write_positions(
             rows,
-            &settings.environment,
             sunce::parquet::Options {
                 show_inputs: options.show_inputs,
                 elevation_angle: options.elevation_angle,
@@ -612,7 +651,7 @@ fn export_positions(
         );
     }
     let _ = format;
-    output::write_positions(rows, &settings.environment, options, bytes)
+    output::write_positions(rows, options, bytes)
 }
 
 #[cfg(feature = "cli")]
@@ -669,7 +708,6 @@ fn composed_and_collected_results_export_to_single_threaded_writers() {
         let bytes = std::rc::Rc::default();
         let count = output::write_positions(
             rows.into_iter().map(Ok),
-            &options.environment,
             Options {
                 format,
                 ..Default::default()
@@ -749,7 +787,6 @@ fn both_operations_preserve_upstream_error_variants() {
             assert_eq!(
                 sunce::parquet::write_positions(
                     rows,
-                    &sunce::Environment::default(),
                     sunce::parquet::Options::default(),
                     Vec::new()
                 )

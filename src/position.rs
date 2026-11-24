@@ -1,6 +1,6 @@
 //! Solar position calculations and time-cache helpers.
 
-#[cfg(any(test, feature = "cli"))]
+#[cfg(feature = "cli")]
 use crate::Location;
 use crate::{CalculationAlgorithm, PositionOptions};
 use chrono::{DateTime, FixedOffset};
@@ -48,7 +48,7 @@ pub(crate) fn solar_elevation_at(
             .zenith_angle())
 }
 
-#[cfg(any(test, feature = "cli"))]
+#[cfg(feature = "cli")]
 pub(crate) fn calculate_position(
     lat: f64,
     lon: f64,
@@ -59,7 +59,7 @@ pub(crate) fn calculate_position(
     calculate_position_with_refraction(lat, lon, dt, params, refraction)
 }
 
-#[cfg(any(test, feature = "cli"))]
+#[cfg(feature = "cli")]
 pub(crate) fn calculate_position_with_refraction(
     lat: f64,
     lon: f64,
@@ -90,6 +90,7 @@ pub(crate) fn calculate_position_with_refraction(
         datetime: dt,
         position,
         deltat,
+        environment: params.environment,
     })
 }
 

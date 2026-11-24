@@ -1,40 +1,7 @@
 //! Solar position calculator application pipeline.
 
+use crate::error::CliError;
 use crate::{Error, Location, cli, data, input, output, predicate, validate};
-
-fn cli_error_exit_code(err: crate::error::CliError) -> i32 {
-    match err {
-        crate::error::CliError::Exit(message) => {
-            println!("{}", message);
-            0
-        }
-        crate::error::CliError::Message(message) => {
-            eprintln!("Error: {}", message);
-            1
-        }
-        crate::error::CliError::MessageWithCode(message, code) => {
-            eprintln!("Error: {}", message);
-            code
-        }
-    }
-}
-
-fn run_predicate(job: predicate::PredicateJob) -> i32 {
-    let result = if job.wait {
-        predicate::wait_until_true(&job).map(|()| true)
-    } else {
-        predicate::run_once(&job)
-    };
-
-    match result {
-        Ok(true) => 0,
-        Ok(false) => 1,
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            2
-        }
-    }
-}
 
 fn export_options(
     params: &data::Parameters,
@@ -50,7 +17,7 @@ fn export_options(
     }
 }
 
-fn run_stream(request: validate::StreamRequest) -> i32 {
+fn run_stream(request: validate::StreamRequest) -> Result<(), Error> {
     let validate::StreamRequest {
         command,
         source,
@@ -77,85 +44,69 @@ fn run_stream(request: validate::StreamRequest) -> i32 {
             command,
         ),
         data::DataSource::Paired(path) => data::expand_paired_file(path, params.timezone.clone()),
-    };
-    let data_iter = match data_iter {
-        Ok(iter) => iter,
-        Err(err) => {
-            eprintln!("Error: {}", err);
-            return 1;
-        }
-    };
+    }
+    .map_err(Error::Input)?;
     let start = params.perf.then(std::time::Instant::now);
 
-    let export = || -> Result<usize, Error> {
-        match command {
-            data::Command::Position => {
-                let input = data_iter.map(|item| {
-                    item.map(|(latitude, longitude, time)| input::PositionInput {
-                        location: Location {
-                            latitude,
-                            longitude,
-                        },
-                        datetime: time.datetime,
-                    })
-                    .map_err(Error::Input)
-                });
-                let rows = crate::positions(input, params.position_options())?;
-                match params.output.format {
-                    data::OutputFormat::Standard(format) => output::write_positions(
-                        rows,
-                        &params.environment,
-                        export_options(&params, format, flush_each_record),
-                        std::io::stdout(),
-                    ),
-                    #[cfg(feature = "parquet")]
-                    data::OutputFormat::Parquet => crate::parquet::write_positions(
-                        rows,
-                        &params.environment,
-                        crate::parquet::Options {
-                            show_inputs: params.output.should_show_inputs(),
-                            elevation_angle: params.output.elevation_angle,
-                        },
-                        std::io::stdout(),
-                    ),
-                }
-            }
-            data::Command::Events => {
-                let input = data_iter.map(|item| {
-                    item.map(|(latitude, longitude, time)| input::EventInput {
-                        location: Location {
-                            latitude,
-                            longitude,
-                        },
-                        date: time.datetime.date_naive(),
-                        timezone: time.zone,
-                    })
-                    .map_err(Error::Input)
-                });
-                let rows = crate::events(input, params.calculation)?;
-                match params.output.format {
-                    data::OutputFormat::Standard(format) => output::write_events(
-                        rows,
-                        export_options(&params, format, flush_each_record),
-                        std::io::stdout(),
-                    ),
-                    #[cfg(feature = "parquet")]
-                    data::OutputFormat::Parquet => crate::parquet::write_events(
-                        rows,
-                        params.output.should_show_inputs(),
-                        std::io::stdout(),
-                    ),
+    let record_count = match command {
+        data::Command::Position => {
+            let input = data_iter.map(|item| {
+                item.map(|(latitude, longitude, time)| input::PositionInput {
+                    location: Location {
+                        latitude,
+                        longitude,
+                    },
+                    datetime: time.datetime,
+                })
+                .map_err(Error::Input)
+            });
+            let rows = crate::positions(input, params.position_options())?;
+            let layout = output::PositionLayout::new(
+                params.output.should_show_inputs(),
+                params.output.elevation_angle,
+                params.environment.refraction,
+            );
+            match params.output.format {
+                data::OutputFormat::Standard(format) => output::write_position_rows(
+                    rows,
+                    export_options(&params, format, flush_each_record),
+                    layout,
+                    std::io::stdout(),
+                ),
+                #[cfg(feature = "parquet")]
+                data::OutputFormat::Parquet => {
+                    crate::parquet::write_position_rows(rows, layout, std::io::stdout())
                 }
             }
         }
-    };
-    let record_count = match export() {
-        Ok(count) => count,
-        Err(err) => {
-            eprintln!("Error: {err}");
-            return 1;
+        data::Command::Events => {
+            let input = data_iter.map(|item| {
+                item.map(|(latitude, longitude, time)| input::EventInput {
+                    location: Location {
+                        latitude,
+                        longitude,
+                    },
+                    date: time.datetime.date_naive(),
+                    timezone: time.zone,
+                })
+                .map_err(Error::Input)
+            });
+            let rows = crate::events(input, params.calculation)?;
+            match params.output.format {
+                data::OutputFormat::Standard(format) => output::write_events(
+                    rows,
+                    export_options(&params, format, flush_each_record),
+                    std::io::stdout(),
+                ),
+                #[cfg(feature = "parquet")]
+                data::OutputFormat::Parquet => crate::parquet::write_events(
+                    rows,
+                    params.output.should_show_inputs(),
+                    std::io::stdout(),
+                ),
+            }
         }
-    };
+    }?;
 
     if let Some(start_time) = start {
         let elapsed = start_time.elapsed();
@@ -168,26 +119,36 @@ fn run_stream(request: validate::StreamRequest) -> i32 {
     } else if params.verbose {
         eprintln!("Processed {record_count} records.");
     }
-    0
+    Ok(())
 }
 
-fn execute(valid: validate::ValidCommand) -> i32 {
+fn execute(valid: validate::ValidCommand) -> Result<i32, CliError> {
     match valid {
-        validate::ValidCommand::Predicate(job) => run_predicate(job),
-        validate::ValidCommand::Stream(request) => run_stream(request),
+        validate::ValidCommand::Predicate(job) if job.params.wait => {
+            predicate::wait_until_true(&job)?;
+            Ok(0)
+        }
+        validate::ValidCommand::Predicate(job) => Ok(i32::from(!predicate::run_once(&job)?)),
+        validate::ValidCommand::Stream(request) => {
+            run_stream(request).map_err(|err| err.to_string())?;
+            Ok(0)
+        }
     }
 }
 
 pub fn run(args: Vec<String>) -> i32 {
-    // Detect predicate intent before parsing so even errors preceding the flag
-    // cannot be mistaken for a false predicate by a calling script.
-    let args = cli::Arguments::new(&args);
-    let predicate_requested = args.predicate_requested();
-    match cli::parse_cli(args).and_then(validate::validate) {
-        Ok(valid) => execute(valid),
-        Err(crate::error::CliError::Message(message)) if predicate_requested => {
-            cli_error_exit_code(crate::error::predicate_error(message))
+    match cli::parse_cli(&args)
+        .and_then(validate::validate)
+        .and_then(execute)
+    {
+        Ok(code) => code,
+        Err(CliError::Exit(message)) => {
+            println!("{message}");
+            0
         }
-        Err(err) => cli_error_exit_code(err),
+        Err(CliError::Message(message)) => {
+            eprintln!("Error: {message}");
+            2
+        }
     }
 }

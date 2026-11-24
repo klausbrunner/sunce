@@ -32,7 +32,6 @@ pub struct PredicateJob {
     pub lon: f64,
     pub time: PredicateTime,
     pub check: PredicateCheck,
-    pub wait: bool,
     pub params: Parameters,
 }
 
@@ -292,7 +291,6 @@ mod tests {
                         lon: 13.4,
                         time: PredicateTime::Fixed(now),
                         check,
-                        wait: true,
                         params: params.clone(),
                     };
                     assert!(!run_once(&job).unwrap());

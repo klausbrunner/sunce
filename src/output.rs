@@ -1,6 +1,6 @@
 //! Streaming text, CSV and JSON Lines exports to caller-owned writers.
 
-use crate::{Environment, Error, EventKind, EventRecord, PositionRecord};
+use crate::{Error, EventKind, EventRecord, PositionRecord, SolarPosition};
 
 /// Formats supported by ordinary `std::io::Write` destinations.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -57,27 +57,42 @@ impl Default for Options {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct OutputContext {
-    pub environment: Environment,
-    pub output: Options,
-}
 use ahash::AHashMap;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, SecondsFormat};
 use serde::Serializer;
 use serde::ser::SerializeMap;
 use std::fmt::Write as _;
 
-const RFC3339_NO_MILLIS: &str = "%Y-%m-%dT%H:%M:%S%:z";
-pub(crate) const DATETIME_CACHE_CAPACITY: usize = 2048;
+pub(crate) const POSITION_TIME_PRECISION: SecondsFormat = SecondsFormat::AutoSi;
+pub(crate) const EVENT_TIME_PRECISION: SecondsFormat = SecondsFormat::Secs;
+const DATETIME_CACHE_CAPACITY: usize = 2048;
 const FIXED_DECIMAL_CACHE_CAPACITY: usize = 256;
 
-// DateTime equality ignores offsets; formatted timestamps must preserve them.
-pub(crate) type DateTimeCache = AHashMap<(DateTime<FixedOffset>, i32), String>;
 type FixedDecimalCache = AHashMap<(u64, u32), String>;
 
-pub(crate) fn format_rfc3339(dt: &DateTime<FixedOffset>) -> String {
-    dt.format(RFC3339_NO_MILLIS).to_string()
+pub(crate) struct DateTimeCache {
+    precision: SecondsFormat,
+    values: AHashMap<(DateTime<FixedOffset>, i32), String>,
+}
+
+impl DateTimeCache {
+    pub(crate) fn new(precision: SecondsFormat) -> Self {
+        Self {
+            precision,
+            values: AHashMap::with_capacity(DATETIME_CACHE_CAPACITY),
+        }
+    }
+
+    pub(crate) fn format(&mut self, dt: &DateTime<FixedOffset>) -> &str {
+        // DateTime equality ignores offsets; formatted timestamps must preserve them.
+        let key = (*dt, dt.offset().local_minus_utc());
+        if self.values.len() >= DATETIME_CACHE_CAPACITY && !self.values.contains_key(&key) {
+            self.values.clear();
+        }
+        self.values
+            .entry(key)
+            .or_insert_with(|| dt.to_rfc3339_opts(self.precision, false))
+    }
 }
 
 fn round_f64(value: f64, decimals: u32) -> f64 {
@@ -196,82 +211,17 @@ fn set_cached_f64_fixed(
     set_field(out, idx, formatted);
 }
 
-fn set_cached_datetime(
-    out: &mut Vec<String>,
-    idx: usize,
-    cache: &mut DateTimeCache,
-    dt: &DateTime<FixedOffset>,
-) {
-    let formatted = cached_datetime(cache, dt);
-    set_field(out, idx, formatted);
-}
-
-fn set_cached_optional_datetime(
-    out: &mut Vec<String>,
-    idx: usize,
-    cache: &mut DateTimeCache,
-    dt: Option<&DateTime<FixedOffset>>,
-) {
-    if let Some(dt) = dt {
-        set_cached_datetime(out, idx, cache, dt);
-    } else {
-        set_field(out, idx, "");
-    }
-}
-
 fn set_formatted_f64(out: &mut Vec<String>, idx: usize, value: f64, decimals: u32) {
     format_f64_fixed_into(ensure_field(out, idx), value, decimals);
-}
-
-pub(crate) fn cached_datetime<'a>(
-    cache: &'a mut DateTimeCache,
-    dt: &DateTime<FixedOffset>,
-) -> &'a str {
-    let key = (*dt, dt.offset().local_minus_utc());
-    if cache.len() >= DATETIME_CACHE_CAPACITY && !cache.contains_key(&key) {
-        cache.clear();
-    }
-    cache.entry(key).or_insert_with(|| format_rfc3339(dt))
-}
-
-fn cached_optional_datetime<'a>(
-    cache: &'a mut DateTimeCache,
-    dt: Option<&DateTime<FixedOffset>>,
-) -> Option<&'a str> {
-    dt.map(|dt| cached_datetime(cache, dt))
 }
 
 fn write_json_f64<W: std::io::Write + ?Sized>(writer: &mut W, value: f64) -> Result<(), String> {
     serde_json::to_writer(writer, &value).map_err(|e| e.to_string())
 }
 
-pub(crate) struct PositionRow {
-    pub lat: f64,
-    pub lon: f64,
-    pub datetime: DateTime<FixedOffset>,
-    pub deltat: f64,
-    pub azimuth: f64,
-    pub zenith: f64,
-}
-
-impl PositionRow {
-    pub(crate) fn angle(&self, elevation_angle: bool) -> f64 {
-        if elevation_angle {
-            90.0 - self.zenith
-        } else {
-            self.zenith
-        }
-    }
-}
-
-impl OutputRow for PositionRow {
+impl OutputRow for PositionRecord {
     type Layout = PositionLayout;
-
-    type Input = PositionRecord;
-
-    fn normalize(result: Self::Input) -> Self {
-        normalize_position_result(result)
-    }
+    const TIME_PRECISION: SecondsFormat = POSITION_TIME_PRECISION;
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
         layout.csv_headers()
@@ -279,7 +229,6 @@ impl OutputRow for PositionRow {
 
     fn csv_values(
         &self,
-        params: &OutputContext,
         layout: PositionLayout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -288,39 +237,27 @@ impl OutputRow for PositionRow {
         let mut idx = 0;
 
         if layout.show_inputs {
-            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lat, 5);
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.location.latitude, 5);
             idx += 1;
-            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.lon, 5);
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.location.longitude, 5);
             idx += 1;
-            set_cached_f64_fixed(
-                out,
-                idx,
-                fixed_decimal_cache,
-                params.environment.elevation,
-                3,
-            );
+            set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.environment.elevation, 3);
             idx += 1;
             if layout.include_refraction {
-                set_cached_f64_fixed(
-                    out,
-                    idx,
-                    fixed_decimal_cache,
-                    params.environment.pressure,
-                    3,
-                );
+                set_cached_f64_fixed(out, idx, fixed_decimal_cache, self.environment.pressure, 3);
                 idx += 1;
                 set_cached_f64_fixed(
                     out,
                     idx,
                     fixed_decimal_cache,
-                    params.environment.temperature,
+                    self.environment.temperature,
                     3,
                 );
                 idx += 1;
             }
         }
 
-        set_cached_datetime(out, idx, datetime_cache, &self.datetime);
+        set_field(out, idx, datetime_cache.format(&self.datetime));
         idx += 1;
 
         if layout.show_inputs {
@@ -328,16 +265,15 @@ impl OutputRow for PositionRow {
             idx += 1;
         }
 
-        set_formatted_f64(out, idx, self.azimuth, 4);
+        set_formatted_f64(out, idx, self.position.azimuth(), 4);
         idx += 1;
-        set_formatted_f64(out, idx, self.angle(layout.uses_elevation_angle()), 4);
+        set_formatted_f64(out, idx, layout.angle(self.position), 4);
         idx += 1;
         out.truncate(idx);
     }
 
     fn write_json(
         &self,
-        params: &OutputContext,
         layout: PositionLayout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
@@ -345,31 +281,41 @@ impl OutputRow for PositionRow {
         let mut separator = b'{';
 
         if layout.show_inputs {
-            write_position_json_number(writer, &mut separator, b"\"latitude\":", self.lat)?;
-            write_position_json_number(writer, &mut separator, b"\"longitude\":", self.lon)?;
+            write_position_json_number(
+                writer,
+                &mut separator,
+                b"\"latitude\":",
+                self.location.latitude,
+            )?;
+            write_position_json_number(
+                writer,
+                &mut separator,
+                b"\"longitude\":",
+                self.location.longitude,
+            )?;
             write_position_json_number(
                 writer,
                 &mut separator,
                 b"\"elevation\":",
-                params.environment.elevation,
+                self.environment.elevation,
             )?;
             if layout.include_refraction {
                 write_position_json_number(
                     writer,
                     &mut separator,
                     b"\"pressure\":",
-                    params.environment.pressure,
+                    self.environment.pressure,
                 )?;
                 write_position_json_number(
                     writer,
                     &mut separator,
                     b"\"temperature\":",
-                    params.environment.temperature,
+                    self.environment.temperature,
                 )?;
             }
         }
 
-        let datetime = cached_datetime(datetime_cache, &self.datetime);
+        let datetime = datetime_cache.format(&self.datetime);
         write_position_json_string(writer, &mut separator, b"\"dateTime\":\"", datetime)?;
 
         if layout.show_inputs {
@@ -380,9 +326,9 @@ impl OutputRow for PositionRow {
             writer,
             &mut separator,
             b"\"azimuth\":",
-            round_f64(self.azimuth, 4),
+            round_f64(self.position.azimuth(), 4),
         )?;
-        let angle_key = if layout.uses_elevation_angle() {
+        let angle_key = if layout.elevation_angle {
             b"\"elevation-angle\":" as &[u8]
         } else {
             b"\"zenith\":"
@@ -391,7 +337,7 @@ impl OutputRow for PositionRow {
             writer,
             &mut separator,
             angle_key,
-            round_f64(self.angle(layout.uses_elevation_angle()), 4),
+            round_f64(layout.angle(self.position), 4),
         )?;
         writer.write_all(b"}\n").map_err(|e| e.to_string())
     }
@@ -432,12 +378,7 @@ fn write_position_json_string<W: std::io::Write + ?Sized>(
 
 impl OutputRow for EventRecord {
     type Layout = EventLayout;
-
-    type Input = EventRecord;
-
-    fn normalize(result: Self::Input) -> Self {
-        result
-    }
+    const TIME_PRECISION: SecondsFormat = EVENT_TIME_PRECISION;
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
         layout.csv_headers()
@@ -445,7 +386,6 @@ impl OutputRow for EventRecord {
 
     fn csv_values(
         &self,
-        _params: &OutputContext,
         layout: EventLayout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -466,13 +406,16 @@ impl OutputRow for EventRecord {
         }
         set_field(out, idx, self.day_state.label());
         set_field(out, idx + 1, self.event.map_or("", EventKind::label));
-        set_cached_optional_datetime(out, idx + 2, datetime_cache, self.time.as_ref());
+        let time = self
+            .time
+            .as_ref()
+            .map_or("", |time| datetime_cache.format(time));
+        set_field(out, idx + 2, time);
         out.truncate(idx + 3);
     }
 
     fn write_json(
         &self,
-        _params: &OutputContext,
         layout: EventLayout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
@@ -499,7 +442,7 @@ impl OutputRow for EventRecord {
             .map_err(|e| e.to_string())?;
         map.serialize_entry(
             "time",
-            &cached_optional_datetime(datetime_cache, self.time.as_ref()),
+            &self.time.as_ref().map(|time| datetime_cache.format(time)),
         )
         .map_err(|e| e.to_string())?;
         map.end().map_err(|e| e.to_string())?;
@@ -515,16 +458,43 @@ pub(crate) struct PositionLayout {
 }
 
 impl PositionLayout {
-    pub(crate) fn from_params(params: &OutputContext) -> Self {
+    pub(crate) fn new(show_inputs: bool, elevation_angle: bool, refraction: bool) -> Self {
         Self {
-            show_inputs: params.output.show_inputs,
-            include_refraction: params.environment.refraction,
-            elevation_angle: params.output.elevation_angle,
+            show_inputs,
+            include_refraction: show_inputs && refraction,
+            elevation_angle,
         }
     }
 
-    pub(crate) fn uses_elevation_angle(self) -> bool {
-        self.elevation_angle
+    pub(crate) fn for_records(
+        records: impl IntoIterator<Item = Result<PositionRecord, Error>>,
+        show_inputs: bool,
+        elevation_angle: bool,
+    ) -> (Self, impl Iterator<Item = Result<PositionRecord, Error>>) {
+        let mut records = records.into_iter().peekable();
+        let refraction = show_inputs
+            && match records.peek() {
+                Some(Ok(row)) => row.environment.refraction,
+                _ => true,
+            };
+        let records = records.map(move |row| {
+            let row = row?;
+            if show_inputs && row.environment.refraction != refraction {
+                return Err(Error::Output(
+                    "Cannot export input columns with mixed refraction settings".into(),
+                ));
+            }
+            Ok(row)
+        });
+        (Self::new(show_inputs, elevation_angle, refraction), records)
+    }
+
+    pub(crate) fn angle(self, position: SolarPosition) -> f64 {
+        if self.elevation_angle {
+            position.elevation_angle()
+        } else {
+            position.zenith_angle()
+        }
     }
 
     pub(crate) fn angle_label(self) -> &'static str {
@@ -564,12 +534,6 @@ pub(crate) struct EventLayout {
 }
 
 impl EventLayout {
-    pub(crate) fn from_params(params: &OutputContext) -> Self {
-        Self {
-            show_inputs: params.output.show_inputs,
-        }
-    }
-
     pub(crate) fn csv_headers(self) -> Vec<&'static str> {
         let mut headers = if self.show_inputs {
             vec!["latitude", "longitude", "date", "deltaT"]
@@ -583,14 +547,11 @@ impl EventLayout {
 
 trait OutputRow: Sized {
     type Layout: Copy;
+    const TIME_PRECISION: SecondsFormat;
 
-    type Input;
-
-    fn normalize(result: Self::Input) -> Self;
     fn headers(layout: Self::Layout) -> Vec<&'static str>;
     fn csv_values(
         &self,
-        params: &OutputContext,
         layout: Self::Layout,
         datetime_cache: &mut DateTimeCache,
         fixed_decimal_cache: &mut FixedDecimalCache,
@@ -598,22 +559,10 @@ trait OutputRow: Sized {
     );
     fn write_json(
         &self,
-        params: &OutputContext,
         layout: Self::Layout,
         writer: &mut dyn std::io::Write,
         datetime_cache: &mut DateTimeCache,
     ) -> Result<(), String>;
-}
-
-pub(crate) fn normalize_position_result(result: PositionRecord) -> PositionRow {
-    PositionRow {
-        lat: result.location.latitude,
-        lon: result.location.longitude,
-        datetime: result.datetime,
-        deltat: result.deltat,
-        azimuth: result.position.azimuth(),
-        zenith: result.position.zenith_angle(),
-    }
 }
 
 fn write_csv_line<W: std::io::Write, I, S>(writer: &mut W, fields: I) -> std::io::Result<()>
@@ -704,29 +653,26 @@ fn write_pretty_row<W: std::io::Write>(
 
 /// Export positions, including filtered, limited or previously collected records.
 ///
-/// Pass the environment used for the calculation so input columns describe it
-/// accurately. A final flush is attempted; input, write and flush errors propagate.
+/// Input columns use each record's environment and require consistent refraction
+/// settings across records. A final flush is attempted; errors propagate.
 /// Enable the `parquet` feature for the separate Parquet exporters.
-pub fn write_positions<I, W>(
-    records: I,
-    environment: &Environment,
-    options: Options,
-    destination: W,
-) -> Result<usize, Error>
+pub fn write_positions<I, W>(records: I, options: Options, destination: W) -> Result<usize, Error>
 where
     I: IntoIterator<Item = Result<PositionRecord, Error>>,
     W: std::io::Write,
 {
-    let context = OutputContext {
-        environment: *environment,
-        output: options,
-    };
-    write_buffered::<_, PositionRow>(
-        records,
-        &context,
-        PositionLayout::from_params(&context),
-        destination,
-    )
+    let (layout, records) =
+        PositionLayout::for_records(records, options.show_inputs, options.elevation_angle);
+    write_position_rows(records, options, layout, destination)
+}
+
+pub(crate) fn write_position_rows(
+    records: impl IntoIterator<Item = Result<PositionRecord, Error>>,
+    options: Options,
+    layout: PositionLayout,
+    destination: impl std::io::Write,
+) -> Result<usize, Error> {
+    write_buffered(records, options, layout, destination)
 }
 
 /// Export solar events to text, CSV or JSON Lines, flushing on completion.
@@ -735,35 +681,14 @@ where
     I: IntoIterator<Item = Result<EventRecord, Error>>,
     W: std::io::Write,
 {
-    let context = OutputContext {
-        output: options,
-        ..Default::default()
-    };
-    write_buffered::<_, EventRecord>(
+    write_buffered(
         records,
-        &context,
-        EventLayout::from_params(&context),
+        options,
+        EventLayout {
+            show_inputs: options.show_inputs,
+        },
         destination,
     )
-}
-
-fn write_buffered<W: std::io::Write, R: OutputRow>(
-    results: impl IntoIterator<Item = Result<R::Input, Error>>,
-    params: &OutputContext,
-    layout: R::Layout,
-    output: W,
-) -> Result<usize, Error> {
-    use std::io::{BufWriter, Write};
-    let mut writer = BufWriter::new(output);
-    let count = write_rows::<_, R>(
-        results,
-        params,
-        layout,
-        &mut writer,
-        params.output.flush_each_record,
-    )?;
-    writer.flush()?;
-    Ok(count)
 }
 
 fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
@@ -779,56 +704,57 @@ fn header_widths(headers: &[&str], values: &[String]) -> Vec<usize> {
         .collect()
 }
 
-fn write_rows<W: std::io::Write, R: OutputRow>(
-    results: impl IntoIterator<Item = Result<R::Input, Error>>,
-    params: &OutputContext,
+fn write_buffered<W: std::io::Write, R: OutputRow>(
+    results: impl IntoIterator<Item = Result<R, Error>>,
+    options: Options,
     layout: R::Layout,
-    writer: &mut W,
-    flush_each: bool,
+    destination: W,
 ) -> Result<usize, Error> {
+    use std::io::{BufWriter, Write};
+    let mut writer = BufWriter::new(destination);
     let headers = R::headers(layout);
+    if options.format == Format::Csv && options.headers {
+        write_csv_line(&mut writer, &headers)?;
+    }
     let mut count = 0;
-    let mut datetime_cache = DateTimeCache::with_capacity(DATETIME_CACHE_CAPACITY);
+    let mut datetime_cache = DateTimeCache::new(R::TIME_PRECISION);
     let mut fixed_decimal_cache = FixedDecimalCache::with_capacity(FIXED_DECIMAL_CACHE_CAPACITY);
     let mut row_values = Vec::new();
     let mut widths = Vec::new();
 
     for result in results {
-        let row = R::normalize(result?);
-        match params.output.format {
+        let row = result?;
+        match options.format {
             Format::Text | Format::Csv => {
                 row.csv_values(
-                    params,
                     layout,
                     &mut datetime_cache,
                     &mut fixed_decimal_cache,
                     &mut row_values,
                 );
-                if params.output.format == Format::Text {
+                if options.format == Format::Text {
                     if count == 0 {
                         widths = header_widths(&headers, &row_values);
-                        if params.output.headers {
-                            write_pretty_header(writer, &headers, &widths)?;
+                        if options.headers {
+                            write_pretty_header(&mut writer, &headers, &widths)?;
                         }
                     }
-                    write_pretty_row(writer, &headers, &widths, &row_values)?;
+                    write_pretty_row(&mut writer, &headers, &widths, &row_values)?;
                 } else {
-                    if count == 0 && params.output.headers {
-                        write_csv_line(writer, headers.iter())?;
-                    }
-                    write_csv_line(writer, row_values.iter())?;
+                    write_csv_line(&mut writer, row_values.iter())?;
                 }
             }
             Format::Json => row
-                .write_json(params, layout, writer, &mut datetime_cache)
+                .write_json(layout, &mut writer, &mut datetime_cache)
                 .map_err(Error::Output)?,
         }
         count += 1;
-        if flush_each {
+        if options.flush_each_record {
             writer.flush()?;
         }
     }
 
+    writer.flush()?;
     Ok(count)
 }
 
@@ -861,30 +787,16 @@ mod tests {
         }
     }
 
-    fn position_result(
-        lat: f64,
-        lon: f64,
-        datetime: DateTime<FixedOffset>,
-        params: &OutputContext,
-    ) -> PositionRecord {
-        let calculation = crate::position::calculate_position(
-            lat,
-            lon,
-            datetime,
-            &crate::PositionOptions {
-                environment: params.environment,
-                ..crate::PositionOptions::default()
-            },
-        )
-        .unwrap();
+    fn position_result(datetime: DateTime<FixedOffset>) -> PositionRecord {
         PositionRecord {
             location: crate::Location {
-                latitude: lat,
-                longitude: lon,
+                latitude: 52.0,
+                longitude: 13.4,
             },
             datetime,
-            position: calculation.position,
-            deltat: calculation.deltat,
+            position: SolarPosition::new(180.12345, 45.98765).unwrap(),
+            deltat: 69.123,
+            environment: crate::Environment::default(),
         }
     }
 
@@ -893,28 +805,14 @@ mod tests {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
 
-        let params = OutputContext {
-            output: Options {
-                format: Format::Text,
-                ..Options::default()
-            },
-            ..OutputContext::default()
+        let options = Options {
+            flush_each_record: true,
+            ..Options::default()
         };
-
-        let calc = position_result(52.0, 13.4, dt, &params);
-        let results = [Ok(calc)];
-
         let mut writer = MockWriter::default();
-        write_rows::<_, PositionRow>(
-            results,
-            &params,
-            PositionLayout::from_params(&params),
-            &mut writer,
-            true,
-        )
-        .expect("write succeeds");
+        write_positions([Ok(position_result(dt))], options, &mut writer).expect("write succeeds");
 
-        assert_eq!(writer.flushes, 1);
+        assert_eq!(writer.flushes, 2); // After the record and at completion.
         assert!(!writer.buf.is_empty());
     }
 
@@ -922,27 +820,17 @@ mod tests {
     fn dispatch_reports_final_flush_failure() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
-        let params = OutputContext {
-            output: Options {
-                format: Format::Csv,
-                ..Options::default()
-            },
-            ..OutputContext::default()
+        let options = Options {
+            format: Format::Csv,
+            ..Options::default()
         };
-        let calc = position_result(52.0, 13.4, dt, &params);
-        let results = [Ok(calc)];
         let writer = MockWriter {
             fail_flush: true,
             ..MockWriter::default()
         };
 
-        let err = write_buffered::<_, PositionRow>(
-            results,
-            &params,
-            PositionLayout::from_params(&params),
-            writer,
-        )
-        .expect_err("flush failure must be reported");
+        let err = write_positions([Ok(position_result(dt))], options, writer)
+            .expect_err("flush failure must be reported");
 
         assert_eq!(err.to_string(), "flush failed");
     }
@@ -951,14 +839,11 @@ mod tests {
     fn formatting_caches_stay_bounded() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let start = tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let mut datetime_cache = DateTimeCache::new();
+        let mut datetime_cache = DateTimeCache::new(POSITION_TIME_PRECISION);
         for seconds in 0..=DATETIME_CACHE_CAPACITY {
-            cached_datetime(
-                &mut datetime_cache,
-                &(start + chrono::Duration::seconds(seconds as i64)),
-            );
+            datetime_cache.format(&(start + chrono::Duration::seconds(seconds as i64)));
         }
-        assert!(datetime_cache.len() <= DATETIME_CACHE_CAPACITY);
+        assert!(datetime_cache.values.len() <= DATETIME_CACHE_CAPACITY);
 
         let mut decimal_cache = FixedDecimalCache::new();
         let mut fields = Vec::new();
@@ -986,33 +871,17 @@ mod tests {
     fn position_text_and_csv_field_order_match() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
-        let params = OutputContext {
-            output: Options {
-                show_inputs: true,
-                elevation_angle: true,
-                ..Options::default()
-            },
-            ..OutputContext::default()
-        };
-        let row = PositionRow {
-            lat: 52.0,
-            lon: 13.4,
-            datetime: dt,
-            deltat: 69.123,
-            azimuth: 180.12345,
-            zenith: 45.98765,
+        let row = position_result(dt);
+        let layout = PositionLayout {
+            show_inputs: true,
+            include_refraction: true,
+            elevation_angle: true,
         };
 
         let mut values = Vec::new();
-        let mut datetime_cache = DateTimeCache::new();
+        let mut datetime_cache = DateTimeCache::new(POSITION_TIME_PRECISION);
         let mut decimal_cache = FixedDecimalCache::new();
-        row.csv_values(
-            &params,
-            PositionLayout::from_params(&params),
-            &mut datetime_cache,
-            &mut decimal_cache,
-            &mut values,
-        );
+        row.csv_values(layout, &mut datetime_cache, &mut decimal_cache, &mut values);
 
         let expected = vec![
             "52.00000".to_string(),
@@ -1036,13 +905,6 @@ mod tests {
     fn events_text_and_csv_field_order_match() {
         let tz = FixedOffset::east_opt(0).unwrap();
         let dt = tz.with_ymd_and_hms(2024, 6, 21, 0, 0, 0).unwrap();
-        let params = OutputContext {
-            output: Options {
-                show_inputs: true,
-                ..Options::default()
-            },
-            ..OutputContext::default()
-        };
         let row = EventRecord {
             lat: 52.0,
             lon: 13.4,
@@ -1054,11 +916,10 @@ mod tests {
         };
 
         let mut values = Vec::new();
-        let mut datetime_cache = DateTimeCache::new();
+        let mut datetime_cache = DateTimeCache::new(EVENT_TIME_PRECISION);
         let mut decimal_cache = FixedDecimalCache::new();
         row.csv_values(
-            &params,
-            EventLayout::from_params(&params),
+            EventLayout { show_inputs: true },
             &mut datetime_cache,
             &mut decimal_cache,
             &mut values,

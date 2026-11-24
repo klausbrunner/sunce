@@ -1,7 +1,7 @@
 //! Semantic validation that turns parsed CLI input into executable commands.
 
 use crate::data::{self, Command, DataSource, LocationSource, Parameters, Predicate, TimeSource};
-use crate::error::{CliError, predicate_error};
+use crate::error::CliError;
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use crate::predicate::{PredicateCheck, PredicateJob, PredicateTime};
 
@@ -35,11 +35,11 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
     } = parsed;
     let mode = match command {
         Command::Position => {
-            validate_position_options(&usage)?;
+            validate_position_options(&params)?;
             ValidationMode::Position
         }
         Command::Events => {
-            validate_events_options(&usage)?;
+            validate_events_options(&params, &usage)?;
             ValidationMode::Events
         }
     };
@@ -51,19 +51,27 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
     let source = validate_input(input, &params, mode)?;
 
     if let Some(predicate) = predicate {
-        match command {
-            Command::Position => {
-                validate_position_predicate_mode(&source, predicate, &params, &usage)?
-            }
-            Command::Events => validate_events_predicate_mode(&source, predicate, &params, &usage)?,
-        }
-        return Ok(ValidCommand::Predicate(build_predicate_job(
-            source, params, predicate,
-        )));
+        let (lat, lon, time) = validate_predicate_source(source, &params, &usage)?;
+        validate_predicate_options(command, predicate, &params)?;
+        return Ok(ValidCommand::Predicate(PredicateJob {
+            lat,
+            lon,
+            time,
+            check: PredicateCheck::from_cli(predicate),
+            params,
+        }));
     }
 
     if params.wait {
-        return Err(predicate_error("Option --wait requires a predicate option"));
+        return Err("Option --wait requires a predicate option".into());
+    }
+    #[cfg(feature = "parquet")]
+    if matches!(params.output.format, data::OutputFormat::Parquet)
+        && source.is_watch_mode(params.step.is_some())
+    {
+        return Err(
+            "Parquet output requires finite input; use text, CSV or JSON with 'now --step'".into(),
+        );
     }
     if params.output.show_inputs.is_none() {
         params.output.show_inputs = Some(should_auto_show_inputs(&source));
@@ -118,9 +126,7 @@ fn resolve_time_source(
             let is_date_only = crate::data::time_utils::is_date_without_time(&value);
             let is_range = value.contains('/') || crate::data::time_utils::is_partial_date(&value);
             if matches!(mode, ValidationMode::Predicate) && (is_range || is_date_only) {
-                return Err(predicate_error(
-                    "Predicate mode requires a single explicit instant",
-                ));
+                return Err("Predicate mode requires a single explicit instant".into());
             }
 
             if is_range || (is_date_only && matches!(mode, ValidationMode::Position)) {
@@ -145,148 +151,120 @@ fn resolve_time_source(
                 params.timezone.as_ref().map(|tz| tz.as_str()),
             )
             .map(TimeSource::Single)
-            .map_err(|err| {
-                if matches!(mode, ValidationMode::Predicate) {
-                    predicate_error(err)
-                } else {
-                    CliError::from(err)
-                }
-            })
+            .map_err(CliError::from)
         }
     }
 }
 
-fn validate_predicate_common(
-    source: &DataSource,
+fn validate_predicate_source(
+    source: DataSource,
     params: &Parameters,
     usage: &ParsedOptionUsage,
-) -> Result<(), CliError> {
+) -> Result<(f64, f64, PredicateTime), CliError> {
     if let Some(name) = [
         (usage.format, "--format"),
         (usage.headers, "--headers/--no-headers"),
-        (usage.show_inputs, "--show-inputs/--no-show-inputs"),
-        (usage.perf, "--perf"),
+        (
+            params.output.show_inputs.is_some(),
+            "--show-inputs/--no-show-inputs",
+        ),
+        (params.perf, "--perf"),
+        (params.step.is_some(), "--step"),
+        (params.at.is_some(), "--at"),
     ]
     .into_iter()
     .find_map(|(used, name)| used.then_some(name))
     {
-        return Err(predicate_error(format!(
-            "Option {} not valid in predicate mode",
-            name
-        )));
+        return Err(format!("Option {name} not valid in predicate mode").into());
     }
 
-    if usage.step {
-        return Err(predicate_error("Option --step not valid in predicate mode"));
-    }
-    if usage.at {
-        return Err(predicate_error("Option --at not valid in predicate mode"));
-    }
     if params.wait && !matches!(source, DataSource::Separate(_, TimeSource::Now)) {
-        return Err(predicate_error(
-            "Option --wait requires 'now' in predicate mode",
-        ));
+        return Err("Option --wait requires 'now' in predicate mode".into());
     }
 
     match source {
-        DataSource::Paired(_) => Err(predicate_error(
-            "Predicate mode requires explicit latitude, longitude, and datetime arguments",
-        )),
-        DataSource::Separate(LocationSource::File(_), _) => Err(predicate_error(
-            "Predicate mode does not support coordinate file input",
-        )),
-        DataSource::Separate(_, TimeSource::File(_)) => Err(predicate_error(
-            "Predicate mode does not support datetime file input",
-        )),
-        DataSource::Separate(LocationSource::Range { .. }, _) => Err(predicate_error(
-            "Predicate mode requires a single latitude/longitude pair",
-        )),
-        DataSource::Separate(_, TimeSource::Range(_) | TimeSource::Daily(_, _)) => Err(
-            predicate_error("Predicate mode requires a single explicit instant"),
+        DataSource::Paired(_) => Err(
+            "Predicate mode requires explicit latitude, longitude, and datetime arguments".into(),
         ),
-        DataSource::Separate(
-            LocationSource::Single(_, _),
-            TimeSource::Single(_) | TimeSource::Now,
-        ) => Ok(()),
+        DataSource::Separate(LocationSource::File(_), _) => {
+            Err("Predicate mode does not support coordinate file input".into())
+        }
+        DataSource::Separate(_, TimeSource::File(_)) => {
+            Err("Predicate mode does not support datetime file input".into())
+        }
+        DataSource::Separate(LocationSource::Range { .. }, _) => {
+            Err("Predicate mode requires a single latitude/longitude pair".into())
+        }
+        DataSource::Separate(_, TimeSource::Range(_) | TimeSource::Daily(_, _)) => {
+            Err("Predicate mode requires a single explicit instant".into())
+        }
+        DataSource::Separate(LocationSource::Single(lat, lon), TimeSource::Single(input)) => {
+            Ok((lat, lon, PredicateTime::Fixed(input.datetime)))
+        }
+        DataSource::Separate(LocationSource::Single(lat, lon), TimeSource::Now) => {
+            Ok((lat, lon, PredicateTime::Now))
+        }
     }
 }
 
-fn validate_position_predicate_mode(
-    source: &DataSource,
+fn validate_predicate_options(
+    command: Command,
     predicate: Predicate,
     params: &Parameters,
-    usage: &ParsedOptionUsage,
 ) -> Result<(), CliError> {
-    validate_predicate_common(source, params, usage)?;
     match predicate {
         Predicate::SunAbove(threshold) | Predicate::SunBelow(threshold) => {
-            if usage.elevation_angle {
-                return Err(predicate_error(
-                    "Option --elevation-angle not valid in predicate mode",
-                ));
+            if command != Command::Position {
+                return Err("Sun angle predicates require the position command".into());
+            }
+            if params.output.elevation_angle {
+                return Err("Option --elevation-angle not valid in predicate mode".into());
             }
             if !(-90.0..=90.0).contains(&threshold) {
-                return Err(predicate_error(
-                    "Elevation threshold must be between -90 and 90 degrees",
-                ));
+                return Err("Elevation threshold must be between -90 and 90 degrees".into());
             }
             Ok(())
         }
-        _ => Err(predicate_error(
-            "Event predicates require the events command",
-        )),
-    }
-}
-
-fn validate_events_predicate_mode(
-    source: &DataSource,
-    predicate: Predicate,
-    params: &Parameters,
-    usage: &ParsedOptionUsage,
-) -> Result<(), CliError> {
-    validate_predicate_common(source, params, usage)?;
-    match predicate {
         Predicate::IsDaylight
         | Predicate::IsCivilTwilight
         | Predicate::IsNauticalTwilight
         | Predicate::IsAstronomicalTwilight
         | Predicate::IsAstronomicalNight
         | Predicate::AfterSunset => {
-            if usage.twilight {
-                return Err(predicate_error(
-                    "Option --twilight not valid in predicate mode",
-                ));
+            if command != Command::Events {
+                return Err("Event predicates require the events command".into());
             }
-            if usage.horizon {
-                return Err(predicate_error(
-                    "Option --horizon not valid in predicate mode",
-                ));
+            if params.calculation.twilight {
+                return Err("Option --twilight not valid in predicate mode".into());
+            }
+            if params.calculation.horizon.is_some() {
+                return Err("Option --horizon not valid in predicate mode".into());
             }
             Ok(())
         }
-        Predicate::SunAbove(_) | Predicate::SunBelow(_) => Err(predicate_error(
-            "Sun angle predicates require the position command",
-        )),
     }
 }
 
-fn validate_position_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
+fn validate_position_options(params: &Parameters) -> Result<(), CliError> {
     validate_command_options(
-        &[(usage.horizon, "--horizon"), (usage.twilight, "--twilight")],
+        &[
+            (params.calculation.horizon.is_some(), "--horizon"),
+            (params.calculation.twilight, "--twilight"),
+        ],
         "position",
     )
 }
 
-fn validate_events_options(usage: &ParsedOptionUsage) -> Result<(), CliError> {
-    if usage.horizon && usage.twilight {
+fn validate_events_options(params: &Parameters, usage: &ParsedOptionUsage) -> Result<(), CliError> {
+    if params.calculation.horizon.is_some() && params.calculation.twilight {
         return Err("Option --horizon cannot be used with --twilight".into());
     }
     validate_command_options(
         &[
-            (usage.step, "--step"),
-            (usage.at, "--at"),
-            (usage.no_refraction, "--no-refraction"),
-            (usage.elevation_angle, "--elevation-angle"),
+            (params.step.is_some(), "--step"),
+            (params.at.is_some(), "--at"),
+            (!params.environment.refraction, "--no-refraction"),
+            (params.output.elevation_angle, "--elevation-angle"),
             (usage.elevation, "--elevation"),
             (usage.temperature, "--temperature"),
             (usage.pressure, "--pressure"),
@@ -319,34 +297,5 @@ fn should_auto_show_inputs(source: &DataSource) -> bool {
                 )
         }
         DataSource::Paired(_) => true,
-    }
-}
-
-fn build_predicate_job(
-    source: DataSource,
-    params: Parameters,
-    predicate: Predicate,
-) -> PredicateJob {
-    let (lat, lon, time) = match source {
-        DataSource::Separate(
-            LocationSource::Single(lat, lon),
-            time @ (TimeSource::Single(_) | TimeSource::Now),
-        ) => (lat, lon, time),
-        _ => unreachable!("validated predicate source"),
-    };
-
-    PredicateJob {
-        lat,
-        lon,
-        time: match time {
-            TimeSource::Single(dt) => PredicateTime::Fixed(dt.datetime),
-            TimeSource::Now => PredicateTime::Now,
-            TimeSource::Range(_) | TimeSource::Daily(_, _) | TimeSource::File(_) => {
-                unreachable!("validated above")
-            }
-        },
-        check: PredicateCheck::from_cli(predicate),
-        wait: params.wait,
-        params,
     }
 }

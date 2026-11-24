@@ -99,6 +99,16 @@ fn input_context(input_path: &InputPath) -> String {
 }
 
 #[cfg(feature = "cli")]
+fn is_replayable(input: &InputPath) -> Result<bool, String> {
+    match input {
+        InputPath::Stdin => Ok(false),
+        InputPath::File(path) => std::fs::metadata(path)
+            .map(|metadata| metadata.is_file())
+            .map_err(|err| format!("Error opening {}: {err}", path.display())),
+    }
+}
+
+#[cfg(feature = "cli")]
 fn read_non_comment_lines(
     input_path: &InputPath,
 ) -> Result<Box<dyn Iterator<Item = Result<Line, String>>>, String> {
@@ -271,18 +281,13 @@ pub fn expand_cartesian_product(
     command: Command,
 ) -> Result<CoordTimeStream<'static>, String> {
     let loc_is_single = matches!(loc_source, LocationSource::Single(_, _));
-    let loc_replayable = !matches!(loc_source, LocationSource::File(InputPath::Stdin));
 
     let time_is_single = match &time_source {
         TimeSource::Single(_) => true,
         TimeSource::Now => step.is_none(),
         _ => false,
     };
-    let time_replayable = !matches!(time_source, TimeSource::File(InputPath::Stdin))
-        && (!matches!(time_source, TimeSource::Now) || step.is_none());
-    let time_bounded = !matches!(time_source, TimeSource::Now) || step.is_none();
-
-    if !time_bounded && !loc_is_single {
+    if matches!(time_source, TimeSource::Now) && step.is_some() && !loc_is_single {
         return Err(
             "Cannot use an unbounded time stream with multiple locations. Drop --step or choose a single location when combining 'now' with streaming."
                 .to_string(),
@@ -300,15 +305,22 @@ pub fn expand_cartesian_product(
         return Ok(Box::new(iter));
     }
 
-    if loc_replayable {
-        return expand_time_outer(loc_source, time_source, step, override_tz, command);
-    }
-
-    if time_replayable {
+    if loc_is_single {
         return expand_location_outer(loc_source, time_source, step, override_tz, command);
     }
 
-    Err("Cannot combine non-replayable streams for both locations and times. Use files instead of stdin or provide bounded values.".to_string())
+    if let LocationSource::File(path) = &loc_source
+        && !is_replayable(path)?
+    {
+        if let TimeSource::File(path) = &time_source
+            && !is_replayable(path)?
+        {
+            return Err("Cannot combine two non-replayable inputs. Use a regular file for at least one input.".into());
+        }
+        return expand_location_outer(loc_source, time_source, step, override_tz, command);
+    }
+
+    expand_time_outer(loc_source, time_source, step, override_tz, command)
 }
 
 #[cfg(feature = "cli")]

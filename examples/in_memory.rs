@@ -12,7 +12,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut csv = Vec::new();
     let count = output::write_positions(
         rows,
-        &options.environment,
         output::Options {
             format: output::Format::Csv,
             show_inputs: true,
