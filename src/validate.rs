@@ -1,6 +1,8 @@
 //! Semantic validation that turns parsed CLI input into executable commands.
 
-use crate::data::{self, Command, DataSource, LocationSource, Parameters, Predicate, TimeSource};
+use crate::data::{
+    Command, DataSource, LocationSource, Parameters, Predicate, TimeSource, time_utils,
+};
 use crate::error::CliError;
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
 use crate::predicate::{PredicateCheck, PredicateJob, PredicateTime};
@@ -66,7 +68,7 @@ pub fn validate(parsed: ParsedCommand) -> Result<ValidCommand, CliError> {
         return Err("Option --wait requires a predicate option".into());
     }
     #[cfg(feature = "parquet")]
-    if matches!(params.output.format, data::OutputFormat::Parquet)
+    if matches!(params.output.format, crate::data::OutputFormat::Parquet)
         && source.is_watch_mode(params.step.is_some())
     {
         return Err(
@@ -123,8 +125,11 @@ fn resolve_time_source(
         ParsedTimeSource::File(path) => Ok(TimeSource::File(path)),
         ParsedTimeSource::Now => Ok(TimeSource::Now),
         ParsedTimeSource::Value(value) => {
-            let is_date_only = crate::data::time_utils::is_date_without_time(&value);
-            let is_range = value.contains('/') || crate::data::time_utils::is_partial_date(&value);
+            let is_date_only = time_utils::is_date_without_time(&value);
+            let is_range = time_utils::is_partial_date(&value)
+                || value.split_once('/').is_some_and(|(start, end)| {
+                    time_utils::is_date_without_time(start) && time_utils::is_date_without_time(end)
+                });
             if matches!(mode, ValidationMode::Predicate) && (is_range || is_date_only) {
                 return Err("Predicate mode requires a single explicit instant".into());
             }
@@ -146,12 +151,9 @@ fn resolve_time_source(
                 );
             }
 
-            data::time_utils::parse_input_time(
-                &value,
-                params.timezone.as_ref().map(|tz| tz.as_str()),
-            )
-            .map(TimeSource::Single)
-            .map_err(CliError::from)
+            time_utils::parse_input_time(&value, params.timezone.as_ref())
+                .map(TimeSource::Single)
+                .map_err(CliError::from)
         }
     }
 }
@@ -199,7 +201,7 @@ fn validate_predicate_source(
             Err("Predicate mode requires a single explicit instant".into())
         }
         DataSource::Separate(LocationSource::Single(lat, lon), TimeSource::Single(input)) => {
-            Ok((lat, lon, PredicateTime::Fixed(input.datetime)))
+            Ok((lat, lon, PredicateTime::Fixed(input)))
         }
         DataSource::Separate(LocationSource::Single(lat, lon), TimeSource::Now) => {
             Ok((lat, lon, PredicateTime::Now))

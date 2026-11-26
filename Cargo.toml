@@ -24,20 +24,18 @@ include = [
 ]
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-chrono-tz = "0.10"
-solar-positioning = "0.7.2"
+jiff = { version = "1", default-features = false, features = ["std", "tzdb-bundle-always"] }
+solar-positioning = "0.8.0"
 arrow-array = { version = "60", default-features = false, optional = true }
 arrow-schema = { version = "60", default-features = false, optional = true }
 parquet = { version = "60", features = ["arrow", "snap"], default-features = false, optional = true }
-iana-time-zone = { version = "0.1", optional = true }
 serde = "1"
 serde_json = "1"
 ahash = { version = "0.8", default-features = false, features = ["std"] }
 
 [features]
 default = ["cli", "parquet"]
-cli = ["chrono/clock", "dep:iana-time-zone", "ahash/runtime-rng"]
+cli = ["jiff/tz-system", "jiff/tzdb-zoneinfo", "jiff/tzdb-concatenated", "ahash/runtime-rng"]
 parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
 
 [[bin]]
@@ -67,9 +65,7 @@ strip = true
 # Keep performance-critical crates optimized for speed
 [profile.release.package.solar-positioning]
 opt-level = 3
-[profile.release.package.chrono]
-opt-level = 3
-[profile.release.package.chrono-tz]
+[profile.release.package.jiff-core]
 opt-level = 3
 
 # The profile that 'dist' will build with

@@ -1,8 +1,8 @@
 #![cfg(feature = "cli")]
 
 mod common;
-use chrono::{NaiveDate, Utc};
 use common::*;
+use jiff::{civil::date, tz::TimeZone};
 use solar_positioning::{Horizon, Location, SolarEvents};
 
 #[test]
@@ -55,8 +55,8 @@ fn twilight_rows_match_library_and_json_matches_csv() {
     ] {
         let day = SolarEvents::new()
             .for_date(
-                NaiveDate::from_ymd_opt(2024, 3, 20).unwrap(),
-                &Utc,
+                date(2024, 3, 20),
+                &TimeZone::UTC,
                 Location {
                     latitude: 52.0,
                     longitude: 13.4,
@@ -66,16 +66,25 @@ fn twilight_rows_match_library_and_json_matches_csv() {
             )
             .unwrap();
         for (name, times) in [(rise, day.rises), (set, day.sets)] {
-            expected.extend(times.into_iter().map(|t| (name, t.timestamp())));
+            expected.extend(times.into_iter().map(|t| (name, t.timestamp().as_second())));
         }
         if horizon == Horizon::SunriseSunset {
-            expected.extend(day.transits.into_iter().map(|t| ("transit", t.timestamp())));
+            expected.extend(
+                day.transits
+                    .into_iter()
+                    .map(|t| ("transit", t.timestamp().as_second())),
+            );
         }
     }
     expected.sort_by_key(|(_, time)| *time);
     let actual = csv
         .iter()
-        .map(|r| (r["event"].as_str(), parse_rfc3339(&r["time"]).timestamp()))
+        .map(|r| {
+            (
+                r["event"].as_str(),
+                parse_rfc3339(&r["time"]).timestamp().as_second(),
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
 }

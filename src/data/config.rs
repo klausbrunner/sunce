@@ -1,6 +1,6 @@
 //! Configuration types for commands, calculation options, and output settings.
 
-use chrono::Duration;
+use jiff::SignedDuration;
 use std::fmt;
 use std::str::FromStr;
 
@@ -241,8 +241,8 @@ pub struct Parameters {
     pub verbose: bool,
     pub perf: bool,
     pub step: Option<Step>,
-    pub at: Option<chrono::NaiveTime>,
-    pub timezone: Option<TimezoneOverride>,
+    pub at: Option<jiff::civil::Time>,
+    pub timezone: Option<jiff::tz::TimeZone>,
 }
 
 #[cfg(feature = "cli")]
@@ -278,44 +278,13 @@ pub enum Predicate {
 
 /// Elapsed sampling interval. Parses positive seconds or an integer with `s`, `m`, `h` or `d`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Step(pub Duration);
-
-impl From<Step> for Duration {
-    fn from(value: Step) -> Self {
-        value.0
-    }
-}
+pub struct Step(pub SignedDuration);
 
 impl FromStr for Step {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::data::time_utils::parse_duration_positive(s).map(Step)
-    }
-}
-
-#[cfg(feature = "cli")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimezoneOverride(String);
-
-#[cfg(feature = "cli")]
-impl TimezoneOverride {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[cfg(feature = "cli")]
-impl FromStr for TimezoneOverride {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() {
-            return Err("Option --timezone requires a value".to_string());
-        }
-        crate::data::time_utils::parse_timezone_spec(s)
-            .map(|_| TimezoneOverride(s.to_string()))
-            .ok_or_else(|| format!("Invalid timezone: '{}'", s))
     }
 }
 
@@ -369,19 +338,24 @@ mod tests {
         assert!("bad".parse::<CalculationAlgorithm>().is_err());
 
         let step = "1h".parse::<Step>().unwrap();
-        assert_eq!(Duration::from(step), Duration::hours(1));
+        assert_eq!(step.0, SignedDuration::from_hours(1));
         assert!("0s".parse::<Step>().is_err());
         assert!("bad".parse::<Step>().is_err());
 
         #[cfg(feature = "cli")]
         {
-            let fixed = "+05:30".parse::<TimezoneOverride>().unwrap();
-            assert_eq!(fixed.as_str(), "+05:30");
-            let named = "Europe/Berlin".parse::<TimezoneOverride>().unwrap();
-            assert_eq!(named.as_str(), "Europe/Berlin");
-            assert!("".parse::<TimezoneOverride>().is_err());
-            assert!("+00:99".parse::<TimezoneOverride>().is_err());
-            assert!("Not/AZone".parse::<TimezoneOverride>().is_err());
+            use crate::data::time_utils::parse_timezone_spec;
+            assert_eq!(
+                parse_timezone_spec("+05:30").unwrap(),
+                jiff::tz::Offset::from_seconds(19_800)
+                    .unwrap()
+                    .to_time_zone()
+            );
+            let named = parse_timezone_spec("Europe/Berlin").unwrap();
+            assert_eq!(named.iana_name(), Some("Europe/Berlin"));
+            assert!(parse_timezone_spec("").is_err());
+            assert!(parse_timezone_spec("+00:99").is_err());
+            assert!(parse_timezone_spec("Not/AZone").is_err());
         }
     }
 

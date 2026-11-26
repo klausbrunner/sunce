@@ -89,7 +89,7 @@ fn test_twilight_state_predicates_for_known_states() {
 
 #[test]
 fn predicates_change_across_calculated_events() {
-    use chrono::{Duration, NaiveDate, Utc};
+    use jiff::{SignedDuration, civil::date, tz::TimeZone};
     use solar_positioning::{Horizon, Location, SolarEvents};
     for (horizon, above, below) in [
         (Horizon::SunriseSunset, "--is-daylight", "--after-sunset"),
@@ -111,8 +111,8 @@ fn predicates_change_across_calculated_events() {
     ] {
         let day = SolarEvents::new()
             .for_date(
-                NaiveDate::from_ymd_opt(2024, 3, 21).unwrap(),
-                &Utc,
+                date(2024, 3, 21),
+                &TimeZone::UTC,
                 Location {
                     latitude: 52.0,
                     longitude: 13.4,
@@ -121,12 +121,15 @@ fn predicates_change_across_calculated_events() {
                 horizon,
             )
             .unwrap();
-        for (time, before, after) in [(day.rises[0], below, above), (day.sets[0], above, below)] {
+        for (time, before, after) in [
+            (day.rises[0].timestamp(), below, above),
+            (day.sets[0].timestamp(), above, below),
+        ] {
             for (time, predicate) in [
-                (time - Duration::seconds(1), before),
-                (time + Duration::seconds(1), after),
+                (time - SignedDuration::from_secs(1), before),
+                (time + SignedDuration::from_secs(1), after),
             ] {
-                let time = time.to_rfc3339();
+                let time = time.to_string();
                 assert_run(
                     &["--timezone=UTC", "52", "13.4", &time, "events", predicate],
                     0,

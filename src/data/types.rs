@@ -1,6 +1,6 @@
 //! Core input and stream data types used across the program.
 
-use super::time_utils::InputTime;
+use jiff::ZonedDateTime;
 #[cfg(feature = "cli")]
 use std::path::PathBuf;
 
@@ -27,9 +27,9 @@ pub enum LocationSource {
 #[cfg(feature = "cli")]
 #[derive(Debug, Clone)]
 pub enum TimeSource {
-    Single(InputTime),
+    Single(ZonedDateTime),
     Range(String),
-    Daily(String, chrono::NaiveTime),
+    Daily(String, jiff::civil::Time),
     #[cfg(feature = "cli")]
     File(InputPath),
     Now,
@@ -61,7 +61,7 @@ impl DataSource {
     }
 }
 
-pub type CoordTime = (f64, f64, InputTime);
+pub type CoordTime = (f64, f64, ZonedDateTime);
 pub type CoordTimeResult = Result<CoordTime, String>;
 pub type CoordTimeStream<'a> = Box<dyn Iterator<Item = CoordTimeResult> + 'a>;
 

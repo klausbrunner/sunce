@@ -6,7 +6,7 @@ use crate::position::{TIME_CACHE_CAPACITY, TimeCache, refraction_correction, tim
 use crate::{
     Environment, Error, EventOptions, EventRecord, Location, PositionOptions, SolarPosition,
 };
-use chrono::{DateTime, FixedOffset};
+use jiff::ZonedDateTime;
 use std::collections::VecDeque;
 
 #[cfg(feature = "cli")]
@@ -20,10 +20,10 @@ pub(crate) enum SolarState {
 }
 
 /// A full-precision solar position and the input that produced it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PositionRecord {
     pub location: Location,
-    pub datetime: DateTime<FixedOffset>,
+    pub datetime: ZonedDateTime,
     pub position: SolarPosition,
     pub deltat: f64,
     pub environment: Environment,
@@ -51,7 +51,7 @@ where
             &mut cache,
             &mut order,
             TIME_CACHE_CAPACITY,
-            input.datetime,
+            &input.datetime,
             &options,
         )
         .map_err(Error::Calculation)?;
@@ -93,14 +93,8 @@ where
                 .next()?
                 .and_then(EventInput::validate)
                 .and_then(|input| {
-                    calculate_events(
-                        input.location.latitude,
-                        input.location.longitude,
-                        input.date,
-                        input.timezone,
-                        &options,
-                    )
-                    .map_err(Error::Calculation)
+                    calculate_events(input.location, input.date, &input.timezone, &options)
+                        .map_err(Error::Calculation)
                 }) {
                 Ok(rows) => pending = rows.into_iter(),
                 Err(err) => return Some(Err(err)),

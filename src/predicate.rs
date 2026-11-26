@@ -1,20 +1,20 @@
 //! Predicate evaluation and wait-until logic for automation use cases.
 
 use crate::compute::SolarState;
-use crate::data::time_utils::{convert_datetime_to_timezone, get_timezone_info};
+use crate::data::time_utils::get_timezone_info;
 use crate::data::{Parameters, Predicate as CliPredicate};
 use crate::events::{is_after_sunset, next_state_transition, solar_state_at};
 use crate::position::{calculator, refraction_correction, resolve_deltat, solar_elevation_at};
-use chrono::{DateTime, FixedOffset};
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 use solar_positioning::{ElevationTarget, Location};
 
-const STATE_WAIT_MARGIN: chrono::Duration = chrono::Duration::minutes(2);
+const STATE_WAIT_MARGIN: SignedDuration = SignedDuration::from_mins(2);
 const STATE_NEAR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 const MAX_WAIT_SLEEP: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub enum PredicateTime {
-    Fixed(DateTime<FixedOffset>),
+    Fixed(ZonedDateTime),
     Now,
 }
 
@@ -67,27 +67,10 @@ impl std::fmt::Display for PredicateCheck {
     }
 }
 
-fn resolve_time(
-    time: &PredicateTime,
-    params: &Parameters,
-) -> Result<DateTime<FixedOffset>, String> {
-    match time {
-        PredicateTime::Fixed(dt) => Ok(*dt),
-        PredicateTime::Now => crate::data::parse_datetime_string(
-            "now",
-            params.timezone.as_ref().map(|tz| tz.as_str()),
-        ),
-    }
-}
-
-fn wait_duration_until(
-    now: DateTime<FixedOffset>,
-    target: DateTime<FixedOffset>,
-) -> std::time::Duration {
+fn wait_duration_until(now: Timestamp, target: Timestamp) -> std::time::Duration {
     let near_start = target - STATE_WAIT_MARGIN;
     if now < near_start {
-        (near_start - now)
-            .to_std()
+        std::time::Duration::try_from(near_start.duration_since(now))
             .expect("near transition must be after current time")
             .min(MAX_WAIT_SLEEP)
     } else {
@@ -95,11 +78,11 @@ fn wait_duration_until(
     }
 }
 
-fn sleep_until(job: &PredicateJob, target: DateTime<FixedOffset>) -> Result<(), String> {
+fn sleep_until(target: Timestamp) {
     loop {
-        let now = resolve_time(&job.time, &job.params)?;
+        let now = Timestamp::now();
         if now >= target {
-            return Ok(());
+            return;
         }
         std::thread::sleep(wait_duration_until(now, target));
     }
@@ -107,26 +90,28 @@ fn sleep_until(job: &PredicateJob, target: DateTime<FixedOffset>) -> Result<(), 
 
 fn next_angle_transition(
     job: &PredicateJob,
-    now: DateTime<FixedOffset>,
+    now: &ZonedDateTime,
     threshold: f64,
     rising: bool,
-) -> Result<DateTime<FixedOffset>, String> {
-    let calculator = calculator(&job.params.position_options());
-    let end = now + chrono::Duration::days(370);
+) -> Result<Timestamp, String> {
+    let options = job.params.position_options();
+    let calculator = calculator(&options);
+    let start = now.timestamp();
+    let end = start + SignedDuration::from_hours(370 * 24);
     let location = Location {
         latitude: job.lat,
         longitude: job.lon,
     };
-    let deltat = resolve_deltat(now, &job.params.position_options());
+    let deltat = resolve_deltat(now.date(), &options);
     let target = ElevationTarget {
         angle: threshold,
         height: job.params.environment.elevation,
-        refraction: refraction_correction(&job.params.position_options())?,
+        refraction: refraction_correction(&options)?,
     };
     let next = if rising {
-        calculator.next_elevation_rise(&now, &end, location, deltat, target)
+        calculator.next_elevation_rise(start, end, location, deltat, target)
     } else {
-        calculator.next_elevation_set(&now, &end, location, deltat, target)
+        calculator.next_elevation_set(start, end, location, deltat, target)
     };
     next.map_err(|err| format!("Failed to calculate elevation crossing: {err}"))?
         .ok_or_else(|| {
@@ -135,14 +120,20 @@ fn next_angle_transition(
 }
 
 pub fn run_once(job: &PredicateJob) -> Result<bool, String> {
-    let result = predicate_at(job, resolve_time(&job.time, &job.params)?)?;
+    let result = match &job.time {
+        PredicateTime::Fixed(time) => predicate_at(job, time),
+        PredicateTime::Now => {
+            let zone = get_timezone_info(job.params.timezone.as_ref());
+            predicate_at(job, &Timestamp::now().to_zoned_datetime(zone))
+        }
+    }?;
     if job.params.verbose {
         eprintln!("Predicate {}: {result}.", job.check);
     }
     Ok(result)
 }
 
-fn predicate_at(job: &PredicateJob, now: DateTime<FixedOffset>) -> Result<bool, String> {
+fn predicate_at(job: &PredicateJob, now: &ZonedDateTime) -> Result<bool, String> {
     match job.check {
         PredicateCheck::State(state) => {
             Ok(solar_state_at(job.lat, job.lon, now, &job.params.position_options())? == state)
@@ -166,10 +157,11 @@ fn predicate_at(job: &PredicateJob, now: DateTime<FixedOffset>) -> Result<bool, 
 }
 
 pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
+    let zone = get_timezone_info(job.params.timezone.as_ref());
     let mut waited = false;
     loop {
-        let now = resolve_time(&job.time, &job.params)?;
-        if predicate_at(job, now)? {
+        let now = Timestamp::now().to_zoned_datetime(zone.clone());
+        if predicate_at(job, &now)? {
             if job.params.verbose {
                 let status = if waited { "satisfied" } else { "already true" };
                 eprintln!("Predicate {}: {status}.", job.check);
@@ -181,33 +173,34 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
                 SolarState::CivilTwilight,
                 job.lat,
                 job.lon,
-                now,
+                &now,
                 &job.params.position_options(),
-                get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str())),
             )?,
             PredicateCheck::State(state) => next_state_transition(
                 state,
                 job.lat,
                 job.lon,
-                now,
+                &now,
                 &job.params.position_options(),
-                get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str())),
             )?,
             PredicateCheck::ElevationAbove(threshold) => {
-                next_angle_transition(job, now, threshold, true)?
+                next_angle_transition(job, &now, threshold, true)?
             }
             PredicateCheck::ElevationBelow(threshold) => {
-                next_angle_transition(job, now, threshold, false)?
+                next_angle_transition(job, &now, threshold, false)?
             }
         };
         if job.params.verbose {
-            let zone = get_timezone_info(job.params.timezone.as_ref().map(|tz| tz.as_str()));
-            let transition = convert_datetime_to_timezone(target, &zone);
-            let seconds = (target - now).num_seconds().max(0);
+            let transition = crate::output::format_timestamp(
+                target,
+                zone.to_offset(target),
+                crate::output::TimePrecision::Seconds,
+            );
+            let seconds = target.duration_since(now.timestamp()).as_secs().max(0);
             eprintln!(
                 "Waiting for {}; estimated transition at {} (in {}h {}m {}s).",
                 job.check,
-                transition.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+                transition,
                 seconds / 3600,
                 seconds / 60 % 60,
                 seconds % 60
@@ -218,11 +211,11 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
             job.check,
             PredicateCheck::ElevationAbove(_) | PredicateCheck::ElevationBelow(_)
         ) {
-            target + chrono::Duration::seconds(1)
+            target + SignedDuration::from_secs(1)
         } else {
             target
         };
-        sleep_until(job, deadline)?;
+        sleep_until(deadline);
         waited = true;
     }
 }
@@ -231,16 +224,15 @@ pub fn wait_until_true(job: &PredicateJob) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::data::CalculationAlgorithm;
-    use chrono::TimeZone;
+    use jiff::{civil::date, tz::TimeZone};
 
     #[test]
     fn wait_duration_until_caps_sleep_before_transition_window() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let now = tz.with_ymd_and_hms(2024, 3, 21, 5, 0, 0).unwrap();
+        let now: Timestamp = "2024-03-21T05:00:00Z".parse().unwrap();
         for (seconds_until_target, expected_sleep) in
             [(150, 30), (180, 60), (3600, 60), (30 * 86400, 60)]
         {
-            let target = now + chrono::Duration::seconds(seconds_until_target);
+            let target = now + SignedDuration::from_secs(seconds_until_target);
             assert_eq!(
                 wait_duration_until(now, target),
                 std::time::Duration::from_secs(expected_sleep)
@@ -250,17 +242,15 @@ mod tests {
 
     #[test]
     fn wait_duration_until_uses_one_second_poll_near_transition() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let now = tz.with_ymd_and_hms(2024, 3, 21, 5, 58, 30).unwrap();
-        let target = tz.with_ymd_and_hms(2024, 3, 21, 6, 0, 0).unwrap();
+        let now = "2024-03-21T05:58:30Z".parse().unwrap();
+        let target = "2024-03-21T06:00:00Z".parse().unwrap();
         assert_eq!(wait_duration_until(now, target), STATE_NEAR_POLL_INTERVAL);
     }
 
     #[test]
     fn wait_duration_until_handles_exact_transition_window() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let now = tz.with_ymd_and_hms(2024, 3, 21, 5, 58, 0).unwrap();
-        let target = tz.with_ymd_and_hms(2024, 3, 21, 6, 0, 0).unwrap();
+        let now = "2024-03-21T05:58:00Z".parse().unwrap();
+        let target = "2024-03-21T06:00:00Z".parse().unwrap();
         assert_eq!(wait_duration_until(now, target), STATE_NEAR_POLL_INTERVAL);
     }
 
@@ -282,24 +272,31 @@ mod tests {
                     (0, PredicateCheck::ElevationAbove(1.0), true),
                     (12, PredicateCheck::ElevationBelow(1.0), false),
                 ] {
-                    let now = FixedOffset::east_opt(0)
-                        .unwrap()
-                        .with_ymd_and_hms(2024, 12, 21, hour, 0, 0)
+                    let now = date(2024, 12, 21)
+                        .at(hour, 0, 0, 0)
+                        .to_zoned_datetime(TimeZone::UTC)
                         .unwrap();
                     let mut job = PredicateJob {
                         lat: 63.0,
                         lon: 13.4,
-                        time: PredicateTime::Fixed(now),
+                        time: PredicateTime::Fixed(now.clone()),
                         check,
                         params: params.clone(),
                     };
                     assert!(!run_once(&job).unwrap());
-                    let next = next_angle_transition(&job, now, 1.0, rising).unwrap();
-                    assert!(next > now);
-                    for (offset, expected) in [(-1100, false), (1100, true)] {
-                        job.time =
-                            PredicateTime::Fixed(next + chrono::Duration::microseconds(offset));
-                        assert_eq!(run_once(&job).unwrap(), expected);
+                    let next = next_angle_transition(&job, &now, 1.0, rising).unwrap();
+                    assert!(next > now.timestamp());
+                    // The solver bounds crossings to 0.1 s; waits allow one second.
+                    for (seconds, expected) in [(-1, false), (1, true)] {
+                        job.time = PredicateTime::Fixed(
+                            (next + SignedDuration::from_secs(seconds))
+                                .to_zoned_datetime(TimeZone::UTC),
+                        );
+                        assert_eq!(
+                            run_once(&job).unwrap(),
+                            expected,
+                            "{algorithm:?}, {check:?}, refraction={refraction}"
+                        );
                     }
                 }
             }

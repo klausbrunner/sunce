@@ -24,7 +24,7 @@ mod validate;
 pub use app::run;
 pub use compute::{PositionRecord, events, positions};
 pub use data::config::{CalculationAlgorithm, Environment, EventOptions, PositionOptions, Step};
-pub use data::time_utils::TimezoneInfo as Timezone;
 pub use error::Error;
 pub use events::{DayState, EventKind, EventRecord};
+pub use jiff::tz::TimeZone;
 pub use solar_positioning::{Location, SolarPosition};

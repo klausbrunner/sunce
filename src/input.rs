@@ -4,10 +4,10 @@
 //! inspect the environment, read a system clock, or sleep.
 
 use crate::data::expansion::CoordRangeIter;
-use crate::data::time_utils::{InputTime, TimezoneInfo, parse_in_timezone};
+use crate::data::time_utils::{is_date_without_time, parse_in_timezone};
 use crate::data::{CoordTimeStream, validate_latitude, validate_longitude};
-use crate::{Error, Location};
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use crate::{Error, Location, TimeZone};
+use jiff::{ZonedDateTime, civil::Date};
 use std::io::BufRead;
 
 mod time;
@@ -16,10 +16,10 @@ pub(crate) use time::date_bounds;
 pub use time::{daily_times, event_dates, position_times};
 
 /// A location and a specific instant for a position calculation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PositionInput {
     pub location: Location,
-    pub datetime: DateTime<FixedOffset>,
+    pub datetime: ZonedDateTime,
 }
 
 impl PositionInput {
@@ -30,11 +30,11 @@ impl PositionInput {
 }
 
 /// A location, local calendar date, and time zone for solar events.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EventInput {
     pub location: Location,
-    pub date: NaiveDate,
-    pub timezone: TimezoneInfo,
+    pub date: Date,
+    pub timezone: TimeZone,
 }
 
 impl EventInput {
@@ -132,7 +132,7 @@ pub fn grid_positions<I>(
     times: I,
 ) -> impl Iterator<Item = Result<PositionInput, Error>>
 where
-    I: IntoIterator<Item = Result<DateTime<FixedOffset>, Error>>,
+    I: IntoIterator<Item = Result<ZonedDateTime, Error>>,
 {
     let locations = grid.locations();
     times.into_iter().flat_map(move |time| {
@@ -145,10 +145,13 @@ where
             if let Some(error) = error.take() {
                 return Some(Err(error));
             }
-            let datetime = datetime?;
-            locations
-                .next()
-                .map(|location| Ok(PositionInput { location, datetime }))
+            let datetime = datetime.as_ref()?;
+            locations.next().map(|location| {
+                Ok(PositionInput {
+                    location,
+                    datetime: datetime.clone(),
+                })
+            })
         })
     })
 }
@@ -157,16 +160,17 @@ where
 pub fn grid_events<I>(
     grid: CoordinateGrid,
     dates: I,
-    timezone: TimezoneInfo,
+    timezone: TimeZone,
 ) -> impl Iterator<Item = EventInput>
 where
-    I: IntoIterator<Item = NaiveDate>,
+    I: IntoIterator<Item = Date>,
 {
     dates.into_iter().flat_map(move |date| {
+        let timezone = timezone.clone();
         grid.locations().map(move |location| EventInput {
             location,
             date,
-            timezone,
+            timezone: timezone.clone(),
         })
     })
 }
@@ -176,18 +180,18 @@ where
 /// Naive times use `timezone`; explicit offsets are converted to that zone.
 pub fn read_positions<'a, R: BufRead + 'a>(
     reader: R,
-    timezone: TimezoneInfo,
+    timezone: TimeZone,
 ) -> impl Iterator<Item = Result<PositionInput, Error>> + 'a {
     read_samples(reader, "input".into(), move |time| {
-        parse_in_timezone(time, timezone)
+        parse_in_timezone(time, &timezone)
     })
     .map(|item| {
-        item.map(|(latitude, longitude, time)| PositionInput {
+        item.map(|(latitude, longitude, datetime)| PositionInput {
             location: Location {
                 latitude,
                 longitude,
             },
-            datetime: time.datetime,
+            datetime,
         })
         .map_err(Error::Input)
     })
@@ -203,12 +207,11 @@ pub fn read_locations<'a, R: BufRead + 'a>(
 /// Read one timestamp per line, interpreting it in an explicit time zone.
 pub fn read_times<'a, R: BufRead + 'a>(
     reader: R,
-    timezone: TimezoneInfo,
-) -> impl Iterator<Item = Result<DateTime<FixedOffset>, Error>> + 'a {
+    timezone: TimeZone,
+) -> impl Iterator<Item = Result<ZonedDateTime, Error>> + 'a {
     non_comment_lines(reader, "input".into()).map(move |line| {
         let line = line.map_err(Error::Input)?;
-        parse_in_timezone(&line.content, timezone)
-            .map(|time| time.datetime)
+        parse_in_timezone(&line.content, &timezone)
             .map_err(|err| Error::Input(format!("{}:{}: {err}", line.ctx, line.number)))
     })
 }
@@ -217,12 +220,13 @@ pub fn read_times<'a, R: BufRead + 'a>(
 /// If a datetime is supplied, its date in `timezone` is used.
 pub fn read_events<'a, R: BufRead + 'a>(
     reader: R,
-    timezone: TimezoneInfo,
+    timezone: TimeZone,
 ) -> impl Iterator<Item = Result<EventInput, Error>> + 'a {
     read_records(reader, "input".into(), move |latitude, longitude, time| {
-        let date = match time.parse::<NaiveDate>() {
-            Ok(date) => date,
-            Err(_) => parse_in_timezone(time, timezone)?.datetime.date_naive(),
+        let date = if is_date_without_time(time) {
+            time.parse::<Date>().map_err(|err| err.to_string())?
+        } else {
+            parse_in_timezone(time, &timezone)?.date()
         };
         Ok(EventInput {
             location: Location {
@@ -230,7 +234,7 @@ pub fn read_events<'a, R: BufRead + 'a>(
                 longitude,
             },
             date,
-            timezone,
+            timezone: timezone.clone(),
         })
     })
     .map(|item| item.map_err(Error::Input))
@@ -297,7 +301,7 @@ pub(crate) fn read_samples<'a, R, F>(
 ) -> CoordTimeStream<'a>
 where
     R: BufRead + 'a,
-    F: Fn(&str) -> Result<InputTime, String> + 'a,
+    F: Fn(&str) -> Result<ZonedDateTime, String> + 'a,
 {
     read_records(reader, context, move |lat, lon, time| {
         parse_time(time).map(|time| (lat, lon, time))
