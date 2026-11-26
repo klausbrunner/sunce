@@ -1,13 +1,17 @@
 //! Calendar periods and position sampling, shared by the library and CLI.
 
-use crate::{Error, Step, Timezone};
-use chrono::{DateTime, Days, FixedOffset, Months, NaiveDate, NaiveTime};
+use crate::data::time_utils::at_or_after_local;
+use crate::{Error, Step, TimeZone};
+use jiff::{
+    ZonedDateTime,
+    civil::{Date, Time},
+};
 
 /// Inclusive dates for a day, month, year, or ISO date interval.
-pub(crate) fn date_bounds(period: &str) -> Result<(NaiveDate, NaiveDate), Error> {
+pub(crate) fn date_bounds(period: &str) -> Result<(Date, Date), Error> {
     let parse = |value: &str| {
         value
-            .parse::<NaiveDate>()
+            .parse::<Date>()
             .map_err(|e| Error::Input(format!("Invalid date '{value}': {e}")))
     };
 
@@ -31,11 +35,7 @@ pub(crate) fn date_bounds(period: &str) -> Result<(NaiveDate, NaiveDate), Error>
         )),
         7 => {
             let start = parse(&format!("{period}-01"))?;
-            let end = start
-                .checked_add_months(Months::new(1))
-                .and_then(|date| date.pred_opt())
-                .ok_or_else(|| Error::Input("Calendar date out of range".into()))?;
-            Ok((start, end))
+            Ok((start, start.last_of_month()))
         }
         10 => {
             let date = parse(period)?;
@@ -51,34 +51,29 @@ pub(crate) fn date_bounds(period: &str) -> Result<(NaiveDate, NaiveDate), Error>
 /// Sampling advances in elapsed time and preserves named-zone DST changes.
 pub fn position_times(
     period: &str,
-    timezone: Timezone,
+    timezone: TimeZone,
     step: Step,
-) -> Result<impl Iterator<Item = Result<DateTime<FixedOffset>, Error>> + use<>, Error> {
-    if step.0 <= chrono::Duration::zero() {
+) -> Result<impl Iterator<Item = Result<ZonedDateTime, Error>> + use<>, Error> {
+    if !step.0.is_positive() {
         return Err(Error::Input("Step must be positive".into()));
     }
     let (start, end) = date_bounds(period)?;
     let after_end = end
-        .succ_opt()
-        .ok_or_else(|| Error::Input("Calendar date out of range".into()))?;
-    let boundary = |date: NaiveDate| {
-        timezone
-            .at_or_after_local(&date.and_time(NaiveTime::MIN))
-            .ok_or_else(|| {
-                Error::Input(format!("Cannot resolve date boundary in timezone: {date}"))
-            })
+        .tomorrow()
+        .map_err(|err| Error::Input(err.to_string()))?;
+    let boundary = |date: Date| {
+        at_or_after_local(&timezone, date.to_datetime(Time::MIN)).ok_or_else(|| {
+            Error::Input(format!("Cannot resolve date boundary in timezone: {date}"))
+        })
     };
     let start = boundary(start)?;
     // An exclusive next-date boundary retains a repeated final hour.
-    let end = boundary(after_end)?.naive_utc();
+    let end = boundary(after_end)?;
     Ok(
-        std::iter::successors((start.naive_utc() < end).then_some(start), move |time| {
-            time.naive_utc()
-                .checked_add_signed(step.0)
-                .filter(|next| *next < end)
-                .map(|next| timezone.to_datetime_from_utc(&next))
+        std::iter::successors((start < end).then_some(start), move |time| {
+            time.checked_add(step.0).ok().filter(|next| *next < end)
         })
-        .map(Ok),
+        .map(move |time| Ok(time.to_zoned_datetime(timezone.clone()))),
     )
 }
 
@@ -87,31 +82,27 @@ pub fn position_times(
 /// Times resolving outside their requested date produce no sample.
 pub fn daily_times(
     period: &str,
-    timezone: Timezone,
-    clock: NaiveTime,
-) -> Result<impl Iterator<Item = Result<DateTime<FixedOffset>, Error>> + use<>, Error> {
+    timezone: TimeZone,
+    clock: Time,
+) -> Result<impl Iterator<Item = Result<ZonedDateTime, Error>> + use<>, Error> {
     let (start, end) = date_bounds(period)?;
     Ok(event_dates(start, end)?.filter_map(move |date| {
-        match timezone.at_or_after_local(&date.and_time(clock)) {
-            Some(time) if time.date_naive() == date => Some(Ok(time)),
-            Some(_) => None,
-            None => Some(Err(Error::Input(format!(
+        let Some(time) = at_or_after_local(&timezone, date.to_datetime(clock)) else {
+            return Some(Err(Error::Input(format!(
                 "Cannot resolve local time on {date}"
-            )))),
-        }
+            ))));
+        };
+        let time = time.to_zoned_datetime(timezone.clone());
+        (time.date() == date).then_some(Ok(time))
     }))
 }
 
 /// Inclusive local calendar dates. Date iteration does not assume 24-hour days.
-pub fn event_dates(
-    start: NaiveDate,
-    end: NaiveDate,
-) -> Result<impl Iterator<Item = NaiveDate>, Error> {
+pub fn event_dates(start: Date, end: Date) -> Result<impl Iterator<Item = Date>, Error> {
     if start > end {
         return Err(Error::Input("Start date must not be after end date".into()));
     }
     Ok(std::iter::successors(Some(start), move |date| {
-        date.checked_add_days(Days::new(1))
-            .filter(|date| *date <= end)
+        date.tomorrow().ok().filter(|date| *date <= end)
     }))
 }

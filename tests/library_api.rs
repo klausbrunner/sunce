@@ -1,4 +1,6 @@
-use chrono::DateTime;
+mod common;
+use common::{parse_rfc3339, rfc3339};
+use jiff::{SignedDuration, civil::date, tz::TimeZone};
 use std::cell::Cell;
 use std::io::{self, BufRead, Cursor, Read, Write};
 use sunce::input::{self, CoordinateGrid, EventInput, PositionInput};
@@ -18,7 +20,7 @@ fn location() -> Location {
 fn position() -> PositionInput {
     PositionInput {
         location: location(),
-        datetime: DateTime::parse_from_rfc3339("2026-06-21T12:00:00+02:00").unwrap(),
+        datetime: parse_rfc3339("2026-06-21T12:00:00+02:00"),
     }
 }
 
@@ -32,7 +34,7 @@ fn borrowed_inputs_are_lazy_and_results_keep_full_precision() {
     let seen = Cell::new(0);
     let input = values
         .iter()
-        .copied()
+        .cloned()
         .inspect(|_| seen.set(seen.get() + 1))
         .map(Ok);
     let mut settings = PositionOptions {
@@ -46,7 +48,13 @@ fn borrowed_inputs_are_lazy_and_results_keep_full_precision() {
     assert_eq!(seen.get(), 0);
     let actual = results.next().unwrap().unwrap().position;
     let expected = solar_positioning::SolarPositions::new()
-        .at(&position().datetime, location(), 0.0, 69.184, None)
+        .at(
+            position().datetime.timestamp(),
+            location(),
+            0.0,
+            69.184,
+            None,
+        )
         .unwrap();
     assert_eq!(actual.azimuth(), expected.azimuth());
     assert_eq!(actual.zenith_angle(), expected.zenith_angle());
@@ -116,10 +124,10 @@ fn grids_validate_steps_and_preserve_arithmetic_coordinates() {
 #[test]
 fn readers_accept_borrowed_buffers_and_report_physical_line_numbers() {
     let text = String::from("# locations\n\n52.52,13.405,2026-06-21T12:00:00+02:00\nbroken\n");
-    let input = input::read_positions(Cursor::new(text.as_bytes()), "UTC".parse().unwrap());
+    let input = input::read_positions(Cursor::new(text.as_bytes()), TimeZone::UTC);
     let mut results = positions(input, PositionOptions::default()).unwrap();
     let datetime = results.next().unwrap().unwrap().datetime;
-    assert_eq!(datetime.to_rfc3339(), "2026-06-21T10:00:00+00:00");
+    assert_eq!(rfc3339(&datetime), "2026-06-21T10:00:00+00:00");
     let err = results.next().unwrap().unwrap_err();
     assert!(matches!(err, Error::Input(_)));
     assert!(err.to_string().contains("input:4: expected 3 fields"));
@@ -134,7 +142,7 @@ fn readers_accept_borrowed_buffers_and_report_physical_line_numbers() {
         52.52
     );
     assert!(
-        input::read_times(Cursor::new(b"now\n"), "UTC".parse().unwrap())
+        input::read_times(Cursor::new(b"now\n"), TimeZone::UTC)
             .next()
             .unwrap()
             .is_err()
@@ -143,9 +151,9 @@ fn readers_accept_borrowed_buffers_and_report_physical_line_numbers() {
 
 #[test]
 fn elapsed_time_sampling_and_calendar_dates_preserve_dst() {
-    let timezone = "Europe/Berlin".parse().unwrap();
+    let timezone = TimeZone::get("Europe/Berlin").unwrap();
     for (date, expected) in [("2026-03-29", 138), ("2026-10-25", 150)] {
-        let times = input::position_times(date, timezone, "10m".parse().unwrap())
+        let times = input::position_times(date, timezone.clone(), "10m".parse().unwrap())
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -158,8 +166,8 @@ fn elapsed_time_sampling_and_calendar_dates_preserve_dst() {
     assert!(
         input::position_times(
             "2026-06-21",
-            timezone,
-            sunce::Step(chrono::Duration::zero())
+            timezone.clone(),
+            sunce::Step(SignedDuration::ZERO)
         )
         .is_err()
     );
@@ -181,9 +189,9 @@ fn elapsed_time_sampling_and_calendar_dates_preserve_dst() {
         .map(|row| row.time.unwrap())
         .collect();
     assert_eq!(sunrise.len(), 3);
-    assert_eq!(sunrise[0].offset().local_minus_utc(), 3600);
-    assert_eq!(sunrise[1].offset().local_minus_utc(), 7200);
-    assert_eq!(sunrise[2].date_naive().to_string(), "2026-03-30");
+    assert_eq!(sunrise[0].offset().seconds(), 3600);
+    assert_eq!(sunrise[1].offset().seconds(), 7200);
+    assert_eq!(sunrise[2].date().to_string(), "2026-03-30");
 }
 
 #[test]
@@ -191,7 +199,7 @@ fn event_dates_do_not_require_an_existing_midnight() {
     let source = "-23.55,-46.63,2018-11-04\n";
     let input = input::read_events(
         Cursor::new(source.as_bytes()),
-        "America/Sao_Paulo".parse().unwrap(),
+        TimeZone::get("America/Sao_Paulo").unwrap(),
     );
     let rows = events(input, EventOptions::default())
         .unwrap()
@@ -205,7 +213,7 @@ fn event_dates_do_not_require_an_existing_midnight() {
             longitude: -46.63,
         },
         date: "2018-11-04".parse().unwrap(),
-        timezone: "America/Sao_Paulo".parse().unwrap(),
+        timezone: TimeZone::get("America/Sao_Paulo").unwrap(),
     };
     let rows = events([Ok(input)], EventOptions::default())
         .unwrap()
@@ -219,7 +227,7 @@ fn event_dates_do_not_require_an_existing_midnight() {
             longitude: -171.75,
         },
         date: "2011-12-30".parse().unwrap(),
-        timezone: "Pacific/Apia".parse().unwrap(),
+        timezone: TimeZone::get("Pacific/Apia").unwrap(),
     };
     let rows = events([Ok(input)], EventOptions::default())
         .unwrap()
@@ -227,6 +235,18 @@ fn event_dates_do_not_require_an_existing_midnight() {
         .unwrap();
     assert!(
         matches!(rows.as_slice(), [row] if row.day_state == sunce::DayState::Empty && row.event.is_none())
+    );
+}
+
+#[test]
+fn event_reader_converts_explicit_offsets_before_choosing_the_date() {
+    let records = input::read_events(
+        Cursor::new(b"52.52,13.405,2026-06-21T00:30:00+02:00\n"),
+        TimeZone::UTC,
+    );
+    assert_eq!(
+        records.into_iter().next().unwrap().unwrap().date,
+        date(2026, 6, 20)
     );
 }
 
@@ -256,36 +276,35 @@ fn position_periods_cover_midnight_transitions() {
         ),
         (
             "America/Havana",
-            "2026-11-01",
+            "2024-11-03",
             25,
-            "2026-11-01T00:00:00-04:00",
-            "2026-11-01T23:00:00-05:00",
+            "2024-11-03T00:00:00-04:00",
+            "2024-11-03T23:00:00-05:00",
         ),
     ] {
-        let times = input::position_times(date, zone.parse().unwrap(), "1h".parse().unwrap())
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+        let times =
+            input::position_times(date, TimeZone::get(zone).unwrap(), "1h".parse().unwrap())
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
         assert_eq!(times.len(), count, "{zone} {date}");
-        assert_eq!(times[0].to_rfc3339(), first);
-        assert_eq!(times.last().unwrap().to_rfc3339(), last);
-        assert!(
-            times
-                .windows(2)
-                .all(|pair| (pair[1] - pair[0]).num_seconds() == 3600)
-        );
-        assert!(
-            times
-                .iter()
-                .all(|time| time.date_naive().to_string() == date)
-        );
+        assert_eq!(rfc3339(&times[0]), first);
+        assert_eq!(rfc3339(times.last().unwrap()), last);
+        assert!(times.windows(2).all(|pair| {
+            pair[1]
+                .timestamp()
+                .duration_since(pair[0].timestamp())
+                .as_secs()
+                == 3600
+        }));
+        assert!(times.iter().all(|time| time.date().to_string() == date));
     }
 }
 
 #[test]
 fn position_periods_skip_nonexistent_calendar_dates() {
-    let zone = "Pacific/Apia".parse().unwrap();
-    let times = input::position_times("2011-12-30", zone, "1h".parse().unwrap())
+    let zone = TimeZone::get("Pacific/Apia").unwrap();
+    let times = input::position_times("2011-12-30", zone.clone(), "1h".parse().unwrap())
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -298,16 +317,16 @@ fn position_periods_skip_nonexistent_calendar_dates() {
     assert!(
         !times
             .iter()
-            .any(|time| time.date_naive().to_string() == "2011-12-30")
+            .any(|time| time.date().to_string() == "2011-12-30")
     );
 }
 
 #[test]
 fn date_only_inputs_advance_through_midnight_gaps_but_explicit_times_stay_strict() {
-    let zone = "America/Sao_Paulo".parse().unwrap();
+    let zone = TimeZone::get("America/Sao_Paulo").unwrap();
     let mut times = input::read_times(Cursor::new(b"2018-11-04\n2018-11-04T00:30:00\n"), zone);
     assert_eq!(
-        times.next().unwrap().unwrap().to_rfc3339(),
+        rfc3339(&times.next().unwrap().unwrap()),
         "2018-11-04T01:00:00-02:00"
     );
     assert!(times.next().unwrap().is_err());
@@ -344,7 +363,7 @@ impl Write for BrokenWriter {
 
 #[test]
 fn reader_writer_and_final_flush_failures_are_returned() {
-    let records = input::read_positions(BrokenReader, "UTC".parse().unwrap());
+    let records = input::read_positions(BrokenReader, TimeZone::UTC);
     let error = positions(records, PositionOptions::default())
         .unwrap()
         .next()
@@ -429,7 +448,7 @@ fn position_exports_use_each_records_environment() {
     };
     let mut bytes = Vec::new();
     assert_eq!(
-        output::write_positions(rows.map(Ok), options, &mut bytes).unwrap(),
+        output::write_positions(rows.clone().map(Ok), options, &mut bytes).unwrap(),
         2
     );
     let values: Vec<serde_json::Value> = serde_json::Deserializer::from_slice(&bytes)
@@ -463,7 +482,7 @@ fn position_grid_exports_match_the_cli() {
             let grid = CoordinateGrid::new((52.0, 52.5, 0.5), (13.0, 14.0, 0.5)).unwrap();
             let times = input::position_times(
                 "2026-03-29",
-                "Europe/Berlin".parse().unwrap(),
+                TimeZone::get("Europe/Berlin").unwrap(),
                 "6h".parse().unwrap(),
             )
             .unwrap();
@@ -514,12 +533,8 @@ fn event_grid_exports_match_the_cli_across_dst() {
     let formats = formats();
     for &format in &formats {
         let grid = CoordinateGrid::new((52.0, 53.0, 1.0), (13.0, 13.0, 0.0)).unwrap();
-        let dates = input::event_dates(
-            chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
-            chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
-        )
-        .unwrap();
-        let records = input::grid_events(grid, dates, "Europe/Berlin".parse().unwrap());
+        let dates = input::event_dates(date(2026, 3, 1), date(2026, 3, 31)).unwrap();
+        let records = input::grid_events(grid, dates, TimeZone::get("Europe/Berlin").unwrap());
         let mut settings = EventOptions {
             deltat: Some(69.184),
             ..EventOptions::default()
@@ -587,7 +602,7 @@ fn cli_uses_library_event_options_for_delta_t_horizons_and_twilight() {
                 [Ok(EventInput {
                     location: location(),
                     date: "2026-03-29".parse().unwrap(),
-                    timezone: "Europe/Berlin".parse().unwrap(),
+                    timezone: TimeZone::get("Europe/Berlin").unwrap(),
                 })],
                 settings,
             )
@@ -699,7 +714,7 @@ impl Write for LocalWriter {
 fn composed_and_collected_results_export_to_single_threaded_writers() {
     let options = PositionOptions::default();
     for format in [Format::Text, Format::Csv, Format::Json] {
-        let rows = positions([position(); 3].map(Ok), options)
+        let rows = positions((0..3).map(|_| Ok(position())), options)
             .unwrap()
             .filter(|row| row.as_ref().is_ok_and(|row| row.location.latitude > 50.0))
             .take(2)
@@ -721,7 +736,7 @@ fn composed_and_collected_results_export_to_single_threaded_writers() {
         let input = EventInput {
             location: location(),
             date: "2026-06-21".parse().unwrap(),
-            timezone: "UTC".parse().unwrap(),
+            timezone: TimeZone::UTC,
         };
         let rows = events([Ok(input)], EventOptions::default())
             .unwrap()

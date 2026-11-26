@@ -1,11 +1,14 @@
 //! A reader, lazy calculation, and CSV export without CLI or filesystem adapters.
 
 use std::io::Cursor;
-use sunce::{PositionOptions, input, output, positions};
+use sunce::{PositionOptions, TimeZone, input, output, positions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = "# latitude,longitude,datetime\n52.52,13.405,2026-06-21T12:00:00+02:00\n";
-    let records = input::read_positions(Cursor::new(source.as_bytes()), "Europe/Berlin".parse()?);
+    let records = input::read_positions(
+        Cursor::new(source.as_bytes()),
+        TimeZone::get("Europe/Berlin")?,
+    );
     let options = PositionOptions::default();
     let rows = positions(records, options)?;
 

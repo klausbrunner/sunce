@@ -1,26 +1,24 @@
 //! Input expansion for ranges, files, and cartesian products.
 
 #[cfg(feature = "cli")]
-use super::time_utils::{
-    InputTime, convert_datetime_to_timezone, get_timezone_info, parse_input_time,
-};
+use super::time_utils::{at_or_after_local, get_timezone_info, parse_input_time};
 #[cfg(feature = "cli")]
 use super::types::{CoordTimeResult, CoordTimeStream, InputPath, TimeSource};
 #[cfg(feature = "cli")]
 use super::types::{LocationSource, LocationStream};
 #[cfg(feature = "cli")]
-use super::{Command, Step, TimezoneOverride};
+use super::{Command, Step};
 #[cfg(feature = "cli")]
 use crate::input::{self, Line, non_comment_lines, read_locations_from, read_samples};
 #[cfg(feature = "cli")]
-use chrono::{NaiveTime, Utc};
+use jiff::{SignedDuration, Timestamp, ZonedDateTime, civil::Time, tz::TimeZone};
 #[cfg(feature = "cli")]
 use std::fs::File;
 #[cfg(feature = "cli")]
 use std::io::{self, BufRead, BufReader};
 
 #[cfg(feature = "cli")]
-type TimeIter = Box<dyn Iterator<Item = Result<InputTime, String>>>;
+type TimeIter = Box<dyn Iterator<Item = Result<ZonedDateTime, String>>>;
 
 #[derive(Clone)]
 pub(crate) struct CoordRangeIter {
@@ -145,71 +143,56 @@ pub fn expand_location_source(source: LocationSource) -> Result<LocationStream, 
 pub fn expand_time_source(
     source: TimeSource,
     step_override: Option<Step>,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
     command: Command,
 ) -> Result<TimeIter, String> {
     match source {
         TimeSource::Single(dt) => Ok(Box::new(std::iter::once(Ok(dt)))),
         TimeSource::Daily(period, clock) => {
-            let zone = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
+            let zone = get_timezone_info(override_tz.as_ref());
             let times =
                 crate::input::daily_times(&period, zone, clock).map_err(|e| e.to_string())?;
-            Ok(Box::new(times.map(move |time| {
-                time.map(|datetime| InputTime { datetime, zone })
-                    .map_err(|e| e.to_string())
-            })))
+            Ok(Box::new(times.map(|time| time.map_err(|e| e.to_string()))))
         }
         TimeSource::Range(period) => {
-            let zone = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
+            let zone = get_timezone_info(override_tz.as_ref());
             if command == Command::Events {
                 let (start, end) = input::date_bounds(&period).map_err(|e| e.to_string())?;
                 let dates = input::event_dates(start, end).map_err(|e| e.to_string())?;
                 return Ok(Box::new(dates.map(move |date| {
-                    zone.at_or_after_local(&date.and_time(NaiveTime::MIN))
-                        .filter(|time| time.date_naive() == date)
-                        .map(|datetime| InputTime { datetime, zone })
+                    at_or_after_local(&zone, date.to_datetime(Time::MIN))
+                        .map(|time| time.to_zoned_datetime(zone.clone()))
+                        .filter(|time| time.date() == date)
                         .ok_or_else(|| format!("Date does not exist in timezone: {date}"))
                 })));
             }
             let step = step_override.unwrap_or_else(|| {
-                Step(if period.len() == 4 {
-                    chrono::Duration::days(1)
+                Step(SignedDuration::from_hours(if period.len() == 4 {
+                    24
                 } else {
-                    chrono::Duration::hours(1)
-                })
+                    1
+                }))
             });
             let times = input::position_times(&period, zone, step).map_err(|e| e.to_string())?;
-            Ok(Box::new(times.map(move |time| {
-                time.map(|datetime| InputTime { datetime, zone })
-                    .map_err(|e| e.to_string())
-            })))
+            Ok(Box::new(times.map(|time| time.map_err(|e| e.to_string()))))
         }
         TimeSource::File(path) => read_times_file(path, override_tz),
         TimeSource::Now => {
-            let tz_info = get_timezone_info(override_tz.as_ref().map(|tz| tz.as_str()));
-            if let Some(step_str) = step_override {
-                let step_duration: chrono::Duration = step_str.into();
-                let sleep_duration = step_duration
-                    .to_std()
+            let zone = get_timezone_info(override_tz.as_ref());
+            let now = move || Ok(Timestamp::now().to_zoned_datetime(zone.clone()));
+            if let Some(step) = step_override {
+                let sleep_duration = std::time::Duration::try_from(step.0)
                     .expect("positive step must convert to std::time::Duration");
                 let mut first = true;
-                let tz_clone = tz_info;
                 let iter = std::iter::from_fn(move || {
                     if !std::mem::take(&mut first) {
                         std::thread::sleep(sleep_duration);
                     }
-                    Some(Ok(InputTime {
-                        datetime: convert_datetime_to_timezone(Utc::now(), &tz_clone),
-                        zone: tz_clone,
-                    }))
+                    Some(now())
                 });
                 Ok(Box::new(iter))
             } else {
-                Ok(Box::new(std::iter::once(Ok(InputTime {
-                    datetime: convert_datetime_to_timezone(Utc::now(), &tz_info),
-                    #[cfg(feature = "cli")]
-                    zone: tz_info,
-                }))))
+                Ok(Box::new(std::iter::once(now())))
             }
         }
     }
@@ -218,11 +201,11 @@ pub fn expand_time_source(
 #[cfg(feature = "cli")]
 fn read_times_file(
     input_path: InputPath,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
 ) -> Result<TimeIter, String> {
     let iter = read_non_comment_lines(&input_path)?.map(move |line_res| {
         let line = line_res?;
-        parse_input_time(&line.content, override_tz.as_ref().map(|tz| tz.as_str()))
+        parse_input_time(&line.content, override_tz.as_ref())
             .map_err(|err| format!("{}:{}: {}", line.ctx, line.number, err))
     });
 
@@ -234,14 +217,15 @@ fn expand_time_outer(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
     command: Command,
 ) -> Result<CoordTimeStream<'static>, String> {
     let iter = expand_time_source(time_source, step, override_tz.clone(), command)?.flat_map(
         move |time_res| match time_res {
             Ok(dt) => match expand_location_source(loc_source.clone()) {
                 Ok(locations) => Box::new(
-                    locations.map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt))),
+                    locations
+                        .map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt.clone()))),
                 ) as Box<dyn Iterator<Item = CoordTimeResult>>,
                 Err(err) => Box::new(std::iter::once(Err(err))),
             },
@@ -256,7 +240,7 @@ fn expand_location_outer(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
     command: Command,
 ) -> Result<CoordTimeStream<'static>, String> {
     let iter = expand_location_source(loc_source)?.flat_map(move |coord_res| match coord_res {
@@ -277,7 +261,7 @@ pub fn expand_cartesian_product(
     loc_source: LocationSource,
     time_source: TimeSource,
     step: Option<Step>,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
     command: Command,
 ) -> Result<CoordTimeStream<'static>, String> {
     let loc_is_single = matches!(loc_source, LocationSource::Single(_, _));
@@ -301,7 +285,7 @@ pub fn expand_cartesian_product(
         };
         let dt = first_time?;
         let iter = expand_location_source(loc_source)?
-            .map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt)));
+            .map(move |coord_res| coord_res.map(|(lat, lon)| (lat, lon, dt.clone())));
         return Ok(Box::new(iter));
     }
 
@@ -326,12 +310,12 @@ pub fn expand_cartesian_product(
 #[cfg(feature = "cli")]
 pub fn expand_paired_file(
     input_path: InputPath,
-    override_tz: Option<TimezoneOverride>,
+    override_tz: Option<TimeZone>,
 ) -> Result<CoordTimeStream<'static>, String> {
     let ctx = input_context(&input_path);
     let reader = open_input(&input_path).map_err(|err| format!("Error opening {ctx}: {err}"))?;
     Ok(read_samples(reader, ctx, move |time| {
-        parse_input_time(time, override_tz.as_ref().map(|tz| tz.as_str()))
+        parse_input_time(time, override_tz.as_ref())
     }))
 }
 
@@ -400,7 +384,7 @@ mod tests {
         let times = expand_time_source(
             TimeSource::Range("2026-03".to_string()),
             None,
-            Some("Europe/Berlin".parse().expect("valid timezone")),
+            Some(TimeZone::get("Europe/Berlin").unwrap()),
             Command::Events,
         )
         .expect("expand month")
@@ -408,9 +392,11 @@ mod tests {
         .expect("collect datetimes");
 
         for date in ["2026-03-29", "2026-03-30", "2026-03-31"] {
-            assert!(times.iter().any(|dt| {
-                dt.datetime.format("%Y-%m-%dT%H:%M:%S").to_string() == format!("{date}T00:00:00")
-            }));
+            assert!(
+                times
+                    .iter()
+                    .any(|dt| { dt.datetime().to_string() == format!("{date}T00:00:00") })
+            );
         }
     }
 }

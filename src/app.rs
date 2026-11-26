@@ -56,7 +56,7 @@ fn run_stream(request: validate::StreamRequest) -> Result<(), Error> {
                         latitude,
                         longitude,
                     },
-                    datetime: time.datetime,
+                    datetime: time,
                 })
                 .map_err(Error::Input)
             });
@@ -86,8 +86,8 @@ fn run_stream(request: validate::StreamRequest) -> Result<(), Error> {
                         latitude,
                         longitude,
                     },
-                    date: time.datetime.date_naive(),
-                    timezone: time.zone,
+                    date: time.date(),
+                    timezone: time.time_zone().clone(),
                 })
                 .map_err(Error::Input)
             });

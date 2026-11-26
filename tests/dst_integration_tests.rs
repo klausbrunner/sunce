@@ -1,11 +1,12 @@
 #![cfg(feature = "cli")]
 
 mod common;
-use chrono::{DateTime, FixedOffset};
 use common::{
     parse_csv_no_headers_output, parse_csv_output_maps, parse_csv_single_record_map,
     parse_json_output, sunce_command,
 };
+use jiff::Timestamp;
+use predicates::str::{contains, starts_with};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -49,7 +50,7 @@ fn no_header_datetimes(args: &[&str], envs: &[(&str, Option<&str>)]) -> Vec<Stri
         .into_iter()
         .map(|row| {
             row.into_iter()
-                .find(|field| DateTime::<FixedOffset>::parse_from_rfc3339(field).is_ok())
+                .find(|field| field.parse::<Timestamp>().is_ok())
                 .expect("datetime field not found")
         })
         .collect()
@@ -173,6 +174,45 @@ fn test_named_timezones_apply_real_dst_rules() {
         }
         if let Some(prefix) = missing_prefix {
             assert!(!datetimes.iter().any(|ts| ts.starts_with(prefix)));
+        }
+    }
+}
+
+#[test]
+fn annotated_timestamps_follow_dst_rules_in_arguments_and_stdin() {
+    for (time, expected) in [
+        (
+            "2024-06-21T12:00:00+02:00[Europe/Berlin]",
+            Some("2024-06-21T12:00:00+02:00"),
+        ),
+        (
+            "2024-10-27T02:30:00[Europe/Berlin]",
+            Some("2024-10-27T02:30:00+02:00"),
+        ),
+        (
+            "2024-10-27T02:30:00+01:00[Europe/Berlin]",
+            Some("2024-10-27T02:30:00+01:00"),
+        ),
+        ("2024-03-31T02:30:00[Europe/Berlin]", None),
+    ] {
+        let mut argument = sunce_command();
+        argument.args(["52.0", "13.4", time, "position"]);
+        let mut stdin = sunce_command();
+        stdin
+            .args(["@-", "position"])
+            .write_stdin(format!("52.0,13.4,{time}\n"));
+        for mut cmd in [argument, stdin] {
+            let result = cmd
+                .args(["--format=csv", "--no-headers", "--no-show-inputs"])
+                .assert();
+            if let Some(expected) = expected {
+                result.success().stdout(starts_with(format!("{expected},")));
+            } else {
+                result
+                    .code(2)
+                    .stdout("")
+                    .stderr(contains("Datetime does not exist in timezone"));
+            }
         }
     }
 }

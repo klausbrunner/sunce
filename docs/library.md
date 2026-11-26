@@ -1,18 +1,19 @@
 # Rust library
 
 Sunce calculates solar positions and events from caller-provided inputs, returning
-full-precision records. Callers own I/O, clocks and scheduling.
+full-precision records. It uses Jiff's zoned datetimes, civil dates and time zones.
+Callers own I/O, clocks and scheduling.
 
 ```sh
 cargo add sunce --no-default-features
 ```
 
 ```rust
-use sunce::{PositionOptions, input, output, positions};
+use sunce::{PositionOptions, TimeZone, input, output, positions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = input::CoordinateGrid::new((52.0, 53.0, 0.5), (13.0, 14.0, 0.5))?;
-    let timezone = "Europe/Berlin".parse()?;
+    let timezone = TimeZone::get("Europe/Berlin")?;
     let times = input::position_times("2026-06-21", timezone, "10m".parse()?)?;
     let options = PositionOptions::default();
     let rows = positions(input::grid_positions(grid, times), options)?;

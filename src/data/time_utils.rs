@@ -1,294 +1,183 @@
-//! Date, time, duration, and timezone parsing utilities.
+//! Sunce's input conventions for Jiff dates, time zones, and durations.
 
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
-#[cfg(feature = "cli")]
-use chrono::{Local, Offset};
-use chrono_tz::{GapInfo, Tz};
-#[cfg(feature = "cli")]
-use iana_time_zone::get_timezone;
-#[cfg(feature = "cli")]
-use std::env;
-#[cfg(feature = "cli")]
-use std::sync::OnceLock;
+use jiff::{
+    SignedDuration, Timestamp, ZonedDateTime,
+    civil::{DateTime, Time},
+    fmt::temporal::DateTimeParser,
+    tz::{AmbiguousOffset, TimeZone},
+};
 
-#[cfg(feature = "cli")]
-static SYSTEM_TIMEZONE: OnceLock<TimezoneInfo> = OnceLock::new();
-#[cfg(feature = "cli")]
-const SYSTEM_TZ_OVERRIDE_ENV: &str = "SUNCE_SYSTEM_TIMEZONE";
+const PARSER: DateTimeParser = DateTimeParser::new();
+// Keep the CLI's existing signed-millisecond range for steps.
+const MAX_STEP_SECONDS: i64 = i64::MAX / 1000;
 
-fn timezone_gap_error(dt_str: &str) -> String {
-    format!(
-        "Datetime does not exist in timezone (likely DST gap): {}",
-        dt_str
-    )
-}
-
-enum ParsedDateTime {
-    Now,
-    Fixed(DateTime<FixedOffset>),
-    Naive(NaiveDateTime),
-    DateOnly(NaiveDate),
-    UnixTimestamp(i64),
-}
-
-fn parse_datetime_input(dt_str: &str) -> Result<ParsedDateTime, String> {
-    if dt_str == "now" {
-        return Ok(ParsedDateTime::Now);
+/// Resolve a civil time to its first occurrence, or the transition after a gap.
+pub(crate) fn at_or_after_local(zone: &TimeZone, datetime: DateTime) -> Option<Timestamp> {
+    let ambiguous = zone.to_ambiguous_timestamp(datetime);
+    let gap = matches!(ambiguous.offset(), AmbiguousOffset::Gap { .. });
+    let earlier = ambiguous.earlier().ok()?;
+    if gap {
+        // Moving by the gap's length can overshoot when it began before this time.
+        zone.following(earlier).next().map(|t| t.timestamp())
+    } else {
+        Some(earlier)
     }
+}
 
-    if let Ok(timestamp) = dt_str.parse::<i64>()
-        && timestamp.unsigned_abs() >= 10000
+fn parse_time(
+    input: &str,
+    zone: Option<&TimeZone>,
+    local_zone: impl FnOnce() -> TimeZone,
+) -> Result<ZonedDateTime, String> {
+    let in_zone = |timestamp: Timestamp, default: TimeZone| {
+        timestamp.to_zoned_datetime(zone.cloned().unwrap_or(default))
+    };
+    if let Ok(seconds) = input.parse::<i64>()
+        && seconds.unsigned_abs() >= 10_000
     {
-        return Ok(ParsedDateTime::UnixTimestamp(timestamp));
+        return Timestamp::from_second(seconds)
+            .map(|timestamp| in_zone(timestamp, TimeZone::UTC))
+            .map_err(|_| format!("Invalid unix timestamp: {seconds}"));
     }
 
-    if dt_str.contains('T') {
-        if let Ok(fixed_dt) = DateTime::parse_from_rfc3339(dt_str) {
-            return Ok(ParsedDateTime::Fixed(fixed_dt));
-        }
-
-        let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
-            .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M"))
-            .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
-        return Ok(ParsedDateTime::Naive(naive_dt));
+    let invalid_datetime = |err| format!("Invalid datetime '{input}': {err}");
+    let pieces = PARSER.parse_pieces(input).map_err(invalid_datetime)?;
+    let offset = pieces.to_numeric_offset();
+    if offset.is_some() && pieces.time_zone_annotation().is_some() {
+        return PARSER
+            .parse_zoned_datetime(input)
+            .map(|datetime| match zone {
+                Some(zone) => datetime.with_time_zone(zone.clone()),
+                None => datetime,
+            })
+            .map_err(invalid_datetime);
+    }
+    let date = pieces.date();
+    let time = pieces.time();
+    let civil = date.to_datetime(time.unwrap_or(Time::MIN));
+    if let Some(offset) = offset {
+        return offset
+            .to_timestamp(civil)
+            .map(|timestamp| in_zone(timestamp, offset.to_time_zone()))
+            .map_err(|err| err.to_string());
     }
 
-    if dt_str.contains(' ') && dt_str.contains(':') {
-        let naive_dt = NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S")
-            .or_else(|_| NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M"))
-            .map_err(|e| format!("Failed to parse naive datetime: {}", e))?;
-        return Ok(ParsedDateTime::Naive(naive_dt));
-    }
-
-    let naive_date = NaiveDate::parse_from_str(dt_str, "%Y-%m-%d")
-        .map_err(|e| format!("Failed to parse date: {}", e))?;
-    Ok(ParsedDateTime::DateOnly(naive_date))
-}
-
-fn resolve_datetime(
-    parsed: ParsedDateTime,
-    tz_info: TimezoneInfo,
-    original: &str,
-) -> Result<InputTime, String> {
-    let datetime = match parsed {
-        ParsedDateTime::Now => {
-            Err("Resolve 'now' to an explicit instant before calling the library".to_owned())
-        }
-        ParsedDateTime::Fixed(dt) => Ok(convert_datetime_to_timezone(dt, &tz_info)),
-        ParsedDateTime::Naive(naive_dt) => tz_info
-            .to_datetime_from_local(&naive_dt)
-            .ok_or_else(|| timezone_gap_error(original)),
-        ParsedDateTime::DateOnly(date) => {
-            let naive_dt = date
-                .and_hms_opt(0, 0, 0)
-                .expect("Midnight time creation cannot fail");
-            tz_info
-                .at_or_after_local(&naive_dt)
-                .filter(|datetime| datetime.date_naive() == date)
-                .ok_or_else(|| timezone_gap_error(original))
-        }
-        ParsedDateTime::UnixTimestamp(ts) => {
-            let utc_dt = DateTime::<Utc>::from_timestamp(ts, 0)
-                .ok_or_else(|| format!("Invalid unix timestamp: {}", ts))?;
-
-            Ok(convert_datetime_to_timezone(utc_dt, &tz_info))
-        }
-    }?;
-    Ok(InputTime {
-        datetime,
-        #[cfg(feature = "cli")]
-        zone: tz_info,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct InputTime {
-    pub datetime: DateTime<FixedOffset>,
-    #[cfg(feature = "cli")]
-    pub zone: TimezoneInfo,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TimezoneInfo {
-    Fixed(FixedOffset),
-    Named(Tz),
-}
-
-impl TimezoneInfo {
-    pub fn to_datetime_from_utc(self, dt: &NaiveDateTime) -> DateTime<FixedOffset> {
-        match self {
-            TimezoneInfo::Fixed(offset) => offset.from_utc_datetime(dt),
-            TimezoneInfo::Named(tz) => {
-                let dt_utc = Utc.from_utc_datetime(dt);
-                dt_utc.with_timezone(&tz).fixed_offset()
-            }
-        }
-    }
-
-    pub fn to_datetime_from_local(self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
-        match self {
-            TimezoneInfo::Fixed(offset) => offset.from_local_datetime(dt).single(),
-            TimezoneInfo::Named(tz) => tz
-                .from_local_datetime(dt)
-                .earliest()
-                .map(|dt| dt.fixed_offset()),
-        }
-    }
-
-    /// Resolve a local time, choosing the earlier occurrence when it repeats.
-    /// A missing time advances to the first valid instant after the gap. An
-    /// entirely skipped date therefore resolves into the following date.
-    pub fn at_or_after_local(self, dt: &NaiveDateTime) -> Option<DateTime<FixedOffset>> {
-        self.to_datetime_from_local(dt).or_else(|| match self {
-            Self::Named(tz) => GapInfo::new(dt, &tz)?.end.map(|time| time.fixed_offset()),
-            Self::Fixed(_) => None,
-        })
-    }
-}
-
-pub fn convert_datetime_to_timezone<Tz: TimeZone>(
-    dt: DateTime<Tz>,
-    tz_info: &TimezoneInfo,
-) -> DateTime<FixedOffset> {
-    tz_info.to_datetime_from_utc(&dt.naive_utc())
-}
-
-#[cfg(feature = "cli")]
-pub fn parse_datetime_string(
-    dt_str: &str,
-    override_tz: Option<&str>,
-) -> Result<DateTime<FixedOffset>, String> {
-    parse_input_time(dt_str, override_tz).map(|input| input.datetime)
-}
-
-/// Parse with a caller-supplied time zone and no system fallbacks.
-pub(crate) fn parse_in_timezone(dt_str: &str, timezone: TimezoneInfo) -> Result<InputTime, String> {
-    resolve_datetime(parse_datetime_input(dt_str)?, timezone, dt_str)
-}
-
-#[cfg(feature = "cli")]
-pub fn parse_input_time(dt_str: &str, override_tz: Option<&str>) -> Result<InputTime, String> {
-    let parsed = parse_datetime_input(dt_str)?;
-    let timezone = match &parsed {
-        ParsedDateTime::Fixed(dt) if override_tz.is_none() => TimezoneInfo::Fixed(*dt.offset()),
-        ParsedDateTime::UnixTimestamp(_) if override_tz.is_none() => {
-            TimezoneInfo::Fixed(FixedOffset::east_opt(0).unwrap())
-        }
-        _ => get_timezone_info(override_tz),
-    };
-    if matches!(parsed, ParsedDateTime::Now) {
-        return Ok(InputTime {
-            datetime: convert_datetime_to_timezone(Utc::now(), &timezone),
-            zone: timezone,
-        });
-    }
-    resolve_datetime(parsed, timezone, dt_str)
-}
-
-pub fn parse_duration_positive(s: &str) -> Result<Duration, String> {
-    let ensure_positive = |num: i64| {
-        if num <= 0 {
-            Err(format!("Step must be positive, got '{}'", s))
+    let input_zone = pieces
+        .to_time_zone()
+        .map_err(invalid_datetime)?
+        .or_else(|| zone.cloned())
+        .unwrap_or_else(local_zone);
+    let timestamp = if time.is_none() {
+        at_or_after_local(&input_zone, civil)
+    } else {
+        let ambiguous = input_zone.to_ambiguous_timestamp(civil);
+        if matches!(ambiguous.offset(), AmbiguousOffset::Gap { .. }) {
+            None
         } else {
-            Ok(num)
+            ambiguous.earlier().ok()
         }
     };
+    timestamp
+        .filter(|t| time.is_some() || input_zone.to_datetime(*t).date() == date)
+        .map(|t| in_zone(t, input_zone))
+        .ok_or_else(|| format!("Datetime does not exist in timezone (likely DST gap): {input}"))
+}
 
-    if let Ok(raw_seconds) = s.parse::<i64>() {
-        let seconds = ensure_positive(raw_seconds)?;
-        return Duration::try_seconds(seconds).ok_or_else(|| format!("Step is too large: '{}'", s));
+pub(crate) fn parse_in_timezone(input: &str, zone: &TimeZone) -> Result<ZonedDateTime, String> {
+    if input == "now" {
+        return Err("Resolve 'now' to an explicit instant before calling the library".into());
     }
-
-    if s.len() < 2 {
-        return Err(format!(
-            "Invalid step format: '{}'. Expected <number><unit> such as 1h or 30m",
-            s
-        ));
-    }
-
-    let (num_str, unit) = s.split_at(s.char_indices().next_back().unwrap().0);
-    let value = num_str.parse::<i64>().map_err(|_| {
-        format!(
-            "Invalid step value in '{}'. Use an integer before the unit (e.g., 15m)",
-            s
-        )
-    })?;
-    let positive = ensure_positive(value)?;
-
-    let duration = match unit {
-        "s" => Duration::try_seconds(positive),
-        "m" => Duration::try_minutes(positive),
-        "h" => Duration::try_hours(positive),
-        "d" => Duration::try_days(positive),
-        _ => {
-            return Err(format!(
-                "Invalid step unit in '{}'. Supported units: s, m, h, d",
-                s
-            ));
-        }
-    };
-
-    duration.ok_or_else(|| format!("Step is too large: '{}'", s))
+    parse_time(input, Some(zone), || TimeZone::UTC)
 }
 
 #[cfg(feature = "cli")]
-pub fn is_date_without_time(s: &str) -> bool {
+pub(crate) fn parse_input_time(
+    input: &str,
+    zone: Option<&TimeZone>,
+) -> Result<ZonedDateTime, String> {
+    if input == "now" {
+        return Ok(Timestamp::now().to_zoned_datetime(get_timezone_info(zone)));
+    }
+    parse_time(input, zone, || get_timezone_info(None))
+}
+
+pub(crate) fn parse_duration_positive(input: &str) -> Result<SignedDuration, String> {
+    let (value, factor) = if let Ok(seconds) = input.parse::<i64>() {
+        (seconds, 1)
+    } else {
+        let (index, unit) = input
+            .char_indices()
+            .next_back()
+            .ok_or_else(|| "Expected a step such as 1h or 30m".to_owned())?;
+        let factor = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            'd' => 86400,
+            _ => {
+                return Err(format!(
+                    "Invalid step unit in '{input}'. Supported units: s, m, h, d"
+                ));
+            }
+        };
+        let value = input[..index].parse::<i64>().map_err(|_| {
+            format!("Invalid step value in '{input}'. Use an integer before the unit (e.g., 15m)")
+        })?;
+        (value, factor)
+    };
+    if value <= 0 {
+        return Err(format!("Step must be positive, got '{input}'"));
+    }
+    value
+        .checked_mul(factor)
+        .filter(|seconds| *seconds <= MAX_STEP_SECONDS)
+        .map(SignedDuration::from_secs)
+        .ok_or_else(|| format!("Step is too large: '{input}'"))
+}
+
+pub(crate) fn is_date_without_time(s: &str) -> bool {
     s.len() == 10
-        && s.matches('-').count() == 2
-        && !s.contains('T')
-        && !s.contains(' ')
-        && s.chars()
-            .enumerate()
-            .all(|(idx, c)| matches!(idx, 4 | 7) || c.is_ascii_digit())
+        && s.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 4 | 7) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
 }
 
 #[cfg(feature = "cli")]
-pub fn is_partial_date(s: &str) -> bool {
+pub(crate) fn is_partial_date(s: &str) -> bool {
     match s.len() {
-        4 => s.chars().all(|c| c.is_ascii_digit()),
-        7 if s.as_bytes().get(4) == Some(&b'-') => s
-            .chars()
-            .enumerate()
-            .all(|(idx, c)| idx == 4 || c.is_ascii_digit()),
+        4 => s.bytes().all(|b| b.is_ascii_digit()),
+        7 => s.bytes().enumerate().all(|(i, b)| {
+            if i == 4 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        }),
         _ => false,
     }
 }
 
-pub fn parse_timezone_spec(spec: &str) -> Option<TimezoneInfo> {
-    spec.parse::<FixedOffset>()
-        .ok()
-        .map(TimezoneInfo::Fixed)
-        .or_else(|| spec.parse::<Tz>().ok().map(TimezoneInfo::Named))
-}
-
 #[cfg(feature = "cli")]
-fn detect_system_timezone() -> TimezoneInfo {
-    parse_timezone_env(env::var(SYSTEM_TZ_OVERRIDE_ENV).ok())
-        .or_else(|| parse_timezone_env(get_timezone().ok()))
-        .unwrap_or_else(|| TimezoneInfo::Fixed(Local::now().offset().fix()))
-}
-
-#[cfg(feature = "cli")]
-pub fn get_timezone_info(override_tz: Option<&str>) -> TimezoneInfo {
-    parse_timezone_override(override_tz)
-        .or_else(|| parse_timezone_env(env::var("TZ").ok()))
-        .unwrap_or_else(|| *SYSTEM_TIMEZONE.get_or_init(detect_system_timezone))
-}
-
-#[cfg(feature = "cli")]
-fn parse_timezone_override(spec: Option<&str>) -> Option<TimezoneInfo> {
-    spec.map(str::trim).and_then(parse_timezone_spec)
-}
-
-#[cfg(feature = "cli")]
-fn parse_timezone_env(value: Option<String>) -> Option<TimezoneInfo> {
-    parse_timezone_override(value.as_deref())
-}
-
-impl std::str::FromStr for TimezoneInfo {
-    type Err = crate::Error;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        parse_timezone_spec(value)
-            .ok_or_else(|| crate::Error::Input(format!("Invalid timezone: '{value}'")))
+pub(crate) fn parse_timezone_spec(spec: &str) -> Result<TimeZone, String> {
+    if spec.trim().is_empty() {
+        return Err("Option --timezone requires a value".into());
     }
+    PARSER
+        .parse_time_zone(spec.trim())
+        .map_err(|_| format!("Invalid timezone: '{spec}'"))
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn get_timezone_info(zone: Option<&TimeZone>) -> TimeZone {
+    zone.cloned()
+        .or_else(|| {
+            ["TZ", "SUNCE_SYSTEM_TIMEZONE"]
+                .into_iter()
+                .find_map(|name| parse_timezone_spec(&std::env::var(name).ok()?).ok())
+        })
+        .unwrap_or_else(TimeZone::system)
 }

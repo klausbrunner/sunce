@@ -58,40 +58,63 @@ impl Default for Options {
 }
 
 use ahash::AHashMap;
-use chrono::{DateTime, FixedOffset, SecondsFormat};
+use jiff::{Timestamp, ZonedDateTime, fmt::temporal::DateTimePrinter, tz::Offset};
 use serde::Serializer;
 use serde::ser::SerializeMap;
 use std::fmt::Write as _;
 
-pub(crate) const POSITION_TIME_PRECISION: SecondsFormat = SecondsFormat::AutoSi;
-pub(crate) const EVENT_TIME_PRECISION: SecondsFormat = SecondsFormat::Secs;
 const DATETIME_CACHE_CAPACITY: usize = 2048;
 const FIXED_DECIMAL_CACHE_CAPACITY: usize = 256;
 
 type FixedDecimalCache = AHashMap<(u64, u32), String>;
 
+#[derive(Clone, Copy)]
+pub(crate) enum TimePrecision {
+    Seconds,
+    Fractional,
+}
+
+pub(crate) fn format_timestamp(
+    time: Timestamp,
+    offset: Offset,
+    precision: TimePrecision,
+) -> String {
+    // Keep the CLI's existing millisecond, microsecond and nanosecond formatting.
+    let nanos = time.subsec_nanosecond();
+    let digits = match precision {
+        TimePrecision::Seconds => 0,
+        TimePrecision::Fractional if nanos == 0 => 0,
+        TimePrecision::Fractional if nanos % 1_000_000 == 0 => 3,
+        TimePrecision::Fractional if nanos % 1_000 == 0 => 6,
+        TimePrecision::Fractional => 9,
+    };
+    DateTimePrinter::new()
+        .precision(Some(digits))
+        .timestamp_with_offset_to_string(&time, offset)
+}
+
 pub(crate) struct DateTimeCache {
-    precision: SecondsFormat,
-    values: AHashMap<(DateTime<FixedOffset>, i32), String>,
+    precision: TimePrecision,
+    values: AHashMap<(Timestamp, Offset), String>,
 }
 
 impl DateTimeCache {
-    pub(crate) fn new(precision: SecondsFormat) -> Self {
+    pub(crate) fn new(precision: TimePrecision) -> Self {
         Self {
             precision,
             values: AHashMap::with_capacity(DATETIME_CACHE_CAPACITY),
         }
     }
 
-    pub(crate) fn format(&mut self, dt: &DateTime<FixedOffset>) -> &str {
-        // DateTime equality ignores offsets; formatted timestamps must preserve them.
-        let key = (*dt, dt.offset().local_minus_utc());
+    pub(crate) fn format(&mut self, dt: &ZonedDateTime) -> &str {
+        // Equal instants can have different offsets.
+        let key = (dt.timestamp(), dt.offset());
         if self.values.len() >= DATETIME_CACHE_CAPACITY && !self.values.contains_key(&key) {
             self.values.clear();
         }
         self.values
             .entry(key)
-            .or_insert_with(|| dt.to_rfc3339_opts(self.precision, false))
+            .or_insert_with(|| format_timestamp(key.0, key.1, self.precision))
     }
 }
 
@@ -221,7 +244,7 @@ fn write_json_f64<W: std::io::Write + ?Sized>(writer: &mut W, value: f64) -> Res
 
 impl OutputRow for PositionRecord {
     type Layout = PositionLayout;
-    const TIME_PRECISION: SecondsFormat = POSITION_TIME_PRECISION;
+    const TIME_PRECISION: TimePrecision = TimePrecision::Fractional;
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
         layout.csv_headers()
@@ -378,7 +401,7 @@ fn write_position_json_string<W: std::io::Write + ?Sized>(
 
 impl OutputRow for EventRecord {
     type Layout = EventLayout;
-    const TIME_PRECISION: SecondsFormat = EVENT_TIME_PRECISION;
+    const TIME_PRECISION: TimePrecision = TimePrecision::Seconds;
 
     fn headers(layout: Self::Layout) -> Vec<&'static str> {
         layout.csv_headers()
@@ -547,7 +570,7 @@ impl EventLayout {
 
 trait OutputRow: Sized {
     type Layout: Copy;
-    const TIME_PRECISION: SecondsFormat;
+    const TIME_PRECISION: TimePrecision;
 
     fn headers(layout: Self::Layout) -> Vec<&'static str>;
     fn csv_values(
@@ -761,7 +784,7 @@ fn write_buffered<W: std::io::Write, R: OutputRow>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{FixedOffset, TimeZone};
+    use jiff::{SignedDuration, civil::date, tz::TimeZone};
     use std::io::Write;
 
     #[derive(Default)]
@@ -787,7 +810,14 @@ mod tests {
         }
     }
 
-    fn position_result(datetime: DateTime<FixedOffset>) -> PositionRecord {
+    fn utc(hour: i8) -> ZonedDateTime {
+        date(2024, 6, 21)
+            .at(hour, 0, 0, 0)
+            .to_zoned_datetime(TimeZone::UTC)
+            .unwrap()
+    }
+
+    fn position_result(datetime: ZonedDateTime) -> PositionRecord {
         PositionRecord {
             location: crate::Location {
                 latitude: 52.0,
@@ -802,8 +832,7 @@ mod tests {
 
     #[test]
     fn streaming_text_flushes_each_record_when_requested() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+        let dt = utc(12);
 
         let options = Options {
             flush_each_record: true,
@@ -818,8 +847,7 @@ mod tests {
 
     #[test]
     fn dispatch_reports_final_flush_failure() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
+        let dt = utc(12);
         let options = Options {
             format: Format::Csv,
             ..Options::default()
@@ -837,11 +865,13 @@ mod tests {
 
     #[test]
     fn formatting_caches_stay_bounded() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let start = tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let mut datetime_cache = DateTimeCache::new(POSITION_TIME_PRECISION);
+        let start = utc(0).timestamp();
+        let mut datetime_cache = DateTimeCache::new(TimePrecision::Fractional);
         for seconds in 0..=DATETIME_CACHE_CAPACITY {
-            datetime_cache.format(&(start + chrono::Duration::seconds(seconds as i64)));
+            datetime_cache.format(
+                &(start + SignedDuration::from_secs(seconds as i64))
+                    .to_zoned_datetime(TimeZone::UTC),
+            );
         }
         assert!(datetime_cache.values.len() <= DATETIME_CACHE_CAPACITY);
 
@@ -869,9 +899,7 @@ mod tests {
 
     #[test]
     fn position_text_and_csv_field_order_match() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let dt = tz.with_ymd_and_hms(2024, 6, 21, 12, 0, 0).unwrap();
-        let row = position_result(dt);
+        let row = position_result(utc(12));
         let layout = PositionLayout {
             show_inputs: true,
             include_refraction: true,
@@ -879,7 +907,7 @@ mod tests {
         };
 
         let mut values = Vec::new();
-        let mut datetime_cache = DateTimeCache::new(POSITION_TIME_PRECISION);
+        let mut datetime_cache = DateTimeCache::new(TimePrecision::Fractional);
         let mut decimal_cache = FixedDecimalCache::new();
         row.csv_values(layout, &mut datetime_cache, &mut decimal_cache, &mut values);
 
@@ -903,20 +931,18 @@ mod tests {
 
     #[test]
     fn events_text_and_csv_field_order_match() {
-        let tz = FixedOffset::east_opt(0).unwrap();
-        let dt = tz.with_ymd_and_hms(2024, 6, 21, 0, 0, 0).unwrap();
         let row = EventRecord {
             lat: 52.0,
             lon: 13.4,
-            date: dt.date_naive(),
+            date: date(2024, 6, 21),
             deltat: 69.123,
             day_state: crate::events::DayState::Crossing,
             event: Some(EventKind::Sunrise),
-            time: Some(dt + chrono::Duration::hours(4)),
+            time: Some(utc(4)),
         };
 
         let mut values = Vec::new();
-        let mut datetime_cache = DateTimeCache::new(EVENT_TIME_PRECISION);
+        let mut datetime_cache = DateTimeCache::new(TimePrecision::Seconds);
         let mut decimal_cache = FixedDecimalCache::new();
         row.csv_values(
             EventLayout { show_inputs: true },

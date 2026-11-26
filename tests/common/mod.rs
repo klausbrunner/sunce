@@ -2,14 +2,18 @@
 // individual test files intentionally use different helper subsets.
 #![allow(dead_code)]
 
+#[cfg(feature = "cli")]
 use assert_cmd::Command;
-use chrono::{DateTime, FixedOffset};
 use csv::ReaderBuilder;
+use jiff::{SignedDuration, ZonedDateTime, fmt::temporal::DateTimeParser};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
 
+#[cfg(feature = "cli")]
 pub fn sunce_exe_path() -> PathBuf {
     let exe = assert_cmd::cargo::cargo_bin!("sunce");
     if exe.is_absolute() {
@@ -19,6 +23,7 @@ pub fn sunce_exe_path() -> PathBuf {
     }
 }
 
+#[cfg(feature = "cli")]
 pub fn sunce_command() -> Command {
     Command::new(sunce_exe_path())
 }
@@ -139,17 +144,33 @@ pub fn write_text_file(path: &Path, contents: &str) {
 }
 
 /// Parse RFC3339 timestamp.
-pub fn parse_rfc3339(ts: &str) -> DateTime<FixedOffset> {
-    DateTime::parse_from_rfc3339(ts).expect("invalid RFC3339 datetime")
+pub fn parse_rfc3339(ts: &str) -> ZonedDateTime {
+    let parser = DateTimeParser::new();
+    let offset = parser
+        .parse_pieces(ts)
+        .unwrap()
+        .to_numeric_offset()
+        .unwrap();
+    parser
+        .parse_timestamp(ts)
+        .unwrap()
+        .to_zoned_datetime(offset.to_time_zone())
+}
+
+pub fn rfc3339(dt: &ZonedDateTime) -> String {
+    dt.timestamp().display_with_offset(dt.offset()).to_string()
 }
 
 /// Assert two RFC3339 timestamps are within tolerance seconds.
 pub fn assert_time_close(actual: &str, expected: &str, tolerance_seconds: i64) {
     let actual = parse_rfc3339(actual);
     let expected = parse_rfc3339(expected);
-    let delta = (actual.timestamp() - expected.timestamp()).abs();
+    let delta = actual
+        .timestamp()
+        .duration_since(expected.timestamp())
+        .abs();
     assert!(
-        delta <= tolerance_seconds,
+        delta <= SignedDuration::from_secs(tolerance_seconds),
         "time mismatch: actual={actual}, expected={expected}, tolerance={tolerance_seconds}s"
     );
 }

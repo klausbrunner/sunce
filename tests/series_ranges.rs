@@ -1,3 +1,6 @@
+mod common;
+use common::rfc3339;
+use jiff::tz::TimeZone;
 use sunce::input;
 
 #[test]
@@ -9,53 +12,50 @@ fn calendar_periods_cover_leap_years_and_year_boundaries() {
         ("2026-12", 31, "2026-12-01", "2026-12-31"),
         ("2026-12-31/2027-01-01", 2, "2026-12-31", "2027-01-01"),
     ] {
-        let times = input::position_times(period, "UTC".parse().unwrap(), "1d".parse().unwrap())
+        let times = input::position_times(period, TimeZone::UTC, "1d".parse().unwrap())
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(times.len(), days);
-        assert_eq!(times[0].date_naive().to_string(), first);
-        assert_eq!(times.last().unwrap().date_naive().to_string(), last);
+        assert_eq!(times[0].date().to_string(), first);
+        assert_eq!(times.last().unwrap().date().to_string(), last);
     }
     for period in ["2026-00", "2026-13", "2025-02-29", "2026-01-01/2026-02-30"] {
-        assert!(
-            input::position_times(period, "UTC".parse().unwrap(), "1d".parse().unwrap()).is_err()
-        );
+        assert!(input::position_times(period, TimeZone::UTC, "1d".parse().unwrap()).is_err());
     }
 }
 
 #[test]
 fn inclusive_date_ranges_sample_elapsed_time_across_dst() {
-    let zone = "Europe/Berlin".parse().unwrap();
-    let times = input::position_times("2026-03-28/2026-03-30", zone, "1h".parse().unwrap())
+    let zone = TimeZone::get("Europe/Berlin").unwrap();
+    let times = input::position_times("2026-03-28/2026-03-30", zone.clone(), "1h".parse().unwrap())
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(times.len(), 71);
-    assert_eq!(times[0].to_rfc3339(), "2026-03-28T00:00:00+01:00");
-    assert_eq!(
-        times.last().unwrap().to_rfc3339(),
-        "2026-03-30T23:00:00+02:00"
-    );
-    assert!(
-        times
-            .windows(2)
-            .all(|pair| pair[1].timestamp() - pair[0].timestamp() == 3600)
-    );
+    assert_eq!(rfc3339(&times[0]), "2026-03-28T00:00:00+01:00");
+    assert_eq!(rfc3339(times.last().unwrap()), "2026-03-30T23:00:00+02:00");
+    assert!(times.windows(2).all(|pair| {
+        pair[1]
+            .timestamp()
+            .duration_since(pair[0].timestamp())
+            .as_secs()
+            == 3600
+    }));
     for period in [
         "2026-03-30/2026-03-28",
         "2026-02-30/2026-03-01",
         "2026/2027",
     ] {
-        assert!(input::position_times(period, zone, "1h".parse().unwrap()).is_err());
+        assert!(input::position_times(period, zone.clone(), "1h".parse().unwrap()).is_err());
     }
 }
 
 #[test]
 fn daily_samples_keep_local_time_and_resolve_dst_gaps_and_overlaps() {
-    let zone = "Europe/Berlin".parse().unwrap();
+    let zone = TimeZone::get("Europe/Berlin").unwrap();
     let collect = |period, clock: &str| {
-        input::daily_times(period, zone, clock.parse().unwrap())
+        input::daily_times(period, zone.clone(), clock.parse().unwrap())
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
@@ -66,25 +66,31 @@ fn daily_samples_keep_local_time_and_resolve_dst_gaps_and_overlaps() {
         noon.iter()
             .all(|time| time.time().to_string() == "12:34:56")
     );
-    assert_eq!(noon[1].timestamp() - noon[0].timestamp(), 23 * 3600);
     assert_eq!(
-        collect("2026-03-29", "02:30:00")[0].to_rfc3339(),
+        noon[1]
+            .timestamp()
+            .duration_since(noon[0].timestamp())
+            .as_secs(),
+        23 * 3600
+    );
+    assert_eq!(
+        rfc3339(&collect("2026-03-29", "02:30:00")[0]),
         "2026-03-29T03:00:00+02:00"
     );
     assert_eq!(
-        collect("2026-10-25", "02:30:00")[0].to_rfc3339(),
+        rfc3339(&collect("2026-10-25", "02:30:00")[0]),
         "2026-10-25T02:30:00+02:00"
     );
     let skipped = input::daily_times(
         "2011-12-29/2011-12-31",
-        "Pacific/Apia".parse().unwrap(),
+        TimeZone::get("Pacific/Apia").unwrap(),
         "12:00:00".parse().unwrap(),
     )
     .unwrap()
     .collect::<Result<Vec<_>, _>>()
     .unwrap();
     assert_eq!(skipped.len(), 2);
-    assert_eq!(skipped[1].date_naive().to_string(), "2011-12-31");
+    assert_eq!(skipped[1].date().to_string(), "2011-12-31");
 }
 
 #[cfg(feature = "cli")]

@@ -2,7 +2,7 @@
 
 use crate::data::{
     self, CalculationAlgorithm, Command, InputPath, LocationSource, OutputFormat, Parameters,
-    Predicate, Step, TimezoneOverride,
+    Predicate, Step,
 };
 use crate::error::CliError;
 use crate::parsed::{ParsedCommand, ParsedInput, ParsedOptionUsage, ParsedTimeSource};
@@ -216,7 +216,7 @@ fn apply_option(
         }
         "timezone" => {
             let v = required_value("timezone", value)?;
-            params.timezone = Some(v.parse::<TimezoneOverride>()?);
+            params.timezone = Some(data::time_utils::parse_timezone_spec(v)?);
         }
         "algorithm" => {
             let v = required_value("algorithm", value)?;

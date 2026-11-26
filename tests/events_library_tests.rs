@@ -1,18 +1,22 @@
 #![cfg(feature = "cli")]
 
 mod common;
-use chrono::{Duration, FixedOffset, NaiveDate, Utc};
 use common::{parse_csv_output_maps, parse_rfc3339, sunce_command};
+use jiff::{
+    ToSpan,
+    civil::date,
+    tz::{Offset, TimeZone},
+};
 use solar_positioning::{Horizon, HorizonState, Location, SolarEvents};
 
 // Verify CLI integration across coordinates and seasons; numerical accuracy belongs to the library.
 #[test]
 fn worldwide_events_grid_matches_library() {
-    let first_day = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let first_day = date(2024, 1, 1);
     // Sample throughout the year; focused tests cover unusual event days and DST.
     let dates: Vec<_> = (0..366)
         .step_by(30)
-        .map(|offset| first_day + Duration::days(offset))
+        .map(|offset| first_day + offset.days())
         .collect();
     let input = dates
         .iter()
@@ -43,7 +47,8 @@ fn worldwide_events_grid_matches_library() {
             .clone();
         let rows = parse_csv_output_maps(std::str::from_utf8(&output).unwrap());
         let mut rows = rows.iter();
-        let zone = FixedOffset::east_opt(lon * 240).unwrap();
+        let offset = Offset::from_seconds(lon * 240).unwrap();
+        let zone = offset.to_time_zone();
         for &date in &dates {
             for lat in (-80..=80).step_by(20) {
                 let day = SolarEvents::new()
@@ -75,7 +80,7 @@ fn worldwide_events_grid_matches_library() {
                 ] {
                     expected.extend(times.into_iter().map(|time| (Some(name), Some(time))));
                 }
-                expected.sort_by_key(|(_, time)| *time);
+                expected.sort_by_key(|(_, time)| time.as_ref().map(|t| t.timestamp()));
                 if expected.is_empty() {
                     expected.push((None, None));
                 }
@@ -90,11 +95,11 @@ fn worldwide_events_grid_matches_library() {
                         Some(time) => {
                             let actual = parse_rfc3339(&row["time"]);
                             assert_eq!(
-                                actual.timestamp(),
-                                time.timestamp(),
+                                actual.timestamp().as_second(),
+                                time.timestamp().as_second(),
                                 "{lat}, {lon}, {date}"
                             );
-                            assert_eq!(actual.offset(), &zone);
+                            assert_eq!(actual.offset(), offset);
                         }
                         None => assert!(row["time"].is_empty()),
                     }
@@ -140,15 +145,15 @@ fn selected_algorithm_and_horizon_match_library() {
                 .map(|row| {
                     (
                         row["event"].as_str(),
-                        parse_rfc3339(&row["time"]).timestamp(),
+                        parse_rfc3339(&row["time"]).timestamp().as_second(),
                     )
                 })
                 .collect();
 
             let day = calculator
                 .for_date(
-                    NaiveDate::from_ymd_opt(2024, 3, 20).unwrap(),
-                    &Utc,
+                    date(2024, 3, 20),
+                    &TimeZone::UTC,
                     Location {
                         latitude: 52.0,
                         longitude: 13.4,
@@ -163,7 +168,11 @@ fn selected_algorithm_and_horizon_match_library() {
                 (set, day.sets),
             ]
             .into_iter()
-            .flat_map(|(label, times)| times.into_iter().map(move |time| (label, time.timestamp())))
+            .flat_map(|(label, times)| {
+                times
+                    .into_iter()
+                    .map(move |time| (label, time.timestamp().as_second()))
+            })
             .collect();
             expected.sort_by_key(|(_, time)| *time);
             assert_eq!(actual, expected, "{algorithm}, {horizon:?}");

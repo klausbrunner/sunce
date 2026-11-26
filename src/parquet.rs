@@ -1,8 +1,6 @@
 //! Parquet output format support.
 
-use crate::output::{
-    DateTimeCache, EVENT_TIME_PRECISION, EventLayout, POSITION_TIME_PRECISION, PositionLayout,
-};
+use crate::output::{DateTimeCache, EventLayout, PositionLayout, TimePrecision};
 use crate::{Error, EventKind, EventRecord, PositionRecord};
 use arrow_array::builder::{Float64Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
@@ -225,7 +223,7 @@ pub(crate) fn write_position_rows<W: Write + Send>(
     let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
     let mut builders = PositionBatchBuilders::new(layout);
-    let mut datetime_cache = DateTimeCache::new(POSITION_TIME_PRECISION);
+    let mut datetime_cache = DateTimeCache::new(TimePrecision::Fractional);
     let mut batch_count = 0;
     let mut total_count = 0;
 
@@ -264,7 +262,7 @@ where
     let mut writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))
         .map_err(|e| parquet_error(format!("Parquet writer error: {e}")))?;
     let mut builders = EventBatchBuilders::new(layout);
-    let mut datetime_cache = DateTimeCache::new(EVENT_TIME_PRECISION);
+    let mut datetime_cache = DateTimeCache::new(TimePrecision::Seconds);
     let mut batch_count = 0;
     let mut total_count = 0;
 
